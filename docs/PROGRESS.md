@@ -1940,3 +1940,15 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - daemon 在打开状态库前只读核对旧 schema；schema 低于当前版本时，先拒绝含 `QUEUED` / `VALIDATING` / `APPLYING` / `RECOVERY_REQUIRED` 操作的升级，再用 SQLite backup API 生成快照。
 - 快照先做 `quick_check` 与迁移记录/校验和复核，验证通过后才改为 `.pre-migration-...sqlite` 名称并允许 schema 迁移；备份失败则在迁移前停止。已覆盖 WAL 一致快照、原库字节不变、迁移后数据仍在、快照保留旧 schema、待恢复操作阻断和当前 schema 不重复备份。
 - 定向 SQLite 测试 **3/3 PASS**，类型检查、FsGuard 导入检查、secret scan 通过。自动还原、快照保留/清理 UI、卸载语义和签名安装器仍未完成，LWB-040 继续保持 PARTIAL。
+
+## 2026-09-27 本轮继续：LWB-041 工具工作流 Skill 与 ChatGPT 评测集（PARTIAL）
+
+- 新增 `plugin/skills/local-workspace/SKILL.md`：明确 workspace 选择、相对路径、读取范围、文件内容中的提示注入处理，以及“提议 ≠ 本机批准 ≠ 已保存”；Skill 不改变任何服务端权限。
+- 新增 `tests/evals/chatgpt/cases.json` 与运行说明，覆盖直接/间接请求、跟进、只分析不写、提议/审批、超时、越界、秘密拒绝、文件提示注入与不支持的 Git 写操作。该集合状态明确为 `NOT_RUN`，不冒充真实网页评测。
+- 新增评测契约单测 **3/3 PASS**；根类型检查与 secret scan 通过。真实 ChatGPT 会话调用轨迹、冲突/重连验收仍未执行，LWB-041 继续保持 PARTIAL。
+
+## 2026-09-27 本轮继续：LWB-041 工具工作流 Skill 与 ChatGPT 评测集（PARTIAL）
+
+- 新增 `plugin/skills/local-workspace/SKILL.md`：明确 workspace 选择、相对路径、读取范围、文件内容中的提示注入处理，以及“提议 ≠ 本机批准 ≠ 已保存”；Skill 不改变任何服务端权限。
+- 新增 `tests/evals/chatgpt/cases.json` 与运行说明，覆盖直接/间接请求、跟进、只分析不写、提议/审批、超时、越界、秘密拒绝、文件提示注入与不支持的 Git 写操作。该集合状态明确为 `NOT_RUN`，不冒充真实网页评测。
+- 新增评测契约单测 **3/3 PASS**；根类型检查与 secret scan 通过。真实 ChatGPT 会话调用轨迹、冲突/重连验收仍未执行，LWB-041 继续保持 PARTIAL。
