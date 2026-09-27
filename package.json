@@ -1,0 +1,50 @@
+{
+  "name": "local-workspace-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Workspace Bridge (LWB) — ChatGPT 网页通过原生 MCP 工具访问本地授权工作区",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "native/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "typecheck:console": "npm --workspace @lwb/console run typecheck",
+    "test": "node scripts/run-tests.mjs",
+    "test:unit": "node scripts/run-tests.mjs tests/unit",
+    "test:windows": "node scripts/run-tests.mjs tests/windows",
+    "test:security": "node scripts/run-tests.mjs tests/security",
+    "test:console": "npm --workspace @lwb/console run test",
+    "check:imports": "node scripts/check-fsguard-imports.mjs",
+    "check:secrets": "node --import tsx scripts/check-secrets.ts",
+    "check": "npm run typecheck && npm run typecheck:console && npm run check:imports && npm run check:secrets && npm run test && npm run test:console",
+    "fixtures:build": "node --import tsx tests/fixtures/build-fixtures.ts",
+    "spike:winfs": "node --import tsx native/winfs-spike/run.ts",
+    "predaemon": "npm --workspace @lwb/console run build",
+    "daemon": "node --import tsx apps/daemon/src/main.ts",
+    "prechatgpt:local": "node scripts/build-console-clean-env.mjs",
+    "chatgpt:local": "node --import tsx apps/daemon/src/lifecycle/chatgpt-local.ts",
+    "preacceptance:lwb037-export": "npm --workspace @lwb/console run build",
+    "acceptance:lwb037-export": "node --import tsx scripts/acceptance/lwb037-export.ts",
+    "mcp-adapter": "node --import tsx apps/mcp-adapter/src/main.ts",
+    "console:dev": "npm run daemon"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.1",
+    "better-sqlite3": "13.0.3",
+    "isomorphic-git": "1.42.2",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.19.2",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}

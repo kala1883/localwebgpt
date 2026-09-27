@@ -1,0 +1,15 @@
+{
+  "name": "@lwb/ipc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "认证的本地 IPC：命名管道、挑战应答握手、能力映射、单实例与执行器租约。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*",
+    "@lwb/secure-store": "*"
+  }
+}

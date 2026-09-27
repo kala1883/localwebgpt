@@ -1,0 +1,17 @@
+{
+  "name": "@lwb/workspaces",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "工作区登记：候选根筛查、代次与重叠判定、暂停/移除/重新验证。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*",
+    "@lwb/persistence": "*",
+    "@lwb/secure-store": "*",
+    "@lwb/winfs": "*"
+  }
+}

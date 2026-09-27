@@ -1,0 +1,25 @@
+{
+  "name": "@lwb/console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LWB 本地控制台：由 daemon 同源托管的本地恢复与历史界面",
+  "scripts": {
+    "dev": "node -e \"console.error('控制台必须与控制 API 同源。请在仓库根目录运行 npm run console:dev。'); process.exit(1)\"",
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*",
+    "vue": "3.5.43"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.9",
+    "@vue/test-utils": "2.5.1",
+    "happy-dom": "20.14.5",
+    "vite": "8.3.1",
+    "vitest": "5.0.2",
+    "vue-tsc": "3.3.11"
+  }
+}

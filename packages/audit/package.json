@@ -1,0 +1,15 @@
+{
+  "name": "@lwb/audit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "工具调用审计：把一次调用读了哪些文件、返回了哪些范围、出站了多少字节记成可反查的记录，且不含源码正文与本机绝对路径。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*",
+    "@lwb/persistence": "*"
+  }
+}

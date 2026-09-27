@@ -1,0 +1,20 @@
+{
+  "name": "@lwb/recovery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "启动恢复与未知结果协调：在受控句柄下重新观测磁盘，把未终结的操作判定为「已达 / 未变 / 第三种内容 / 身份不明」，只为可证明安全的那两格自动定案。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/blob-store": "*",
+    "@lwb/changes": "*",
+    "@lwb/contracts": "*",
+    "@lwb/executor": "*",
+    "@lwb/files": "*",
+    "@lwb/persistence": "*",
+    "@lwb/winfs": "*"
+  }
+}

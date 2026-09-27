@@ -1,0 +1,34 @@
+// 控制台的类型检查配置（LWB-023）。
+//
+// ## 为什么本仓有两个 tsconfig
+//
+// 根 tsconfig 只有 `lib: ["ES2023"]`、**没有 DOM**，这是有意的（偏离项 18）：
+// 它让 `apps/console/src/auth/` 不可能依赖 window / History 之类的浏览器全局，
+// 于是那一层能在 node 里被直接测试。
+//
+// 但 `.vue` 单文件组件**就是**浏览器里的东西，它需要 DOM 类型；而 `tsc`
+// 也根本不解析 `.vue` 文件。因此这一层另立一份配置：拿到 DOM lib，
+// 并由 `vue-tsc` 而不是 `tsc` 来检查。
+//
+// **`src/changes/` 里的三个模块刻意不依赖 DOM**，因此它们同时也在根 tsconfig
+// 的覆盖范围内、被 `npx tsc --noEmit` 检查一次。这不是重复劳动：两份配置
+// 检查的是同一批文件的两个不同事实 —— 根那份在验「这层逻辑不需要浏览器」，
+// 而那句话正是它能在 node 里被测试的原因。哪天有人在里面写了 `document`，
+// 根那份会立刻报错（DOM lib 不在），而不是等到跑测试时才失败。
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "host/**/*.ts",
+    "views/**/*.vue",
+    "components/**/*.vue",
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "vite.config.ts"
+  ]
+}

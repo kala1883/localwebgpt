@@ -1,0 +1,17 @@
+{
+  "name": "@lwb/files",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "文件读取与目录列举：字节事实识别、一致读取、签名读取票据与分页游标。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*",
+    "@lwb/egress": "*",
+    "@lwb/policy": "*",
+    "@lwb/winfs": "*"
+  }
+}

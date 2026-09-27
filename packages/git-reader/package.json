@@ -1,0 +1,19 @@
+{
+  "name": "@lwb/git-reader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "只读 Git：注入只读虚拟 fs 的 isomorphic-git，写入方法一律拒绝；状态与差异只覆盖已授权路径。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*",
+    "@lwb/egress": "*",
+    "@lwb/files": "*",
+    "@lwb/policy": "*",
+    "@lwb/winfs": "*",
+    "isomorphic-git": "1.42.2"
+  }
+}

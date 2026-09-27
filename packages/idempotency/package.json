@@ -1,0 +1,16 @@
+{
+  "name": "@lwb/idempotency",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "幂等与并发收敛：四种标识符的区分、同键单飞、唯一操作的收敛，以及「未知结果不是失败」的判定。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/changes": "*",
+    "@lwb/contracts": "*",
+    "@lwb/persistence": "*"
+  }
+}

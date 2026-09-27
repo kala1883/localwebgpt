@@ -1,0 +1,14 @@
+{
+  "name": "@lwb/limits",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "限额解析与并发闸门：把本地配置收紧（绝不放宽）成生效限额，并给出全局/每连接两级并发许可。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*"
+  }
+}

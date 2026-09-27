@@ -1,0 +1,22 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# 本地运行时状态（绝不应提交）
+.lwb-local/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.env
+# 生成的测试夹具（由 tests/fixtures/build-fixtures.ts 生成）
+tests/fixtures/generated/
+
+# 本地证据输出（spike / 手工实测）
+native/winfs-spike/out/
+docs/evidence/local/
+
+*.log
+.DS_Store
+Thumbs.db

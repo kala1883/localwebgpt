@@ -1,0 +1,23 @@
+{
+  "name": "@lwb/executor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "写执行协调器：物理工作区互斥、短事务认领、租约与接管判定，以及「不确定就不重启」；含把批准过的操作交给原生护栏的写盘适配器。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/approvals": "*",
+    "@lwb/blob-store": "*",
+    "@lwb/changes": "*",
+    "@lwb/contracts": "*",
+    "@lwb/files": "*",
+    "@lwb/idempotency": "*",
+    "@lwb/ipc": "*",
+    "@lwb/persistence": "*",
+    "@lwb/policy": "*",
+    "@lwb/winfs": "*"
+  }
+}

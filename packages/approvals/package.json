@@ -1,0 +1,17 @@
+{
+  "name": "@lwb/approvals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "本地批准：由落库事实重载修改集并重算摘要、批准/拒绝决定、执行前的批准门禁（不消费）。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/changes": "*",
+    "@lwb/contracts": "*",
+    "@lwb/idempotency": "*",
+    "@lwb/persistence": "*"
+  }
+}

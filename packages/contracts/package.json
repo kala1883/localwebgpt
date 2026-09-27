@@ -1,0 +1,14 @@
+{
+  "name": "@lwb/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LWB 冻结契约：工具输入输出、错误码、限额、路径语法、文件版本",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  }
+}

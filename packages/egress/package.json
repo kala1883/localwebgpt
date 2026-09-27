@@ -1,0 +1,15 @@
+{
+  "name": "@lwb/egress",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "出站闸门：读取/搜索/Git 差异/快照/错误/审计导出共用的路径重判、秘密筛查与出站字节预算。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*",
+    "@lwb/policy": "*"
+  }
+}

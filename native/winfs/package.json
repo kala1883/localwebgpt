@@ -1,0 +1,11 @@
+{
+  "name": "@lwb/winfs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Windows 文件系统护栏：逐级句柄固定、文件身份、guarded_inplace 写入（fail-closed）",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  }
+}

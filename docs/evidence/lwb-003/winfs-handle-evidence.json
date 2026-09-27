@@ -1,0 +1,240 @@
+{
+  "generated_at": "2026-09-25T02:26:59.389Z",
+  "host": {
+    "platform": "win32 x64",
+    "os_release": "Windows_NT 10.0.26200",
+    "node": "v22.20.0",
+    "powershell": "7.6.6",
+    "temp_root": "C:\\Users\\mj\\AppData\\Local\\Temp\\lwb-winfs-spike-27088",
+    "filesystem": "NTFS"
+  },
+  "experiments": [
+    {
+      "id": "LWB-003-E1",
+      "title": "逐级目录句柄固定 + Junction/符号链接检测",
+      "status": "observed",
+      "commands": [
+        "New-Item -ItemType Junction -Path 'C:\\Users\\mj\\AppData\\Local\\Temp\\lwb-winfs-spike-27088\\workspace\\a\\junc' -Target '<root>/a/b'",
+        "New-Item -ItemType SymbolicLink -Path 'C:\\Users\\mj\\AppData\\Local\\Temp\\lwb-winfs-spike-27088\\workspace\\a\\sym' -Target '<root>/a/b'"
+      ],
+      "observations": {
+        "正常嵌套路径_ok": true,
+        "正常嵌套路径_file_id": "0022000000085923",
+        "Junction_创建结果": "CREATED",
+        "经Junction访问_ok": false,
+        "经Junction访问_code": "LINK_UNSUPPORTED",
+        "经Junction访问_message": "祖先路径段是重解析点，拒绝继续：C:\\Users\\mj\\AppData\\Local\\Temp\\lwb-winfs-spike-27088\\workspace\\a\\junc",
+        "遍历Junction目录_ok": false,
+        "遍历Junction目录_code": "LINK_UNSUPPORTED",
+        "符号链接_创建结果": "CREATED",
+        "经符号链接访问_ok": false,
+        "经符号链接访问_code": "LINK_UNSUPPORTED",
+        "文件级符号链接_创建结果": "CREATED",
+        "读取符号链接文件_ok": false,
+        "读取符号链接文件_code": "LINK_UNSUPPORTED",
+        "路径混淆输入_拒绝码": {
+          "../outside.txt": "PATH_UNSAFE",
+          "a/../../x": "PATH_UNSAFE",
+          "a/b/ok.txt:stream": "PATH_UNSAFE",
+          "a/./b/ok.txt": "PATH_UNSAFE",
+          "\\a\\b\\ok.txt": "PATH_UNSAFE"
+        }
+      },
+      "conclusion": "逐级句柄检查成功识别并拒绝了 Junction 重定向（LINK_UNSUPPORTED）。 符号链接场景同样被拒绝。",
+      "invariants": [
+        "I05（路径按真实对象判定）",
+        "I06（重解析点拒绝）"
+      ]
+    },
+    {
+      "id": "LWB-003-E2",
+      "title": "文件身份（volume serial + file index + 硬链接数）在改名/删除/重建下的行为",
+      "status": "observed",
+      "commands": [
+        "Rename-Item -LiteralPath 'id-original.txt' -NewName 'id-renamed.txt'",
+        "New-Item -ItemType HardLink -Path 'id-hardlink.txt' -Target 'id-renamed.txt'",
+        "Remove-Item id-renamed.txt; 重新写入同名文件，内容完全相同"
+      ],
+      "observations": {
+        "初始_file_id": "0049000000085957",
+        "初始_volume_id": "c6e22015",
+        "初始_link_count": 1,
+        "初始_attributes": [
+          "archive"
+        ],
+        "重命名后_file_id": "0049000000085957",
+        "重命名后身份不变": true,
+        "硬链接_创建结果": "CREATED",
+        "硬链接_file_id": "0049000000085957",
+        "硬链接_link_count": 2,
+        "硬链接与原名_file_id相同": true,
+        "经硬链接写入_ok": false,
+        "经硬链接写入_code": "LINK_UNSUPPORTED",
+        "删除重建后_file_id": "004a000000085957",
+        "删除重建后身份改变": true,
+        "删除重建后内容哈希相同": true
+      },
+      "conclusion": "文件身份（volume serial + 128 位 file index）在重命名后保持不变，在删除重建后改变，因此可以区分「同一对象的同名文件」与「内容相同但已被替换的文件」——这正是方案 I05 与「读写前重新校验基线」所需要的判别依据。硬链接共享同一 file index 且 link_count > 1，实测写入被拒绝（LINK_UNSUPPORTED）。",
+      "invariants": [
+        "I05（按真实对象判定）",
+        "I07（写入前重新校验基线）"
+      ]
+    },
+    {
+      "id": "LWB-003-E3",
+      "title": "共享模式能否阻止「读取后、写入前被别人改写」",
+      "status": "observed",
+      "commands": [
+        "pwsh -Command \"<CreateFileW(GENERIC_READ, FILE_SHARE_READ) 持有 sharing-a.txt 300 秒>\"（后台进程，标记文件同步）",
+        "WinfsGuard.ps1 -Server: {\"op\":\"holdHandle\",\"access\":\"read\",\"share_mode\":\"read\"}，随后由独立 pwsh 进程尝试写入",
+        "pwsh -Command \"<CreateFileW(GENERIC_READ, share=0) 独占持有 sharing-c.txt>\"（后台进程，标记文件同步）"
+      ],
+      "observations": {
+        "A_对方读句柄已持有": true,
+        "A_对方持读句柄时_我方读取_ok": true,
+        "A_对方持读句柄时_我方读取_code": null,
+        "A_对方持读句柄时_我方写入_ok": false,
+        "A_对方持读句柄时_我方写入_code": "FILE_BUSY",
+        "A_对方持读句柄时_我方写入_win32": 32,
+        "A_文件内容未被改动": true,
+        "B_我方读句柄已持有": true,
+        "B_对方尝试写入_result": "DENIED 32",
+        "B_对方写入是否被拒绝": true,
+        "B_对方写入_win32": 32,
+        "C_对方独占句柄已持有": true,
+        "C_对方独占时_我方读取_ok": false,
+        "C_对方独占时_我方读取_code": "FILE_BUSY",
+        "C_对方独占时_我方读取_win32": 32,
+        "C_对方独占时_我方写入_ok": false,
+        "C_对方独占时_我方写入_code": "FILE_BUSY",
+        "C_Node直接读取": "被拒绝：EBUSY",
+        "C_文件内容未被改动": true
+      },
+      "conclusion": "场景 A（对方持读句柄、我方请求写）：被拒绝，code=FILE_BUSY，Win32=32。场景 B（我方持读句柄、对方尝试写）：被拒绝，结果=DENIED 32。场景 C（对方独占持有、我方读取）：被拒绝，code=FILE_BUSY。结论：在没有 FILE_SHARE_WRITE 的情况下持有句柄，可以阻止**协作式**进程写入；这正是把「读取→校验基线→写入」窗口收紧为真正独占的手段。但它不阻止以 FILE_SHARE_READ|FILE_SHARE_WRITE 打开的进程，因此基线哈希复核是必需的第二道防线，不是冗余。",
+      "invariants": [
+        "I07（写入前重新校验基线）",
+        "I08（不安全则拒绝）"
+      ]
+    },
+    {
+      "id": "LWB-003-E4",
+      "title": "guarded_inplace：同一句柄内完成校验、写入、截断、刷盘、回读",
+      "status": "observed",
+      "commands": [],
+      "observations": {
+        "正常写入_ok": true,
+        "正常写入_flushed": true,
+        "正常写入_readback_ok": true,
+        "正常写入_after_sha256匹配目标": true,
+        "正常写入_磁盘内容正确": true,
+        "正常写入_file_id不变": true,
+        "正常写入_volume_id不变": true,
+        "正常写入_字节数变化": "32 -> 48",
+        "缩短写入_ok": true,
+        "缩短写入_磁盘字节数": 6,
+        "缩短写入_无残留尾巴": true,
+        "基线不符_ok": false,
+        "基线不符_code": "FILE_VERSION_CONFLICT",
+        "基线不符_文件未被改动": true,
+        "CRLF写入_ok": true,
+        "CRLF写入_字节完全一致": true,
+        "BOM写入_ok": true,
+        "BOM写入_前3字节": "efbbbf",
+        "BOM写入_字节完全一致": true
+      },
+      "conclusion": "在同一独占句柄内完成基线校验、截断、写入、FlushFileBuffers 与回读验证，回读哈希与目标一致；缩短写入确实截断（无残留尾巴）；基线不符时以 FILE_VERSION_CONFLICT 拒绝且文件保持不变；CRLF 与 BOM 按字节保真，写入端不猜测换行与编码。**不提供崩溃原子性，也不提供跨文件 ACID。**",
+      "invariants": [
+        "I07（写入前重新校验基线）",
+        "I08（不安全则拒绝）"
+      ]
+    },
+    {
+      "id": "LWB-003-E5",
+      "title": "CREATE_NEW 语义：已存在文件绝不被覆盖",
+      "status": "observed",
+      "commands": [],
+      "observations": {
+        "首次创建_ok": true,
+        "首次创建_磁盘内容": "first creation",
+        "重复创建_ok": false,
+        "重复创建_code": "FILE_VERSION_CONFLICT",
+        "重复创建_win32": 80,
+        "重复创建_原内容保留": true,
+        "父目录不存在_ok": false,
+        "父目录不存在_code": "NOT_FOUND",
+        "父目录不存在_未创建目录": true
+      },
+      "conclusion": "CREATE_NEW 在文件已存在时失败（Win32 80, 错误 FILE_VERSION_CONFLICT），原文件内容保持不变，因此「检查不存在 → 别人抢先创建 → 我们写」这个竞态不会退化成静默覆盖。父目录不存在时拒绝，不做隐式多层创建。",
+      "invariants": [
+        "I08（不安全则拒绝）"
+      ]
+    },
+    {
+      "id": "LWB-003-E6",
+      "title": "写入过程中进程崩溃后，磁盘上留下了什么",
+      "status": "observed",
+      "commands": [
+        "pwsh -File WinfsGuard.ps1 -Once '{\"op\":\"crashExperiment\",\"mode\":\"truncate_then_crash\",...}'（进程以 42 退出）",
+        "pwsh -File WinfsGuard.ps1 -Once '{\"op\":\"crashExperiment\",\"mode\":\"half_write_then_crash\",...}'（进程以 43 退出）"
+      ],
+      "observations": {
+        "A_进程退出码": 42,
+        "A_崩溃前字节数": 3200,
+        "A_崩溃后字节数": 0,
+        "A_内容是否丢失": true,
+        "A_哈希是否变化": true,
+        "B_进程退出码": 43,
+        "B_目标字节数": 3200,
+        "B_崩溃后字节数": 1600,
+        "B_是否等于目标的一半": true,
+        "B_是否完整": false,
+        "B_前缀是否为预期内容": true
+      },
+      "conclusion": "截断后崩溃：文件从 3200 字节变为 0 字节，**内容完全丢失**。半写后崩溃：文件剩 1600 字节，是目标长度的一部分，前缀与目标一致。这就是 guarded_inplace 的**真实残余风险**：进程在截断与写满之间死亡会留下不完整的文件。这不是假设，是本机实测。缓解手段是恢复流程（检测 + 从快照重建 + 请求人工确认），而不是声称写入是原子的。",
+      "invariants": [
+        "I09（不宣称崩溃原子性）"
+      ]
+    },
+    {
+      "id": "LWB-003-E8",
+      "title": "文件被其它进程占用时的错误映射",
+      "status": "observed",
+      "commands": [
+        "pwsh -Command \"<CreateFileW(GENERIC_READ|GENERIC_WRITE, FILE_SHARE_READ) 持有 busy.txt>\"（后台进程，标记文件同步）"
+      ],
+      "observations": {
+        "外部写句柄_已持有": true,
+        "占用时读取_ok": false,
+        "占用时读取_code": "FILE_BUSY",
+        "占用时读取_win32": 32,
+        "占用时写入_ok": false,
+        "占用时写入_code": "FILE_BUSY",
+        "占用时写入_win32": 32,
+        "占用时_内容未变": true
+      },
+      "conclusion": "文件被其它进程以不含 FILE_SHARE_WRITE 的方式占用时，写入返回 FILE_BUSY（Win32 32），被映射为可重试的忙碌错误而不是笼统的 IO 错误；失败时磁盘内容未被改动。这对应方案错误码 FILE_BUSY 的 autoRetry=bounded 语义。读取在此时同样被拒绝。",
+      "invariants": [
+        "I08（不安全则拒绝）",
+        "I12（错误可机器判定与重试）"
+      ]
+    }
+  ],
+  "latency": {
+    "cold_spawn_ms": {
+      "samples": 12,
+      "p50": 1124.97,
+      "p95": 1235.76,
+      "min": 1070.02,
+      "max": 1235.76
+    },
+    "resident_call_ms": {
+      "samples": 300,
+      "p50": 1.37,
+      "p95": 3.92,
+      "min": 0.99,
+      "max": 15.62
+    },
+    "target_p95_ms": 500,
+    "meets_target_with": "resident"
+  }
+}

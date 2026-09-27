@@ -1,0 +1,12 @@
+{
+  "name": "@lwb/blob-store",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "内容寻址快照存储：先落盘后引用、完整性校验、无引用回收。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {}
+}

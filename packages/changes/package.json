@@ -1,0 +1,18 @@
+{
+  "name": "@lwb/changes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "修改集：精确文本编辑契约（票据、基线、行区间）、逐字节文本引擎、规范化摘要与不可变修改集建立。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/blob-store": "*",
+    "@lwb/contracts": "*",
+    "@lwb/files": "*",
+    "@lwb/persistence": "*",
+    "@lwb/winfs": "*"
+  }
+}

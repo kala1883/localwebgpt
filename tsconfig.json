@@ -1,0 +1,85 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": false,
+    "useUnknownInCatchVariables": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+
+    "baseUrl": ".",
+    "paths": {
+      "@lwb/contracts": ["./packages/contracts/src/index.ts"],
+      "@lwb/contracts/*": ["./packages/contracts/src/*"],
+      "@lwb/persistence": ["./packages/persistence/src/index.ts"],
+      "@lwb/persistence/*": ["./packages/persistence/src/*"],
+      "@lwb/secure-store": ["./packages/secure-store/src/index.ts"],
+      "@lwb/secure-store/*": ["./packages/secure-store/src/*"],
+      "@lwb/blob-store": ["./packages/blob-store/src/index.ts"],
+      "@lwb/blob-store/*": ["./packages/blob-store/src/*"],
+      "@lwb/ipc": ["./packages/ipc/src/index.ts"],
+      "@lwb/ipc/*": ["./packages/ipc/src/*"],
+      "@lwb/workspaces": ["./packages/workspaces/src/index.ts"],
+      "@lwb/workspaces/*": ["./packages/workspaces/src/*"],
+      "@lwb/policy": ["./packages/policy/src/index.ts"],
+      "@lwb/policy/*": ["./packages/policy/src/*"],
+      "@lwb/egress": ["./packages/egress/src/index.ts"],
+      "@lwb/egress/*": ["./packages/egress/src/*"],
+      "@lwb/files": ["./packages/files/src/index.ts"],
+      "@lwb/files/*": ["./packages/files/src/*"],
+      "@lwb/search": ["./packages/search/src/index.ts"],
+      "@lwb/search/*": ["./packages/search/src/*"],
+      "@lwb/git-reader": ["./packages/git-reader/src/index.ts"],
+      "@lwb/git-reader/*": ["./packages/git-reader/src/*"],
+      "@lwb/audit": ["./packages/audit/src/index.ts"],
+      "@lwb/audit/*": ["./packages/audit/src/*"],
+      "@lwb/limits": ["./packages/limits/src/index.ts"],
+      "@lwb/limits/*": ["./packages/limits/src/*"],
+      "@lwb/winfs": ["./native/winfs/src/index.ts"],
+      "@lwb/winfs/*": ["./native/winfs/src/*"]
+    }
+  },
+  "include": [
+    "apps/**/*.ts",
+    "packages/**/*.ts",
+    "native/**/*.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.mjs",
+    "scripts/**/*.ts",
+    "*.ts"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/dist",
+    "tests/fixtures/generated",
+
+    // 控制台的两层由 `apps/console/tsconfig.json` + `vue-tsc` 检查，理由见那里。
+    // 根这份必须把它们排除掉，否则：
+    //  - `views/` 与 `components/` 里的 .vue 文件 tsc 根本不解析，会被静默略过；
+    //  - `tests/*.spec.ts` 直接 import `.vue`，根 tsc 解析不了那个后缀，会报错。
+    // 浏览器宿主 `apps/console/host/` 使用 DOM 与 SFC，仅由 console 的 vue-tsc 检查。
+    // Vite 配置同样属于浏览器构建入口，不应进入纯业务的根 TS 检查。
+    // 只排除这两处、**不**排除 `apps/console/src/`：那一层是纯 TypeScript，
+    // 而且它「不依赖 DOM」这件事正需要根这份没有 DOM lib 的配置来把关。
+    "apps/console/views",
+    "apps/console/components",
+    "apps/console/host",
+    "apps/console/tests",
+    "apps/console/vite.config.ts",
+    "apps/console/vitest.config.ts"
+  ]
+}

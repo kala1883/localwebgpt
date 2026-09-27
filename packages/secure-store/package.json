@@ -1,0 +1,14 @@
+{
+  "name": "@lwb/secure-store",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "受保护存储：目录加固与实测校验、DPAPI 凭证、脱敏、受保护路径判定。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*"
+  }
+}

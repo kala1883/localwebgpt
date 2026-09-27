@@ -1,0 +1,15 @@
+{
+  "name": "@lwb/persistence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SQLite 持久化：模式、迁移、仓储。所有 SQL 封在本包内，调用方不写 SQL。",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@lwb/contracts": "*",
+    "better-sqlite3": "13.0.3"
+  }
+}
