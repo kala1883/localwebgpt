@@ -1933,4 +1933,4 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - GitHub Push Protection 拒绝了首次 `main` squash push：当前源码中的三个测试/证据样例包含 Slack token 形状字面量。未使用 GitHub 的绕过链接；改为运行时拼装合成 canary，保留 egress 脱敏覆盖但不把完整 token 外形存入源码。
 - 本地秘密扫描器新增 Slack API token 形状检测。生成目录 `tests/fixtures/generated` 只有在 Git 明确忽略且其中没有已跟踪文件时才跳过；一旦强制跟踪，扫描器仍检查其中内容。
 - 验证：`npm run check:secrets` PASS；秘密扫描与 egress 定向测试 **56/56 PASS**；完整 `npm run check` 主测试 **1762 项 / 1749 PASS / 0 FAIL / 13 SKIP**，控制台 **164/164 PASS**。
-- 远端拒绝的提交未被接受；正在用修正后的同一源码快照重建 squash 提交后再推送，不会把 token 绕过例外或旧功能分支历史带到远端。
+- 修复后的源码快照已通过完整本机检查并以 squash 单提交推送至远端 `main`（`0361cad`）。没有使用 GitHub 放行例外；旧功能分支及其中的历史密钥提交均未推送。若该历史凭据仍有效，账号持有人仍应撤销/轮换，且不要直接推送旧分支。
