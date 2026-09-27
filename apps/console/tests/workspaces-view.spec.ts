@@ -287,6 +287,15 @@ describe('B 组 · 目录 / 单文件、两种模式与各自的说明（执行�
     assert.match(wrapper.find('[data-testid="path-hint"]').text(), /浏览器不能替你选目录/);
   });
 
+  it('B5a 粘贴盘符根时说明整卷授权的实际范围', async () => {
+    const wrapper = mountView({ session: SESSION });
+    await fillForm(wrapper, '整块 D 盘', 'D:\\');
+    assert.equal(wrapper.find('[data-testid="whole-volume-warning"]').exists(), true);
+    assert.match(wrapper.find('[data-testid="whole-volume-warning"]').text(), /私人文件内容发送给 ChatGPT/);
+    await wrapper.find('[data-testid="path-input"]').setValue('D:\\test-root');
+    assert.equal(wrapper.find('[data-testid="whole-volume-warning"]').exists(), false);
+  });
+
   it('B6 没有会话时按钮不可用，并说得出下一步', async () => {
     const wrapper = mountView({});
     await fillForm(wrapper, '仓库', 'D:\\code\\repo');

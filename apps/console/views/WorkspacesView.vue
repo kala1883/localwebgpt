@@ -141,6 +141,7 @@ const write = computed(() =>
 const offers = computed(() => modeOffers(write.value));
 
 const validation = computed(() => validateRegister(draft.value));
+const isWholeVolumeRoot = computed(() => /^[A-Za-z]:\\$/.test(draft.value.path.trim().replaceAll('/', '\\')));
 
 /**
  * 能不能提交。
@@ -332,7 +333,7 @@ function cancelAccess(): void {
       <h3>登记一个目录或单个文件</h3>
 
       <p class="ws__dim" data-testid="path-hint">
-        浏览器不能替你选目录：请粘贴**完整**的本机路径（例如从资源管理器地址栏复制）。服务端会拒绝整个盘、用户主目录这类过于宽泛的根。
+        浏览器不能替你选目录：请粘贴完整本机路径（例如从资源管理器地址栏复制）。可输入 `C:\` / `D:\` 登记整块本机卷；这会让授权工具覆盖该卷全部可访问目录。
       </p>
 
       <div class="ws__field">
@@ -345,7 +346,6 @@ function cancelAccess(): void {
           @input="setAlias"
         />
       </div>
-
       <div class="ws__field">
         <label for="ws-path">本机路径</label>
         <input
@@ -357,6 +357,9 @@ function cancelAccess(): void {
           @input="setPath"
         />
       </div>
+      <p v-if="isWholeVolumeRoot" class="ws__risk" data-testid="whole-volume-warning">
+        整卷范围：获授的读取工具可能把该卷上的私人文件内容发送给 ChatGPT；获授“文件修改”后可在该卷内直接创建或编辑文本文件。硬拒绝秘密/插件状态、系统 ACL、冲突检查和审计仍生效。请确认这就是你要授权的磁盘。
+      </p>
 
       <fieldset class="ws__field">
         <legend>范围</legend>

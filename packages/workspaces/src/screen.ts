@@ -126,6 +126,7 @@ function anyWritable(a: WorkspaceMode, b: WorkspaceMode): boolean {
  * 只做 (1) 会漏掉父子目录；只做 (2) 会漏掉别名写法。两者都要。
  */
 function overlapsWithExisting(input: ScreenInput, out: RootRejection[]): void {
+  const candidateIsDriveRoot = /^([A-Za-z]):\\$/.test(input.root);
   for (const existing of input.existing) {
     if (existing.volume_id === input.facts.volume_id && existing.file_id === input.facts.file_id) {
       out.push({
@@ -141,6 +142,10 @@ function overlapsWithExisting(input: ScreenInput, out: RootRejection[]): void {
       });
       continue;
     }
+    // 明确登记整块卷会覆盖该卷上已有的窄目录 grant；这是操作者要求的
+    // 扩权，不应被旧的目录重叠保护反向锁住。反过来，在册整卷仍会阻止
+    // 之后再登记一个看似更窄、实际会被整卷 grant 绕开的子目录。
+    if (candidateIsDriveRoot) continue;
     if (!anyWritable(existing.mode, input.mode)) continue;
 
     if (isStrictAncestor(existing.path, input.root)) {
@@ -196,7 +201,8 @@ export function screenRoot(input: ScreenInput): RootRejection[] {
   if (!alias.ok) push(out, 'INVALID_ALIAS', alias.detail);
 
   // --- 广泛目录 / 受保护存储（来自 secure-store 的判定） ----------------
-  if (!input.broad.accepted) {
+  const explicitlySelectedDriveRoot = /^([A-Za-z]):\\$/.test(input.root) && input.kind === 'directory';
+  if (!input.broad.accepted && !explicitlySelectedDriveRoot) {
     // secure-store 把「受保护根的祖先」与「系统级广泛目录」合并在一个 verdict 里，
     // 这里按措辞拆回两个理由码，好让测试能分别钉住。
     const reason: RootRejectionReason = input.broad.reason.includes('受保护存储')

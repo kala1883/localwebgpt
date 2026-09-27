@@ -295,6 +295,7 @@ describe('策略：文件规则层', () => {
     '.git/config',
     '.aws/credentials',
     '.lwb/secrets.db',
+    'LocalWorkspaceBridge/db/bridge.sqlite',
     'src/.ENV',
   ];
 
@@ -530,6 +531,7 @@ describe('操作者豁免', () => {
     assert.equal(applied.length, 0);
     assert.equal(rejected.length, 1);
     assert.equal(classifyFile('lwb-state/approvals.db', rules).kind, 'hard_deny');
+    assert.equal(classifyFile('LocalWorkspaceBridge/db/service.db', rules).kind, 'hard_deny');
   });
 
   it('通配符豁免被拒（那等于把整条规则关掉，只是换个写法）', () => {

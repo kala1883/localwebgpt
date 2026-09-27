@@ -155,6 +155,7 @@ describe('LWB-007 受保护路径', () => {
       'deploy/id_ed25519',
       'secrets.json',
       'db/bridge.sqlite-wal',
+      'LocalWorkspaceBridge/db/bridge.sqlite',
     ]) {
       assert.notEqual(isProtectedPathSyntax(p), null, `${p} 应当被识别为受保护路径`);
     }
@@ -172,6 +173,12 @@ describe('LWB-007 受保护路径', () => {
     for (const p of ['src/index.ts', 'docs/readme.md', 'environment.ts', 'src/env.ts']) {
       assert.equal(isProtectedPathSyntax(p), null, `${p} 不应当被拒绝`);
     }
+  });
+
+  it('整卷 workspace 也不能读插件自己的 LocalWorkspaceBridge 状态树', () => {
+    const match = isProtectedPathSyntax('LocalWorkspaceBridge/db/service.db');
+    assert.notEqual(match, null);
+    assert.equal(match?.kind, 'dirname');
   });
 
   it('受保护根本身与其祖先目录都不能作为工作区', () => {

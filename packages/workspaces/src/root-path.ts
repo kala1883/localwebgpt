@@ -53,7 +53,7 @@ export interface RootPathAccepted {
   readonly normalized: string;
   /** 第一段是盘符（如 `D:`），其余是目录名。 */
   readonly segments: readonly string[];
-  /** 盘符根（`D:\`）—— V1 一律拒绝，单列出来是为了让拒绝理由准确。 */
+  /** 盘符根（`D:\`）：显式本机登记时表示授权整块本地卷。 */
   readonly is_drive_root: boolean;
 }
 
@@ -89,7 +89,7 @@ function isControlChar(code: number): boolean {
  * 解析一个候选根。
  *
  * 只接受 `X:\...` 形式（`/` 也接受，统一归一为 `\`）。
- * 盘符根、UNC、设备命名空间、根相对路径、盘符相对路径全部拒绝。
+ * 盘符根表示显式授权整块卷；UNC、设备命名空间、根相对路径与盘符相对路径拒绝。
  */
 export function parseAbsoluteRoot(input: unknown): RootPathParse {
   if (typeof input !== 'string') return reject('NOT_A_STRING', '根路径必须是字符串');
@@ -136,7 +136,12 @@ export function parseAbsoluteRoot(input: unknown): RootPathParse {
 
   const body = rest.replace(/\\/g, '/');
   if (body === '/') {
-    return reject('DRIVE_ROOT', '不接受盘符根：它等价于授权整块磁盘');
+    return {
+      ok: true,
+      normalized: `${driveLetter}\\`,
+      segments: [driveLetter],
+      is_drive_root: true,
+    };
   }
   // 统一分隔符后剩下的冒号只可能是 ADS 或盘符残留。
   if (body.includes(':')) {
@@ -191,6 +196,7 @@ export function parseAbsoluteRoot(input: unknown): RootPathParse {
 export function ancestorPaths(normalized: string): string[] {
   const parsed = parseAbsoluteRoot(normalized);
   if (!parsed.ok) return [];
+  if (parsed.is_drive_root) return [];
   const out: string[] = [];
   const drive = parsed.segments[0]!;
   // 盘符根永远在链上（`D:\` 也可能是挂载点/网络映射）。

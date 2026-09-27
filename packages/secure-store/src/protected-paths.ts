@@ -49,6 +49,9 @@ export const HARD_DENIED_DIRNAMES: readonly string[] = [
   '.gnupg',
   '.kube',
   '.docker',
+  // Do not let a whole-volume workspace disclose the bridge's credential DB,
+  // snapshots, operation journal, or diagnostics through its own storage tree.
+  'localworkspacebridge',
   'cookies',
   'login data',
   'credential manager',

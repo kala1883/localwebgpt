@@ -8,8 +8,9 @@
 
 - ChatGPT 连接启用后只发现 MCP 工具；它不会自动获得文件系统权限。
 - 用户在本机 Console 对一个明确登记的工作区逐项授予读取、搜索、Git 只读、文件修改能力。
+- 本地操作者可以把固定 NTFS 卷根（如 `C:\`）登记为一个工作区；这是显式整卷授权，覆盖该卷内窄根 grant，不会在安装/启动时自动发生。
 - 授予文件修改后，单文件 `file_create` / `file_edit` 一次工具调用内直接写入；多文件使用 `change_prepare` → `change_apply`。不要求每次操作再本地点击批准。
-- 必要边界仍然有效：工作区外路径、被策略拒绝的秘密文件、Shell、删除、Git commit/push 不会通过 MCP 暴露；写入有冲突检查、快照、审计、回读与暂停恢复。
+- 必要边界仍然有效：未授权卷、被策略拒绝的秘密文件与 `LocalWorkspaceBridge` 私有状态树、Shell、删除、Git commit/push 不会通过 MCP 暴露；写入有冲突检查、快照、审计、回读与暂停恢复。
 
 因此，这次简化的是重复的全局/逐文件批准流程，不是把 ChatGPT 变成不受范围限制的本地账户。每个工作区 grant 仍是清楚、可撤销的授权。
 
@@ -17,7 +18,7 @@
 
 | 验收面 | 状态 | 证据/缺口 |
 | --- | --- | --- |
-| 类型、Console、单元、安全和 Windows 自动化 | PASS | `npm run check`：根测试 1,787 项 / **1,774 PASS、13 SKIP、0 FAIL**；Console **159/159 PASS**；根/Console 类型、216 文件 FsGuard 导入扫描与 secret scan 全通过。性能 soak/睡眠唤醒等长时环境项不包含在这项 PASS 中。 |
+| 类型、Console、单元、安全和 Windows 自动化 | PASS | 最新 `npm run check`：根测试 1,790 项 / **1,777 PASS、13 SKIP、0 FAIL**；Console **160/160 PASS**；根/Console 类型、216 文件 FsGuard 导入扫描与 secret scan 全通过。性能 soak/睡眠唤醒等长时环境项不包含在这项 PASS 中。 |
 | Tunnel 本机健康/就绪 | PASS（本机采样） | 本机 `127.0.0.1:8080/healthz` 与 `/readyz` 返回 HTTP 200。只能证明运行中的 tunnel-client 就绪，不等于 ChatGPT 调用成功。 |
 | LocalWebGPT 控制面会话保护 | PASS（本机采样） | 无会话访问 `/api/status` 返回 401，符合需本机 Console 会话的保护行为。 |
 | LWB-043 受控目标场景 | PASS（受控副本） | `npm run acceptance:lwb043`：真实 NTFS + handler；单文件编辑/创建直接 `APPLIED`，随后 MCP `file_read` 回读 SHA-256 与独立磁盘哈希一致；外部 canary、Git index、HEAD 与源副本不变。详见 [`../evidence/user-journeys.md`](../evidence/user-journeys.md)。 |

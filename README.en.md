@@ -82,7 +82,7 @@ To stop the service, open another PowerShell window and run `.\packaging\windows
 
 Open the local console using the one-time URL from the launcher and go to **Workspaces**:
 
-1. Register a directory or file by pasting its full local path. Start with a narrow test directory. The project rejects overly broad roots such as an entire drive or the user's home directory.
+1. Register a directory or file by pasting its full local path. Start with a narrow test directory. If you explicitly want whole-volume access, register a fixed NTFS volume root such as `C:\`; this supersedes narrower grants on that volume and exposes all accessible paths to the tools you grant.
 2. Choose **Read-only** or **Read + modify**. The latter lets you grant “File modifications” for this root; once granted, ChatGPT can directly create/edit text files without a per-change local approval.
 3. Open **Configure ChatGPT tools** for that root and select the allowed tools:
 

@@ -127,9 +127,10 @@ export const HARD_DENY_RULES: readonly FileRule[] = [
   {
     id: 'HD-PLUGIN-STATE',
     kind: 'hard_deny',
-    patterns: ['.lwb', '.lwb-state', '.lwb-plugin', 'lwb-state'],
+    patterns: ['.lwb', '.lwb-state', '.lwb-plugin', 'lwb-state', 'LocalWorkspaceBridge'],
     rationale:
-      'I13：本插件自身的状态目录（密钥、审批状态库、恢复快照）对模型**永远**不可挂载，'
+      'I13：本插件自身的状态目录（密钥、审批状态库、恢复快照）对模型**永远**不可挂载，' +
+      '包括整卷工作区下默认的 LocalWorkspaceBridge 存储目录；'
       + '也不可从工作区内读到。这里做兜底 —— 真正的第一道是 LWB-009 拒绝把这类根登记为工作区。',
   },
 ];

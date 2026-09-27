@@ -110,6 +110,45 @@ describeWindows('LWB-009 工作区根的真实身份', () => {
     assert.equal(authorized.file_id, probed.file_id);
   });
 
+  it('本地操作者可登记 NTFS 整卷根，且护栏仍只在被授权卷根内直接创建测试文件', async () => {
+    const volumeRoot = path.parse(sandbox).root;
+    const record = await registry.register({
+      alias: 'whole-test-volume',
+      kind: 'directory',
+      path: volumeRoot,
+      mode: WRITE_MODE,
+      origin: 'local_console',
+    });
+    try {
+      const authorized = await registry.authorizeAccess(record.id);
+      assert.equal(authorized.root_path, volumeRoot);
+      assert.equal(authorized.kind, 'directory');
+
+      const relativeDirectory = path.relative(volumeRoot, sandbox).split(path.sep).join('/');
+      const relativeFile = `${relativeDirectory}/volume-root-guard-test.txt`;
+      const bytes = Buffer.from('volume-root-grant-test\n', 'utf8');
+      const created = await backend.createFileGuarded({
+        root_path: authorized.root_path,
+        root_volume_id: authorized.volume_id,
+        root_file_id: authorized.file_id,
+        relative_path: relativeFile,
+        content_base64: bytes.toString('base64'),
+      });
+      assert.equal(created.ok, true, `整卷授权应能触达临时夹具内的目标：${JSON.stringify(created)}`);
+
+      const readback = await backend.readFileGuarded({
+        root_path: authorized.root_path,
+        root_volume_id: authorized.volume_id,
+        root_file_id: authorized.file_id,
+        relative_path: relativeFile,
+      });
+      assert.equal(readback.ok, true, `通过整卷根应能回读刚创建的临时测试文件：${JSON.stringify(readback)}`);
+      if (readback.ok) assert.deepEqual(Buffer.from(readback.bytes_base64, 'base64'), bytes);
+    } finally {
+      registry.remove(record.id, 'local_console');
+    }
+  });
+
   // -------------------------------------------------------------------------
   // 验收标准 1
   // -------------------------------------------------------------------------

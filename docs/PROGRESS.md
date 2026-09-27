@@ -2026,3 +2026,12 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 本轮验证：根/Console TypeScript 检查通过；FsGuard 扫描（216 文件）和工作树 secret scan 通过；`tests/unit/` **1320/1320 PASS**；Console **159/159 PASS**；`tests/security/lwb-042.test.ts` **3/3 PASS**；真 NTFS 单文件工具、应用与撤权专项 **13/13 PASS**；`tests/windows/changes-revert.test.ts` 与 MCP adapter 端到端组合 **40/40 PASS**。
 - `npm run check` 在本轮最初暴露旧 LWB-034 审批流程断言与新 grant 流程不一致；已修订暂停测试，使其验证暂停废止旧待执行提案、恢复后新提案可直接执行。最终全仓检查 **PASS**：根测试 **1773 PASS / 13 SKIP / 0 FAIL**，Console **159/159 PASS**；类型检查、FsGuard 扫描（216 文件）与工作树 secret scan 均通过。
 - 限制仍在：当前只对本地登记的 NTFS 工作区生效，不默认开放整盘/用户主目录，不开放 Shell、删除、Git 提交/推送；路径硬拒绝、工作区代次、冲突、快照、审计、恢复及紧急暂停保留。真实 ChatGPT 网页端读写/回读仍 NOT_RUN，平台身份与外部独立安全审查仍未签署。
+
+## 2026-09-28 继续：本机操作者可显式授权整块 NTFS 卷
+
+- 用户此前明确要求 ChatGPT 能访问本机全部目录；现允许本地控制台直接登记 `C:\` / `D:\` 这类固定 NTFS 卷根。它仍是一条显式 workspace 注册，权限由该连接×工作区工具 grant 控制；不会在启动时自动枚举或开放磁盘。
+- 整卷 grant 会覆盖该卷内现有窄根 grant。反向操作（已有整卷后再登记其子目录）仍拒绝，避免界面造成“子目录更窄”的错觉。远程卷、云占位和未验证文件系统仍拒绝。
+- Console 在输入卷根时显示范围告知；默认密码、私钥、浏览器凭证及 `LocalWorkspaceBridge` 自身状态树保持硬拒绝。根身份、路径句柄、ACL、冲突、快照、审计、回读与暂停继续工作。
+- 验证：工作区/secure-store/policy/NTFS 根专项 **178/178 PASS**；Console 工作区页 **28/28 PASS**；根/Console 类型检查、216 文件 FsGuard 导入扫描与 secret scan 通过。
+- 更新后全仓 `npm run check` **PASS**：根测试 **1,777 PASS / 13 SKIP / 0 FAIL**，Console **160/160 PASS**；FsGuard 检查 216 个文件，secret scan 通过。
+- 尚未实现显式 MCP 文件删除（用户此前要求）和真实 ChatGPT 网页验收；本轮没有对真实工作区做删除或写入。产品覆盖从窄目录扩展到显式整卷，正式 runtime 需待删除能力实现后再重建。

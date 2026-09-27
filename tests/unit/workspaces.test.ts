@@ -203,10 +203,13 @@ async function expectAsyncBridgeError(
 // ---------------------------------------------------------------------------
 
 describe('LWB-009 候选根路径语法', () => {
-  it('拒绝盘符根：它等价于授权整块磁盘', () => {
+  it('盘符根是显式的整卷目录根，不会被当成盘符相对路径', () => {
     const parsed = parseAbsoluteRoot('D:\\');
-    assert.equal(parsed.ok, false);
-    assert.equal(parsed.ok === false ? parsed.reason : '', 'DRIVE_ROOT');
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.ok ? parsed.normalized : '', 'D:\\');
+    assert.deepEqual(parsed.ok ? [...parsed.segments] : [], ['D:']);
+    assert.equal(parsed.ok ? parsed.is_drive_root : false, true);
+    assert.deepEqual(ancestorPaths('D:\\'), []);
   });
 
   it('拒绝 UNC、设备命名空间、根相对、盘符相对', () => {
@@ -412,7 +415,7 @@ describe('LWB-009 候选根筛查', () => {
     assert.ok(asDir.includes('KIND_MISMATCH'), `实际：${asDir.join(',')}`);
   });
 
-  it('广泛目录与受保护存储被区分成两个理由码', () => {
+  it('广泛目录与受保护存储被区分成两个理由码；显式整卷根可登记', () => {
     const broad = screenRoot(
       screenInput({ broad: { accepted: false, reason: '该目录是系统级或用户级广泛目录，范围过大，不得作为工作区。' } }),
     ).map((r) => r.reason);
@@ -424,6 +427,16 @@ describe('LWB-009 候选根筛查', () => {
       }),
     ).map((r) => r.reason);
     assert.deepEqual(store, ['PROTECTED_STORE']);
+
+    const drive = screenRoot(
+      screenInput({
+        root: 'D:\\',
+        facts: facts({ path: 'D:\\' }),
+        ancestors: [],
+        broad: { accepted: false, reason: '该目录包含本地服务的受保护存储（凭证、状态库、快照、日志），不得作为工作区。' },
+      }),
+    ).map((r) => r.reason);
+    assert.deepEqual(drive, [], '本机控制台明确登记 D:\\ 时，整卷即为授权范围');
   });
 
   it('受保护对象的身份命中时拒绝（换了写法也拦得住）', () => {
@@ -619,16 +632,23 @@ describe('LWB-009 登记', () => {
     assert.equal(h.repos.workspaces.list({ include_disabled: true }).length, 0);
   });
 
-  it('盘符根在语法阶段就被拒绝，不进入探测', async () => {
-    const h = newHarness([]);
-    const error = await h.registry
-      .register({ alias: 'disk', kind: 'directory', path: 'D:\\', mode: WRITE_MODE, origin: 'local_console' })
-      .then(
-        () => assert.fail('盘符根必须被拒绝'),
-        (cause: unknown) => cause,
-      );
-    assert.deepEqual(rejectionReasons(error), ['DRIVE_ROOT']);
-    assert.deepEqual(h.probe.calls, []);
+  it('本地操作者登记整卷后，整卷授权生效且既有子目录授权不会锁住它', async () => {
+    const h = newHarness([
+      ...chainFor('D:\\'),
+      ...chainFor('D:\\work', { file_id: '0000000000000002' }),
+    ]);
+    const child = await h.registry.register({
+      alias: 'work', kind: 'directory', path: 'D:\\work', mode: WRITE_MODE, origin: 'local_console',
+    });
+    const volume = await h.registry.register({
+      alias: 'all-of-D', kind: 'directory', path: 'D:\\', mode: WRITE_MODE, origin: 'local_console',
+    });
+    assert.equal(volume.canonical_root, 'D:\\');
+    assert.equal(volume.kind, 'directory');
+    assert.equal(volume.mode, WRITE_MODE);
+    assert.equal(h.repos.workspaces.list().length, 2);
+    assert.equal(h.probe.calls.filter((candidate) => candidate === 'D:\\').length, 2);
+    assert.notEqual(child.id, volume.id);
   });
 
   it('云占位文件被拒绝，且不写入任何行', async () => {
@@ -877,8 +897,11 @@ describe('LWB-009 代次', () => {
     assert.equal(moved.generation, 2);
   });
 
-  it('重定位到盘符根会被拒绝：不能先登记安全目录再换过去', async () => {
-    const h = newHarness(chainFor('D:\\work'));
+  it('本地操作者可显式把已有目录授权重定位到整卷', async () => {
+    const h = newHarness([
+      ...chainFor('D:\\work', { file_id: '0000000000000002' }),
+      ...chainFor('D:\\'),
+    ]);
     const record = await h.registry.register({
       alias: 'work',
       kind: 'directory',
@@ -886,14 +909,9 @@ describe('LWB-009 代次', () => {
       mode: WRITE_MODE,
       origin: 'local_console',
     });
-    const error = await h.registry
-      .relocate(record.id, 'D:\\', 'local_console')
-      .then(
-        () => assert.fail('重定位到盘符根必须被拒绝'),
-        (cause: unknown) => cause,
-      );
-    assert.deepEqual(rejectionReasons(error), ['DRIVE_ROOT']);
-    assert.equal(h.repos.workspaces.requireById(record.id).generation, 1, '被拒绝的重定位不得改状态');
+    const moved = await h.registry.relocate(record.id, 'D:\\', 'local_console');
+    assert.equal(moved.canonical_root, 'D:\\');
+    assert.equal(moved.generation, 2, '扩大到整卷是重新授权，旧票据必须失效');
   });
 
   it('重定位到云占位目录会被拒绝', async () => {
