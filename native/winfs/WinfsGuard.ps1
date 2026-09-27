@@ -43,6 +43,7 @@ public static class LwbWin32
 {
     public const uint GENERIC_READ          = 0x80000000;
     public const uint GENERIC_WRITE         = 0x40000000;
+    public const uint DELETE_ACCESS         = 0x00010000;
     public const uint FILE_SHARE_READ       = 0x00000001;
     public const uint FILE_SHARE_WRITE      = 0x00000002;
     public const uint FILE_SHARE_DELETE     = 0x00000004;
@@ -57,6 +58,7 @@ public static class LwbWin32
     public const uint FILE_ATTRIBUTE_RECALL_ON_OPEN        = 0x00040000;
     public const uint FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000;
     public const int  FILE_BEGIN            = 0;
+    public const int  FILE_DISPOSITION_INFO_CLASS = 4;
     public const uint VOLUME_NAME_DOS       = 0x0;
 
     // GetDriveTypeW 的返回值
@@ -79,6 +81,13 @@ public static class LwbWin32
         public uint nFileSizeHigh, nFileSizeLow;
         public uint nNumberOfLinks;
         public uint nFileIndexHigh, nFileIndexLow;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct FILE_DISPOSITION_INFO
+    {
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool DeleteFile;
     }
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "CreateFileW")]
@@ -106,6 +115,11 @@ public static class LwbWin32
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool FlushFileBuffers(SafeFileHandle h);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetFileInformationByHandle(
+        SafeFileHandle h, int fileInformationClass,
+        ref FILE_DISPOSITION_INFO fileInformation, uint bufferSize);
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "GetDriveTypeW")]
     public static extern uint GetDriveType(string lpRootPathName);
@@ -1029,6 +1043,129 @@ function Invoke-GuardedRewrite {
 }
 
 <#
+  删除：按**同一句柄**核对路径、对象身份、硬链接数与完整基线哈希，再提交
+  FileDispositionInfo。不是 `Remove-Item` / `DeleteFile(path)`：删除决定必须
+  绑定到刚核验的那个句柄，避免「核对后换名/换对象，再删掉新对象」的窗口。
+
+  成功回执只在关闭删除句柄后，重新尝试打开原路径并得到 NOT_FOUND 时返回。
+  若另一个句柄使删除仍处于 pending，或有人抢先在该位置创建新对象，本次不报成功；
+  `touched` 会要求上层按操作账本进入核验/恢复。
+#>
+function Op-DeleteFileGuarded {
+  param($req)
+  $expected = ([string]$req.expected_sha256).ToLowerInvariant()
+  if ($expected -notmatch $SCRIPT:LWB_SHA256_RE) {
+    throw [LwbFsException]::new('INVALID_ARGUMENT', 'expected_sha256 必须是 64 位十六进制串', 0)
+  }
+  $expectedFileId = ([string]$req.expected_file_id).ToLowerInvariant()
+  if ($expectedFileId -notmatch $SCRIPT:LWB_FILE_ID_RE) {
+    throw [LwbFsException]::new('INVALID_ARGUMENT', 'expected_file_id 必须是 16 位十六进制串', 0)
+  }
+
+  $t = Resolve-Target -req $req
+  $rel = [string]$req.relative_path
+  $chain = Open-GuardedChain -RootPath $t.root -Segments $t.segments `
+    -ExpectVolumeId $t.volume_id -ExpectFileId $t.file_id
+  $h = $null
+  $touched = $false
+  try {
+    $full = $chain.target_path
+    # DELETE access and no FILE_SHARE_WRITE / FILE_SHARE_DELETE pin the target
+    # against concurrent edits, renames, and competing delete operations.
+    $h = Open-Guarded -Path $full `
+      -Access ([LwbWin32]::GENERIC_READ -bor [LwbWin32]::DELETE_ACCESS) `
+      -Share ([LwbWin32]::FILE_SHARE_READ) -Creation ([LwbWin32]::OPEN_EXISTING)
+    $info = Assert-HandleMatches -Handle $h -Expected $full -Label '待删除目标'
+    if (($info.dwFileAttributes -band [LwbWin32]::FILE_ATTRIBUTE_DIRECTORY) -ne 0) {
+      throw [LwbFsException]::new('INVALID_ARGUMENT', 'file_delete 只删除普通文件，不删除目录', 0)
+    }
+    if ([int]$info.nNumberOfLinks -gt 1) {
+      throw [LwbFsException]::new('LINK_UNSUPPORTED', '目标有多个硬链接；删除会影响工作区外的另一个名字', 0)
+    }
+    $actualFileId = (Get-FileIdHex $info)
+    if ($actualFileId -ne $expectedFileId) {
+      throw [LwbFsException]::new('FILE_VERSION_CONFLICT', '目标对象已不是最近读取的那个文件，拒绝删除', 0)
+    }
+
+    $size = [long]([LwbWin32]::FileSize($info))
+    # `file_delete` snapshots the original bytes so a later recovery can recreate
+    # the file. Keep the native helper's allocation bounded even if a caller lies.
+    if ($size -gt 2097152) {
+      throw [LwbFsException]::new('INVALID_ARGUMENT', '待删除文件超过 2 MiB 快照上限，拒绝删除', 0)
+    }
+    $bytes = New-Object byte[] ([int]$size)
+    $read = [uint32]0
+    if ($size -gt 0) {
+      if (-not [LwbWin32]::ReadFile($h, $bytes, [uint32]$size, [ref]$read, [IntPtr]::Zero)) {
+        $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw [LwbFsException]::new('IO_ERROR', '删除前读取基线失败', $err)
+      }
+    }
+    if ($read -ne $size) {
+      throw [LwbFsException]::new('IO_ERROR', "删除前读取字节数不符：预期 $size，实际 $read", 0)
+    }
+    $beforeSha = Get-Sha256Hex $bytes
+    if ($beforeSha -ne $expected) {
+      throw [LwbFsException]::new('FILE_VERSION_CONFLICT', '目标内容哈希已变化，拒绝删除', 0)
+    }
+
+    $canonical = Get-CanonicalRelativePath -RootHandle $chain.root_handle -TargetHandle $h
+    $identityBefore = New-Identity $info
+    $disposition = New-Object LwbWin32+FILE_DISPOSITION_INFO
+    $disposition.DeleteFile = $true
+    if (-not [LwbWin32]::SetFileInformationByHandle(
+      $h, [LwbWin32]::FILE_DISPOSITION_INFO_CLASS, [ref]$disposition, [uint32]4)) {
+      $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+      $mapped = Convert-Win32Error -Win32Error $err
+      throw [LwbFsException]::new($mapped.Code, "提交文件删除失败（$($mapped.Message)）", $err)
+    }
+    $touched = $true
+    $h.Dispose()
+    $h = $null
+
+    # Independent path check after the delete handle closes. If the name was
+    # recreated, report uncertainty rather than deleting the new object too.
+    $probe = $null
+    try {
+      $probe = Open-Guarded -Path $full -Access ([LwbWin32]::GENERIC_READ) `
+        -Share ([LwbWin32]::FILE_SHARE_READ) -Creation ([LwbWin32]::OPEN_EXISTING)
+      [void](Assert-HandleMatches -Handle $probe -Expected $full -Label '删除后的路径核验')
+      $state = Get-BoundedActualState -Handle $probe
+      $failure = [LwbFsException]::new('FILE_VERSION_CONFLICT', '删除后目标路径仍被占用，拒绝把结果报告为已删除', 0)
+      $failure.Touched = $true
+      if ($null -ne $state) { $failure.ActualState = $state }
+      throw $failure
+    } catch [LwbFsException] {
+      if ($_.Exception.Code -ne 'NOT_FOUND') { throw }
+    } finally {
+      if ($null -ne $probe) { $probe.Dispose() }
+    }
+
+    return [ordered]@{
+      ok = $true
+      relative_path = $rel
+      canonical_relative_path = $canonical
+      identity_before = $identityBefore
+      before_sha256 = $beforeSha
+      bytes_deleted = $size
+      readback_missing = $true
+    }
+  } catch {
+    if ($touched -and $_.Exception -is [LwbFsException]) {
+      $_.Exception.Touched = $true
+      if ($null -ne $h -and -not $h.IsClosed) {
+        $state = Get-BoundedActualState -Handle $h
+        if ($null -ne $state) { $_.Exception.ActualState = $state }
+      }
+    }
+    throw
+  } finally {
+    if ($null -ne $h) { $h.Dispose() }
+    foreach ($x in $chain.handles) { $x.Dispose() }
+  }
+}
+
+<#
   创建：**只在已经存在的父目录里**，**只用 CREATE_NEW**。
 
   ## 判定与创建是同一次系统调用
@@ -1485,6 +1622,7 @@ function Invoke-LwbRequest($req) {
       'readFileGuarded'   { Op-ReadFileGuarded $req }
       'writeFileGuarded'  { Op-WriteFileGuarded $req }
       'createFileGuarded' { Op-CreateFileGuarded $req }
+      'deleteFileGuarded' { Op-DeleteFileGuarded $req }
       'listDirectory'     { Op-ListDirectory $req }
       'statVolume'        { Op-StatVolume $req }
       'crashExperiment'   { Op-CrashExperiment $req }

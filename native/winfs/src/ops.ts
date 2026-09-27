@@ -156,6 +156,18 @@ export interface WinfsCreateResult {
   bytes_written: number;
 }
 
+/** 删除成功时的句柄内核验回执；没有 after hash，因为目标已不存在。 */
+export interface WinfsDeleteResult {
+  ok: true;
+  relative_path: string;
+  canonical_relative_path: string | null;
+  identity_before: WinfsFileIdentity;
+  before_sha256: string;
+  bytes_deleted: number;
+  /** 护栏关闭删除句柄后重新探测，确认原路径已不存在。 */
+  readback_missing: boolean;
+}
+
 export interface WinfsDirEntry {
   name: string;
   relative_path: string;
@@ -387,6 +399,15 @@ export interface WinfsOps {
   createFileGuarded(req: WinfsPathRef & {
     content_base64: string;
   }): Promise<WinfsCreateResult | WinfsError>;
+
+  /**
+   * 按已读文件的身份与哈希删除；删除在同一句柄里核验，关闭后还要独立确认路径消失。
+   * 失败结果的 `touched` 表示已提交 delete disposition，调用方须进入恢复核对。
+   */
+  deleteFileGuarded?(req: WinfsPathRef & {
+    expected_sha256: string;
+    expected_file_id: string;
+  }): Promise<WinfsDeleteResult | WinfsError>;
 
   /**
    * 列举**一个目录**的直接子项，有界、有序（UTF-16 码元序）、可用 `after_name` 续读。

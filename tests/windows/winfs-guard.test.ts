@@ -239,6 +239,91 @@ describeWindows('LWB-010 Windows 文件系统护栏', () => {
     assert.equal(existsSync(path.join(root, 'no-such-dir')), false, '不得隐式创建父目录');
   });
 
+  it('按句柄内身份与哈希删除文件，并在句柄关闭后确认路径消失', async () => {
+    const target = path.join(root, 'delete-exact.txt');
+    const original = Buffer.from('delete only this exact file\n', 'utf8');
+    await writeFile(target, original);
+    const ref = await refFor(backend, root);
+    const baseline = await backend.readFileGuarded({ ...ref, relative_path: 'delete-exact.txt' });
+    assert.equal(baseline.ok, true, JSON.stringify(baseline));
+    if (isWinfsError(baseline)) return;
+
+    const deleted = await backend.deleteFileGuarded({
+      ...ref,
+      relative_path: 'delete-exact.txt',
+      expected_sha256: baseline.sha256,
+      expected_file_id: baseline.identity.file_id,
+    });
+    assert.equal(deleted.ok, true, JSON.stringify(deleted));
+    if (isWinfsError(deleted)) return;
+
+    assert.equal(deleted.identity_before.file_id, baseline.identity.file_id);
+    assert.equal(deleted.before_sha256, sha256(original));
+    assert.equal(deleted.bytes_deleted, original.length);
+    assert.equal(deleted.readback_missing, true);
+    assert.equal(existsSync(target), false);
+    const reread = await backend.readFileGuarded({ ...ref, relative_path: 'delete-exact.txt' });
+    assert.equal(reread.ok, false);
+    assert.equal((reread as WinfsError).code, 'NOT_FOUND');
+  });
+
+  it('删除时哈希或对象身份不符就拒绝，且一个字节都不删', async () => {
+    const target = path.join(root, 'delete-conflict.txt');
+    const original = Buffer.from('preserve on conflict\n', 'utf8');
+    await writeFile(target, original);
+    const ref = await refFor(backend, root);
+    const identity = await backend.statVolume({ path: target });
+    assert.equal(identity.ok, true, JSON.stringify(identity));
+    if (isWinfsError(identity)) return;
+    const wrongHash = await backend.deleteFileGuarded({
+      ...ref,
+      relative_path: 'delete-conflict.txt',
+      expected_sha256: sha256(Buffer.from('not the baseline\n')),
+      expected_file_id: identity.file_id,
+    });
+    assert.equal(wrongHash.ok, false);
+    assert.equal((wrongHash as WinfsError).code, 'FILE_VERSION_CONFLICT');
+    assert.equal((await readFile(target)).equals(original), true);
+
+    const wrongIdentity = await backend.deleteFileGuarded({
+      ...ref,
+      relative_path: 'delete-conflict.txt',
+      expected_sha256: sha256(original),
+      expected_file_id: '0000000000000000',
+    });
+    assert.equal(wrongIdentity.ok, false);
+    assert.equal((wrongIdentity as WinfsError).code, 'FILE_VERSION_CONFLICT');
+    assert.equal((await readFile(target)).equals(original), true);
+  });
+
+  it('拒绝删除有硬链接的文件，不能顺带删除工作区外的名字', async (t) => {
+    const originalPath = path.join(root, 'delete-hardlink-original.txt');
+    const linkPath = path.join(root, 'delete-hardlink-alias.txt');
+    const original = Buffer.from('shared identity\n', 'utf8');
+    await writeFile(originalPath, original);
+    const created = ps(
+      `try { New-Item -ItemType HardLink -Path '${linkPath}' -Target '${originalPath}' -ErrorAction Stop | Out-Null; 'CREATED' } catch { 'FAILED: ' + $_.Exception.Message }`,
+    );
+    if (!created.includes('CREATED')) {
+      t.diagnostic(`无法创建硬链接，跳过：${created}`);
+      return;
+    }
+    const ref = await refFor(backend, root);
+    const target = await backend.readFileGuarded({ ...ref, relative_path: 'delete-hardlink-alias.txt' });
+    assert.equal(target.ok, true);
+    if (isWinfsError(target)) return;
+    const deleted = await backend.deleteFileGuarded({
+      ...ref,
+      relative_path: 'delete-hardlink-alias.txt',
+      expected_sha256: target.sha256,
+      expected_file_id: target.identity.file_id,
+    });
+    assert.equal(deleted.ok, false);
+    assert.equal((deleted as WinfsError).code, 'LINK_UNSUPPORTED');
+    assert.equal((await readFile(originalPath)).equals(original), true);
+    assert.equal((await readFile(linkPath)).equals(original), true);
+  });
+
   it('列目录并对重解析点子目录做标记', async () => {
     await mkdir(path.join(root, 'listdir', 'inner'), { recursive: true });
     await writeFile(path.join(root, 'listdir', 'x.txt'), 'x\n');

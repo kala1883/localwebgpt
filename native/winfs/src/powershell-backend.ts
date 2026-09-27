@@ -23,6 +23,7 @@ import type {
   WinfsActualState,
   WinfsCapability,
   WinfsCreateResult,
+  WinfsDeleteResult,
   WinfsError,
   WinfsListResult,
   WinfsListRequest,
@@ -409,6 +410,23 @@ export class PowerShellWinfsBackend implements WinfsOps {
       readback_ok: r.readback_ok === true,
       flushed: r.flushed === true,
       bytes_written: Number(r.bytes_written),
+    };
+  }
+
+  async deleteFileGuarded(req: WinfsPathRef & {
+    expected_sha256: string;
+    expected_file_id: string;
+  }): Promise<WinfsDeleteResult | WinfsError> {
+    const r = await this.#call({ op: 'deleteFileGuarded', ...req });
+    if (r.ok !== true) return toError(r);
+    return {
+      ok: true,
+      relative_path: String(r.relative_path),
+      canonical_relative_path: canonicalPath(r.canonical_relative_path),
+      identity_before: normalizeIdentity(r.identity_before),
+      before_sha256: String(r.before_sha256),
+      bytes_deleted: Number(r.bytes_deleted),
+      readback_missing: r.readback_missing === true,
     };
   }
 
