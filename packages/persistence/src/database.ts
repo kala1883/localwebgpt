@@ -14,6 +14,9 @@
  */
 
 import { BridgeError } from '@lwb/contracts';
+import { randomUUID } from 'node:crypto';
+import { existsSync, renameSync, unlinkSync } from 'node:fs';
+import path from 'node:path';
 import Database from 'better-sqlite3';
 
 import { KNOWN_SCHEMA_VERSION, MIGRATIONS, migrationChecksum, type Migration } from './migrations.ts';
@@ -45,6 +48,12 @@ export interface OpenDatabaseResult {
   readonly applied_migrations: readonly number[];
   /** 实测 PRAGMA 生效值，便于审计与排障。 */
   readonly pragmas: Readonly<Record<string, string | number>>;
+}
+
+export interface PreMigrationBackup {
+  readonly file_name: string;
+  readonly from_version: number;
+  readonly to_version: number;
 }
 
 export const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
@@ -109,6 +118,106 @@ function assertAppliedChecksums(applied: readonly AppliedMigrationRow[]): void {
         recorded_checksum: row.checksum,
         computed_checksum: expected,
       });
+    }
+  }
+}
+
+/**
+ * 迁移旧状态库前先生成并验证一个同目录 SQLite 在线备份。
+ *
+ * 该函数只读打开源库；发现未终结写入/恢复操作时拒绝升级，以便操作者先用
+ * 兼容版本完成本地恢复。备份使用 SQLite backup API（而非复制主文件），因此
+ * 也包含 WAL 中已提交的数据。只有 quick_check 与迁移元数据核对通过后，
+ * 才把 `.partial` 文件改名为可识别的备份；任一失败都发生在迁移之前。
+ */
+export async function backupDatabaseBeforeMigration(databasePath: string): Promise<PreMigrationBackup | null> {
+  if (isMemory(databasePath) || !existsSync(databasePath)) return null;
+
+  let source: SqliteDatabase;
+  try {
+    source = new Database(databasePath, { readonly: true, fileMustExist: true });
+  } catch {
+    throw storageError('无法只读检查旧状态库，已拒绝开始模式迁移。');
+  }
+
+  let temporaryPath: string | null = null;
+  try {
+    if (!tableExists(source, 'schema_migrations')) return null;
+
+    const applied = readAppliedMigrations(source);
+    assertAppliedChecksums(applied);
+    const currentVersion = Math.max(0, ...applied.map((row) => row.version));
+    if (currentVersion === 0 || currentVersion >= KNOWN_SCHEMA_VERSION) return null;
+
+    if (tableExists(source, 'operations')) {
+      const pending = source
+        .prepare(
+          `SELECT COUNT(*) AS count FROM operations
+           WHERE state IN ('QUEUED','VALIDATING','APPLYING','RECOVERY_REQUIRED')`,
+        )
+        .get() as { count: number };
+      if (pending.count > 0) {
+        throw storageError(
+          '旧状态库仍有未终结写入或恢复操作；请用兼容版本完成本地恢复后再升级。',
+          { pending_operation_count: pending.count },
+        );
+      }
+    }
+
+    const directory = path.dirname(path.resolve(databasePath));
+    const timestamp = new Date().toISOString().replace(/[-:.]/g, '');
+    const fileName =
+      `${path.basename(databasePath)}.pre-migration-v${String(currentVersion)}-to-v${String(KNOWN_SCHEMA_VERSION)}` +
+      `-${timestamp}-${randomUUID()}.sqlite`;
+    const backupPath = path.join(directory, fileName);
+    temporaryPath = `${backupPath}.partial`;
+    if (existsSync(backupPath) || existsSync(temporaryPath)) {
+      throw storageError('无法为迁移前备份分配唯一文件名；原库未迁移。');
+    }
+
+    await source.backup(temporaryPath);
+    const snapshot = new Database(temporaryPath, { readonly: true, fileMustExist: true });
+    try {
+      if (String(snapshot.pragma('quick_check', { simple: true })) !== 'ok') {
+        throw new Error('SQLite quick_check did not return ok');
+      }
+      const snapshotMigrations = readAppliedMigrations(snapshot);
+      assertAppliedChecksums(snapshotMigrations);
+      const snapshotVersion = Math.max(0, ...snapshotMigrations.map((row) => row.version));
+      if (
+        snapshotVersion !== currentVersion ||
+        snapshotMigrations.length !== applied.length ||
+        snapshotMigrations.some(
+          (row, index) =>
+            row.version !== applied[index]!.version ||
+            row.name !== applied[index]!.name ||
+            row.checksum !== applied[index]!.checksum,
+        )
+      ) {
+        throw new Error('Backup migration metadata does not match the source database');
+      }
+    } finally {
+      snapshot.close();
+    }
+
+    renameSync(temporaryPath, backupPath);
+    temporaryPath = null;
+    return { file_name: fileName, from_version: currentVersion, to_version: KNOWN_SCHEMA_VERSION };
+  } catch (cause) {
+    if (temporaryPath !== null && existsSync(temporaryPath)) {
+      try {
+        unlinkSync(temporaryPath);
+      } catch {
+        // Cleanup failure must not hide the migration refusal or its original cause.
+      }
+    }
+    if (cause instanceof BridgeError) throw cause;
+    throw storageError('迁移前备份未能完成并通过验证；模式迁移已停止。');
+  } finally {
+    try {
+      source.close();
+    } catch {
+      // Keep the more actionable migration/backup result if close itself fails.
     }
   }
 }

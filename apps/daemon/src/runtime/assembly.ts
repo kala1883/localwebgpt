@@ -108,7 +108,7 @@ import { BRIDGE_GATES, capabilityFlagsFrom, capabilityFlagsWith, limitationsOf }
 import type { PlatformGates } from '../gates.ts';
 import { createToolSurface } from '../tools/index.ts';
 import type { ToolSurfaceFacts } from '../tools/index.ts';
-import { closeDatabase, openDatabase, Repositories } from '@lwb/persistence';
+import { backupDatabaseBeforeMigration, closeDatabase, openDatabase, Repositories } from '@lwb/persistence';
 import {
   CredentialStore,
   STORE_SUBDIRECTORIES,
@@ -398,7 +398,14 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
         `IPC 密钥${ipcSecrets.created ? '（本次新建）' : ''}。指纹只用于核对，不作为凭证。`,
     );
 
-    // ---- 8. 状态库 ----
+    // ---- 8. 升级前快照与状态库 ----
+    const migrationBackup = await backupDatabaseBeforeMigration(layout.databaseFile);
+    if (migrationBackup !== null) {
+      log(
+        `状态库将从 schema v${String(migrationBackup.from_version)} 升至 v${String(migrationBackup.to_version)}；` +
+          `已验证迁移前快照 ${migrationBackup.file_name}。`,
+      );
+    }
     const opened = openDatabase({ path: layout.databaseFile });
     stack.push('状态库', () => closeDatabase(opened.db));
     const repos = new Repositories(opened.db);

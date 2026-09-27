@@ -1934,3 +1934,9 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 本地秘密扫描器新增 Slack API token 形状检测。生成目录 `tests/fixtures/generated` 只有在 Git 明确忽略且其中没有已跟踪文件时才跳过；一旦强制跟踪，扫描器仍检查其中内容。
 - 验证：`npm run check:secrets` PASS；秘密扫描与 egress 定向测试 **56/56 PASS**；完整 `npm run check` 主测试 **1762 项 / 1749 PASS / 0 FAIL / 13 SKIP**，控制台 **164/164 PASS**。
 - 修复后的源码快照已通过完整本机检查并以 squash 单提交推送至远端 `main`（`0361cad`）。没有使用 GitHub 放行例外；旧功能分支及其中的历史密钥提交均未推送。若该历史凭据仍有效，账号持有人仍应撤销/轮换，且不要直接推送旧分支。
+
+## 2026-09-27 本轮继续：LWB-040 迁移前数据库快照（PARTIAL）
+
+- daemon 在打开状态库前只读核对旧 schema；schema 低于当前版本时，先拒绝含 `QUEUED` / `VALIDATING` / `APPLYING` / `RECOVERY_REQUIRED` 操作的升级，再用 SQLite backup API 生成快照。
+- 快照先做 `quick_check` 与迁移记录/校验和复核，验证通过后才改为 `.pre-migration-...sqlite` 名称并允许 schema 迁移；备份失败则在迁移前停止。已覆盖 WAL 一致快照、原库字节不变、迁移后数据仍在、快照保留旧 schema、待恢复操作阻断和当前 schema 不重复备份。
+- 定向 SQLite 测试 **3/3 PASS**，类型检查、FsGuard 导入检查、secret scan 通过。自动还原、快照保留/清理 UI、卸载语义和签名安装器仍未完成，LWB-040 继续保持 PARTIAL。

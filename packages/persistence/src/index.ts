@@ -12,12 +12,14 @@
  */
 
 export {
+  backupDatabaseBeforeMigration,
   closeDatabase,
   DEFAULT_BUSY_TIMEOUT_MS,
   openDatabase,
   withImmediateTransaction,
   type OpenDatabaseOptions,
   type OpenDatabaseResult,
+  type PreMigrationBackup,
   type SqliteDatabase,
 } from './database.ts';
 
