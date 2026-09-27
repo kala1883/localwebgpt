@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -86,8 +86,19 @@ describe('database upgrade preflight', () => {
   it('makes a verified SQLite snapshot before migrating an older schema', async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), 'lwb-db-upgrade-'));
     const file = path.join(directory, 'bridge.sqlite');
+    let writerClosed = true;
+    let writer: InstanceType<typeof Database> | null = null;
     try {
       createV1Database(file);
+      writer = new Database(file);
+      writerClosed = false;
+      assert.equal(writer.pragma('journal_mode = WAL', { simple: true }), 'wal');
+      writer.pragma('wal_autocheckpoint = 0');
+      writer
+        .prepare('INSERT INTO audit_events (subject, action, outcome, timestamp) VALUES (?, ?, ?, ?)')
+        .run('upgrade-wal', 'committed-in-wal', 'allow', '2026-01-02T00:00:00.000Z');
+      const walFile = `${file}-wal`;
+      assert.ok(existsSync(walFile) && statSync(walFile).size > 0, 'fixture must contain committed WAL pages');
       const before = readFileSync(file);
 
       const backup = await backupDatabaseBeforeMigration(file);
@@ -97,6 +108,11 @@ describe('database upgrade preflight', () => {
       assert.equal(backup.to_version, KNOWN_SCHEMA_VERSION);
       assert.deepEqual(readFileSync(file), before, 'snapshotting must not mutate the source database');
       assert.deepEqual(readdirSync(directory).filter((name) => name.endsWith('.partial')), []);
+      assert.equal(
+        (writer.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number }).version,
+        1,
+        'source connection remains unmigrated',
+      );
 
       const backupPath = path.join(directory, backup.file_name);
       const snapshot = new Database(backupPath, { readonly: true, fileMustExist: true });
@@ -109,19 +125,26 @@ describe('database upgrade preflight', () => {
         );
         assert.equal(
           (snapshot.prepare('SELECT COUNT(*) AS count FROM audit_events').get() as { count: number }).count,
-          1,
+          2,
           'backup must retain existing user state',
+        );
+        assert.equal(
+          (snapshot.prepare('SELECT COUNT(*) AS count FROM audit_events WHERE subject = ?').get('upgrade-wal') as { count: number }).count,
+          1,
+          'backup must include committed content that was still in the WAL',
         );
       } finally {
         snapshot.close();
       }
 
+      writer.close();
+      writerClosed = true;
       const migrated = openDatabase({ path: file });
       try {
         assert.equal(migrated.schema_version, KNOWN_SCHEMA_VERSION);
         assert.equal(
           (migrated.db.prepare('SELECT COUNT(*) AS count FROM audit_events').get() as { count: number }).count,
-          1,
+          2,
         );
       } finally {
         closeDatabase(migrated.db);
@@ -138,6 +161,7 @@ describe('database upgrade preflight', () => {
         retainedSnapshot.close();
       }
     } finally {
+      if (!writerClosed) writer?.close();
       rmSync(directory, { recursive: true, force: true });
     }
   });
