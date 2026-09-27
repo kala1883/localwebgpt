@@ -70,7 +70,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { approveAndQueue, approveChange } from '@lwb/approvals';
+import { approveAndQueue } from '@lwb/approvals';
 import { operationReceiptFor, isExecutionChangeState } from '@lwb/changes';
 import { BridgeError, TOOLS_BY_NAME } from '@lwb/contracts';
 import type {
@@ -89,7 +89,6 @@ import type { WorkspaceEnvironment } from '@lwb/workspaces';
 import { registerApprovalOperations } from '../../apps/daemon/src/control/index.ts';
 
 import {
-  GATES_OFF,
   GATES_ON,
   ADAPTER_CONNECTION,
   NOW,
@@ -296,16 +295,6 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
    * `CHANGE_STATE_INVALID 修改集已超过有效期`。
    * 两条错法都指向别处，这就是必须用 `harness.now()` 的全部理由。
    */
-  function approve(harness: ToolHarness, prepared: ChangePrepareData): void {
-    approveChange({
-      repos: harness.repos,
-      change_id: prepared.change_id,
-      digest: prepared.digest,
-      actor: 'console:lwb-032-真盘测试',
-      now: new Date(harness.now()).toISOString(),
-    });
-  }
-
   function applyTool(
     harness: ToolHarness,
     change_id: string,
@@ -358,31 +347,64 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
   }
 
   // -------------------------------------------------------------------------
-  // §1 没有本地批准 ⇒ 应用被拒绝，且一个字节都没写
+  // §1 授予目录写权限后可直接应用，无需逐次批准
   // -------------------------------------------------------------------------
 
-  it('§1 未批准的修改集：change_apply 返回 APPROVAL_REQUIRED，盘上指纹不变', async () => {
-    const harness = await rig('no-approval', { files: { 'note.txt': '第一行\n第二行\n第三行\n' } });
+  it('单文件 file_create / file_edit 一次工具调用即直接落盘并返回回执', async () => {
+    const harness = await rig('single-file-tools', { files: { 'note.txt': 'first\nsecond\n' } });
+    const file = absOf(harness, 'note.txt');
+    const read = dataOf<FileReadData>(
+      await callTool(harness, 'file_read', { workspace_id: harness.workspace.id, path: 'note.txt' }, harness.adapterContext()),
+      '编辑前读取',
+    );
+
+    const edited = dataOf<ChangeApplyData>(
+      await callTool(harness, 'file_edit', {
+        workspace_id: harness.workspace.id,
+        idempotency_key: idem('single-edit'),
+        summary: '一次调用直接编辑',
+        path: 'note.txt',
+        base_sha256: read.sha256,
+        read_token: read.read_token,
+        edits: [{ start_line: 2, end_line_exclusive: 3, old_lines: ['second'], new_lines: ['SECOND'] }],
+      }, harness.adapterContext()),
+      'file_edit 直接写入',
+    );
+    assert.equal(edited.state, 'APPLIED');
+    assert.equal((await readFile(file, 'utf8')), 'first\nSECOND\n');
+    assert.equal(edited.files[0]?.after_sha256, sha256(await readFile(file)));
+
+    const created = dataOf<ChangeApplyData>(
+      await callTool(harness, 'file_create', {
+        workspace_id: harness.workspace.id,
+        idempotency_key: idem('single-create'),
+        summary: '一次调用直接创建',
+        path: 'new-note.txt',
+        content: 'created\n',
+        newline: 'lf',
+        bom: false,
+      }, harness.adapterContext()),
+      'file_create 直接写入',
+    );
+    assert.equal(created.state, 'APPLIED');
+    assert.equal((await readFile(absOf(harness, 'new-note.txt'), 'utf8')), 'created\n');
+    assert.equal(created.files[0]?.after_sha256, sha256(await readFile(absOf(harness, 'new-note.txt'))));
+  });
+
+  it('§1 单次 change_apply 会基于目录 grant 写入并留下 grant 来源记录', async () => {
+    const harness = await rig('workspace-grant', { files: { 'note.txt': '第一行\n第二行\n第三行\n' } });
     const file = absOf(harness, 'note.txt');
     const before = await fingerprint(file);
 
     const prepared = await proposeLine(harness, 'note.txt', { line: 2, at: '第二行', to: '改过的第二行' }, idem('s1'));
 
-    const refused = errorOf(await applyTool(harness, prepared.change_id, idem('s1-apply')), '未批准的应用');
-    assert.equal(refused.error.code, 'APPROVAL_REQUIRED', '没有本地批准时只能是 APPROVAL_REQUIRED');
-
-    // 「拒绝」与「拒绝并且什么都没做」是两件事，后者才是本文件要证的。
-    assert.equal(await fingerprint(file), before, '被拒绝的应用不得改动目标文件');
-    assert.equal(
-      operationRows(harness, prepared.change_id),
-      0,
-      '被拒绝的应用不得建立操作行——一次没有批准的执行不该在账上留下痕迹',
-    );
-    assert.equal(
-      harness.repos.changes.findById(prepared.change_id)?.state,
-      'PENDING_APPROVAL',
-      '被拒绝的应用不得推进修改集状态',
-    );
+    const applied = dataOf(await applyTool(harness, prepared.change_id, idem('s1-apply')), '目录授权应用');
+    assert.equal(applied.state, 'APPLIED');
+    assert.notEqual(await fingerprint(file), before, '获授权的目录写权限应使单次应用真实落盘');
+    assert.equal(operationRows(harness, prepared.change_id), 1);
+    const approval = harness.repos.approvals.listForChange(prepared.change_id)[0];
+    assert.equal(approval?.state, 'CONSUMED');
+    assert.equal(approval?.actor, `workspace-grant:${harness.repos.grants.find(ADAPTER_CONNECTION, harness.workspace.id)?.id}`);
   });
 
   it('§1 批准是唯一来源：approved / user_id / principal_id 一律进不来（strict 入参）', async () => {
@@ -421,14 +443,12 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
   // §2 批准之后：真的落盘、真的回执
   // -------------------------------------------------------------------------
 
-  it('§2 批准之后应用：state=APPLIED、tests_run=false，且逐文件哈希与独立回读一致', async () => {
+  it('§2 目录授权后应用：state=APPLIED、tests_run=false，且逐文件哈希与独立回读一致', async () => {
     const harness = await rig('applied', { files: { 'note.txt': 'alpha\nbeta\ngamma\n' } });
     const file = absOf(harness, 'note.txt');
     const beforeBytes = await readFile(file);
 
     const prepared = await proposeLine(harness, 'note.txt', { line: 2, at: 'beta', to: 'BETA' }, idem('s2'));
-    approve(harness, prepared);
-
     const applied = dataOf(await applyTool(harness, prepared.change_id, idem('s2-apply')), '应用');
     assert.equal(applied.state, 'APPLIED', `应用应当成功；实际 ${applied.state}：${applied.message}`);
     assert.equal(applied.in_progress, false, '快速完成的调用不得报 in_progress');
@@ -458,11 +478,11 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     assert.equal(receipt.operation_id, applied.operation_id);
     assert.equal(receipt.files[0]?.after_sha256, applied.files[0]?.after_sha256);
 
-    // 批准是一次性的：用掉之后不再有「活跃的批准」。
-    assert.equal(harness.repos.approvals.findActive(prepared.change_id), null, '批准已被消费');
+    // 执行记录只为串接现有执行状态机；来源标记为 workspace grant，而不是人工审批。
+    assert.equal(harness.repos.approvals.findActive(prepared.change_id), null, '执行授权已被消费');
     const records = harness.repos.approvals.listForChange(prepared.change_id);
-    assert.equal(records.length, 1, '一条修改集上只该有一次本地决定');
-    assert.equal(records[0]?.state, 'CONSUMED', '那次批准的状态是已消费');
+    assert.equal(records.length, 1, '一条修改集上只该有一个执行授权记录');
+    assert.equal(records[0]?.state, 'CONSUMED');
     assert.equal(records[0]?.consumed_by, applied.operation_id, '消费它的是那唯一一条操作');
   });
 
@@ -475,8 +495,6 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     const file = absOf(harness, 'note.txt');
 
     const prepared = await proposeLine(harness, 'note.txt', { line: 1, at: 'one', to: 'ONE' }, idem('s3'));
-    approve(harness, prepared);
-
     const first = dataOf(await applyTool(harness, prepared.change_id, idem('s3-a')), '第一次应用');
     assert.equal(first.state, 'APPLIED');
     const settled = await fingerprint(file);
@@ -496,15 +514,14 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
   });
 
   // -------------------------------------------------------------------------
-  // §4 批准不可跨修改集借用
+  // §4 每个修改集独立落账，不需要复用或转借逐次批准
   // -------------------------------------------------------------------------
 
-  it('§4 上一条修改集的批准不能被下一条借用：新提案仍需自己的批准', async () => {
+  it('§4 同一目录的两份提案都能独立直接应用，且保留各自摘要与回执', async () => {
     const harness = await rig('one-shot', { files: { 'note.txt': 'x\ny\n' } });
     const file = absOf(harness, 'note.txt');
 
     const firstChange = await proposeLine(harness, 'note.txt', { line: 1, at: 'x', to: 'X' }, idem('s4-a'));
-    approve(harness, firstChange);
     assert.equal(dataOf(await applyTool(harness, firstChange.change_id, idem('s4-a-apply')), '第一次').state, 'APPLIED');
 
     // 第二条提案（基于应用**之后**的字节）。
@@ -512,21 +529,9 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     assert.notEqual(secondChange.change_id, firstChange.change_id);
     assert.notEqual(secondChange.digest, firstChange.digest, '两条提案的摘要必然不同');
 
-    const settled = await fingerprint(file);
-    const refused = errorOf(await applyTool(harness, secondChange.change_id, idem('s4-b-apply')), '借用批准');
-    assert.equal(
-      refused.error.code,
-      'APPROVAL_REQUIRED',
-      '第一条的批准已经消费掉了，第二条只能重新等本地批准',
-    );
-    assert.equal(await fingerprint(file), settled, '被拒绝的应用不得改动文件');
-    assert.equal(operationRows(harness, secondChange.change_id), 0, '不得为第二条建立操作行');
-
-    // 补上它自己的批准之后正常落地 —— 否则上面那句「拒绝」可能只是
-    // 「这个装置永远拒绝第二条」，那不是同一条结论。
-    approve(harness, secondChange);
     const applied = dataOf(await applyTool(harness, secondChange.change_id, idem('s4-b-apply2')), '第二条');
     assert.equal(applied.state, 'APPLIED');
+    assert.equal(operationRows(harness, secondChange.change_id), 1);
     assert.equal(applied.files[0]?.after_sha256, sha256(await readFile(file)));
   });
 
@@ -734,7 +739,6 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     const file = absOf(harness, 'slow.txt');
 
     const prepared = await proposeLine(harness, 'slow.txt', { line: 1, at: 'before', to: 'after' }, idem('s6'));
-    approve(harness, prepared);
     const untouched = await fingerprint(file);
 
     const answer = dataOf(await applyTool(harness, prepared.change_id, idem('s6-apply')), '未等到结论的应用');
@@ -778,46 +782,36 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
   });
 
   // -------------------------------------------------------------------------
-  // §7 门禁与暂停：不可用时不许「看起来能用」
+  // §7 目录授权与暂停：不可用时不许「看起来能用」
   // -------------------------------------------------------------------------
 
-  it('§7 门禁关掉之后：已经拿到批准的修改集也写不进去', async () => {
-    // 顺序是这一格的全部：**先开着门禁**把修改集与本地批准准备好，
-    // **再**关门，然后点应用。这样测到的才是「能力开关能拦住一次
-    // 本来会成功的写入」，而不是「门禁关着的时候提案建不出来」。
-    let gates: typeof GATES_ON = GATES_ON;
-    const harness = await rig('gates-off', {
-      files: { 'note.txt': 'g\n' },
-      gates: () => gates,
-    });
+  it('§7 撤销逐目录文件修改 grant 后拒绝写入；恢复 grant 后可继续应用', async () => {
+    const harness = await rig('grant-revoke', { files: { 'note.txt': 'g\n' } });
     const file = absOf(harness, 'note.txt');
 
     const prepared = await proposeLine(harness, 'note.txt', { line: 1, at: 'g', to: 'G' }, idem('s7'));
-    approve(harness, prepared);
     const before = await fingerprint(file);
-
-    gates = GATES_OFF;
-    const refused = errorOf(await applyTool(harness, prepared.change_id, idem('s7-apply')), '门禁关闭时的应用');
-    assert.equal(refused.error.code, 'POLICY_DENIED', `实际：${refused.error.code}`);
+    const grant = harness.repos.grants.find(ADAPTER_CONNECTION, harness.workspace.id);
+    assert.ok(grant !== null, '装置必须有逐目录 grant');
+    harness.repos.grants.put({ ...grant, capabilities: grant.capabilities.filter((item) => item !== 'propose') });
+    const refused = errorOf(await applyTool(harness, prepared.change_id, idem('s7-apply')), '撤销目录写权限后的应用');
+    assert.equal(refused.error.code, 'NOT_AUTHORIZED', `实际：${refused.error.code}`);
     assert.equal(
       refused.error.details?.['policy_reason'],
-      'CAPABILITY_FLAG_DISABLED',
-      '拒绝的原因必须是「该能力开关是关的」，而不是某条路径判定',
+      'CAPABILITY_NOT_GRANTED',
+      '拒绝原因应为目录 grant 缺少文件修改能力',
     );
-    assert.equal(await fingerprint(file), before, '门禁关着时不得写盘');
-    assert.equal(operationRows(harness, prepared.change_id), 0, '门禁关着时不得建立操作行');
+    assert.equal(await fingerprint(file), before, '撤权后不得写盘');
+    assert.equal(operationRows(harness, prepared.change_id), 0, '撤权后不得建立操作行');
 
-    // 反过来：门禁重新打开之后，**同一份批准**仍然有效 —— 因此上面那次
-    // 拒绝是门禁造成的，不是「这个装置永远拒绝这一条」。
-    gates = GATES_ON;
-    const applied = dataOf(await applyTool(harness, prepared.change_id, idem('s7-apply2')), '门禁重开');
+    harness.repos.grants.put(grant);
+    const applied = dataOf(await applyTool(harness, prepared.change_id, idem('s7-apply2')), '恢复目录写权限');
     assert.equal(applied.state, 'APPLIED');
     assert.equal(applied.files[0]?.after_sha256, sha256(await readFile(file)));
   });
 
   it('§7 全局暂停时 change_apply 被拒绝，且不建立操作行', async () => {
-    // 暂停是**可变**的读数：提案与批准必须在它之前发生 —— 一个从开头就
-    // 暂停的装置里根本造不出「已批准、等着被应用」的那一格。
+    // 暂停是**可变**的读数：先准备变更，再暂停，之后的直接写入必须被拦下。
     let paused = false;
     const harness = await rig('paused', {
       files: { 'note.txt': 'p\n' },
@@ -825,7 +819,6 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     });
     const file = absOf(harness, 'note.txt');
     const prepared = await proposeLine(harness, 'note.txt', { line: 1, at: 'p', to: 'P' }, idem('s7'));
-    approve(harness, prepared);
     const before = await fingerprint(file);
 
     paused = true;
@@ -835,11 +828,11 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     assert.equal(operationRows(harness, prepared.change_id), 0, '暂停期间不得建立操作行');
     assert.equal(
       harness.repos.changes.findById(prepared.change_id)?.state,
-      'APPROVED',
-      '暂停只是拦住这次执行，不改变修改集状态',
+      'PENDING_APPROVAL',
+      '暂停只是拦住这次执行，不推进修改集状态',
     );
 
-    // 恢复之后同一条批准仍然能落地 —— 否则上面那句「拦住」可能只是
+    // 恢复之后同一份提案仍然能落地 —— 否则上面那句「拦住」可能只是
     // 「这个装置根本不写盘」。
     paused = false;
     assert.equal(
@@ -867,7 +860,7 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     for (const [label, phrase] of required) {
       assert.ok(description.includes(phrase), `说明里缺少「${label}」（找不到「${phrase}」）`);
     }
-    assert.ok(description.includes('不能') && description.includes('批准'), '说明必须点明本工具不产生批准');
+    assert.ok(description.includes('无需逐次本机批准'), '说明必须明确无需逐次本机批准');
     assert.ok(description.includes('approved'), '说明必须点名 approved 这类参数不被接受');
 
     // 说明里**不能**出现任何「已经保存」的正向承诺句式。
@@ -877,65 +870,27 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
   });
 
   // -------------------------------------------------------------------------
-  // §9 重放走的是**回执面**，不是写面
+  // §9 授权仍有效时重放安全，撤权后新写入被拒
   // -------------------------------------------------------------------------
 
-  it('§9 直写关掉之后：真正的写入仍被拒，而已经应用过的那条仍答得出回执', async () => {
-    // 这一格钉的是一个**刻意的选择**，不是一处顺带的行为：`change_apply`
-    // 在「不可能再写」时按**读面**判定（`change_get` 的那一个动作，
-    // `snapshot_read`），因此直写开关关掉之后重复调用仍然拿得到回执。
-    //
-    // 两半缺一不可：
-    //
-    //  - 少了后半，「直写关掉 ⇒ 应用被拒」看起来仍然成立（§7 已经钉了它），
-    //    但代价是重复调用变成一句关于批准的错误码 —— 那正是本次修复前
-    //    的真实行为；
-    //  - 少了前半，后半就可能只是「这一段根本不判策略」，而回执是内容出站
-    //    （`change_receipt` 在 `EGRESS_SURFACES` 里），它必须判。
-    let gates: typeof GATES_ON = GATES_ON;
-    const harness = await rig('replay-surface', { files: { 'note.txt': 'r\n' }, gates: () => gates });
+  it('§9 grant 有效时重放返回同一回执，撤权后新写入被拒', async () => {
+    const harness = await rig('replay-surface', { files: { 'note.txt': 'r\n' } });
     const file = absOf(harness, 'note.txt');
 
     const done = await proposeLine(harness, 'note.txt', { line: 1, at: 'r', to: 'R' }, idem('s9-a'));
-    approve(harness, done);
     const first = dataOf(await applyTool(harness, done.change_id, idem('s9-a-apply')), '第一次应用');
     assert.equal(first.state, 'APPLIED');
     const settled = await fingerprint(file);
 
-    // G0 与 §3 仍算通过，只有原生护栏那一条翻掉 —— 于是
-    // `direct_write_enabled` 关而 `read_enabled` 开。这正是「回执照答、
-    // 直写不许」所需要的那一组门禁；全关（§7 用的）证明不了这一格，
-    // 因为那时连读面也一起关了。
-    gates = { ...GATES_ON, native_guard_verified: false };
-
-    // 另起一条：它还没有操作行，因此这次调用会走进写面。
+    // 另起一条并在执行前撤销目录写权限。
     const pending = await proposeLine(harness, 'note.txt', { line: 1, at: 'R', to: 'RR' }, idem('s9-b'));
-    approve(harness, pending);
-    const refused = errorOf(await applyTool(harness, pending.change_id, idem('s9-b-apply')), '直写关闭时的应用');
-    assert.equal(refused.error.code, 'POLICY_DENIED', `实际：${refused.error.code}`);
-    assert.equal(
-      refused.error.details?.['policy_reason'],
-      'CAPABILITY_FLAG_DISABLED',
-      '拒的理由必须是那条开关本身，而不是某条路径判定',
-    );
+    const grant = harness.repos.grants.find(ADAPTER_CONNECTION, harness.workspace.id);
+    assert.ok(grant !== null);
+    harness.repos.grants.put({ ...grant, capabilities: grant.capabilities.filter((item) => item !== 'propose') });
+    const refused = errorOf(await applyTool(harness, pending.change_id, idem('s9-b-apply')), '撤权后的应用');
+    assert.equal(refused.error.code, 'NOT_AUTHORIZED', `实际：${refused.error.code}`);
+    assert.equal(refused.error.details?.['policy_reason'], 'CAPABILITY_NOT_GRANTED');
     assert.equal(operationRows(harness, pending.change_id), 0, '被拒的应用不得建立操作行');
-
-    // 已经应用过的那一条：同一次调用、同一组门禁，答的是**回执**。
-    const replayed = dataOf(await applyTool(harness, done.change_id, idem('s9-a-again')), '直写关闭时重放');
-    assert.equal(replayed.state, 'APPLIED');
-    assert.equal(replayed.operation_id, first.operation_id, '重放仍然只能是那一条操作');
-    assert.equal(replayed.files[0]?.after_sha256, sha256(await readFile(file)));
-    assert.equal(await fingerprint(file), settled, '重放不得再写一次');
-    assert.equal(operationRows(harness, done.change_id), 1, 'operations 表上仍然只有一行');
-
-    // 而**读取**关掉之后这条路径也要关上：回执是内容出站，
-    // 不能因为「反正这次没写」就变成绕开读取开关的口子。
-    gates = GATES_OFF;
-    const blinded = errorOf(await applyTool(harness, done.change_id, idem('s9-a-blind')), '读取关闭时重放');
-    assert.equal(
-      blinded.error.code,
-      'POLICY_DENIED',
-      `读取能力关掉之后重放也必须被拒；实际 ${blinded.error.code}`,
-    );
+    assert.equal(await fingerprint(file), settled, '撤权后不得更改文件');
   });
 });

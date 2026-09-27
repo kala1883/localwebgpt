@@ -76,7 +76,11 @@ $docsRoot = Join-Path $outputRoot 'docs'
 New-Item -ItemType Directory -Path $docsRoot -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\chatgpt-tunnel-acceptance.md') -Destination $docsRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\install-and-upgrade.md') -Destination $docsRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\operator-runbook.md') -Destination $docsRoot
+New-Item -ItemType Directory -Path (Join-Path $docsRoot 'release') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\release\V1-acceptance.md') -Destination (Join-Path $docsRoot 'release')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'packaging\windows\Start-LocalWebGPT.ps1') -Destination $outputRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot 'packaging\windows\Stop-LocalWebGPT.ps1') -Destination $outputRoot
 
 $vendorVersionRoot = Join-Path $outputRoot ".lwb-local\tunnel-client\$tunnelVersion"
 $vendorBin = Join-Path $vendorVersionRoot 'bin'
@@ -133,6 +137,20 @@ try {
 
   node -e "const Database=require('better-sqlite3'); const db=new Database(':memory:'); const row=db.prepare('select sqlite_version() as version').get(); if(!row.version) process.exit(2); console.log('better-sqlite3 native smoke: PASS'); db.close();"
   if ($LASTEXITCODE -ne 0) { throw 'better-sqlite3 native module smoke test failed in the output directory.' }
+
+  $tunnelClientHash = (Get-FileHash -LiteralPath (Join-Path $vendorBin 'tunnel-client.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+  $cloudflaredHash = (Get-FileHash -LiteralPath (Join-Path $vendorBin 'cloudflared.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+  $releaseEvidence = Join-Path $outputRoot 'docs\release'
+  npm run release:evidence -- `
+    "--source-root=$repoRoot" `
+    "--runtime-root=$outputRoot" `
+    "--output-dir=$releaseEvidence" `
+    "--tunnel-client-version=$tunnelVersion" `
+    "--tunnel-archive-sha256=$expectedHash" `
+    "--tunnel-client-sha256=$tunnelClientHash" `
+    "--cloudflared-sha256=$cloudflaredHash" `
+    "--sqlite-prebuild-sha256=$sourceSqliteHash"
+  if ($LASTEXITCODE -ne 0) { throw 'SBOM/build-record generation failed in the runtime output directory.' }
 } finally {
   Pop-Location
 }

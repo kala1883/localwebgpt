@@ -42,6 +42,7 @@ export type ApprovalBlockedReason =
   | 'NO_SESSION'
   | 'SESSION_EXPIRED'
   | 'NO_CHANGE'
+  | 'NOT_REQUIRED'
   | 'WRONG_STATE'
   | 'EXPIRED'
   | 'DIGEST_MISSING'
@@ -165,6 +166,12 @@ export function approvalAffordance(input: ApprovalGateInput): ApprovalAffordance
   const change = input.change;
   if (change === null) {
     return blocked('NO_CHANGE', '没有待审批的修改集。');
+  }
+  if (!change.approval_required) {
+    return blocked('NOT_REQUIRED', '该工作区的文件修改权限已在本地设置，无需逐次批准；获授时可由模型调用 change_apply。');
+  }
+  if (!change.approval_required) {
+    return blocked('NOT_REQUIRED', '文件修改权限由本地工作区 grant 授予；ChatGPT 可调用 change_apply 执行，无需逐次批准。');
   }
 
   // 3. 状态。终态（已批准 / 已拒绝 / 已过期）一律不给动作 ——

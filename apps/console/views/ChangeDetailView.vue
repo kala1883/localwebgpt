@@ -565,7 +565,7 @@ function sortedRisks(): readonly { readonly level: string; readonly code: string
             批准并应用
           </button>
         </div>
-        <p v-if="!affordance.can_approve" data-testid="blocked-reason">
+        <p v-if="!affordance.can_approve && affordance.blocked_reason !== 'NOT_REQUIRED'" data-testid="blocked-reason">
           批准入口不可用（{{ affordance.blocked_reason }}）。
         </p>
         <p v-else data-testid="not-written-hint">

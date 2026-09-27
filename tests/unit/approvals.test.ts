@@ -550,25 +550,15 @@ describe('LWB-021 C 门禁：只判定，不消费', () => {
     assert.equal(stateOf(change.change_id), 'PENDING_APPROVAL');
   });
 
-  it('C2 与 `@lwb/policy` 的 approvalFailures 逐状态给出同一个答案', () => {
-    // 同一个事实在两处被判定：策略引擎（对一次工具调用整体裁定）与门禁
-    // （写入前的最后一道）。两处给出不同答案的组合是「策略说可以、门禁说
-    // 不行」，而排障的人此时不知道该信哪一个。
-    //
-    // 因此这里不是抽查一种情形，而是把**批准能出现的每一种状态**各跑一遍。
-    // 授权侧的 `presented_digest` 与到期时刻都由**同一次落库事实**推出，
-    // 两处引擎各自独立判定，谁也不读对方的结论。
-    //
-    // 有一处刻意不覆盖：**批准摘要与修改集摘要不符**。它今天不可能存在
-    // —— `approvals_binding_matches_change` 拒绝插入，内容触发器拒绝改写，
-    // 而 `changesets` 不可变。也就是说门禁里那条 `APPROVAL_DIGEST_MISMATCH`
-    // 分支是一条**防御性分支**，无法用合法路径造出夹具；为它去改库结构
-    // 会让这组用例的结论依赖于一次对被测系统的破坏。
+  it('C2 policy does not add per-change approval after a workspace grant', () => {
+    // Exercise legacy approval record states: none of them is a policy permission.
+    // The execution package still validates its internal one-time record when
+    // claiming an operation; the user-facing authority is the workspace grant.
     const scenarios: readonly {
       readonly name: string;
       /** 判定时刻。省略即 `T0`。 */
       readonly now?: string;
-      /** 造出该场景在库里的状态，返回策略层应当看到的批准视图。 */
+      /** 造出一个历史/内部执行记录视图。 */
       readonly arrange: (changeId: string, digest: string) => PolicyApprovalView | null;
     }[] = [
       {
@@ -621,30 +611,10 @@ describe('LWB-021 C 门禁：只判定，不消费', () => {
       const now = scenario.now ?? T0;
       const policyView = scenario.arrange(change.change_id, change.digest);
 
-      const verdict = evaluateApplyGate({
-        repos,
-        change_id: change.change_id,
-        allowed_from: APPLY_ENTRY_STATES,
-        now,
-      });
       const decision = decide(policyRequestFor(policyView, Date.parse(now)));
-      const approvalFailure = decision.failures.find((failure) => failure.check === 'approval');
-
-      // 策略层在这组装置下**只有**批准这一层会失败：否则下面的比对
-      // 就不是「同一件事在两处的答案」，而是两件不同的事。
-      assert.deepEqual(
-        decision.failures.map((failure) => failure.check),
-        approvalFailure === undefined ? [] : ['approval'],
-        `${scenario.name}：除批准外不应有其他层失败`,
-      );
-
-      if (verdict.kind === 'ready') {
-        assert.equal(approvalFailure, undefined, `${scenario.name}：门禁放行时策略层也应当放行`);
-        continue;
-      }
-      assert.ok(approvalFailure, `${scenario.name}：门禁拒绝时策略层也应当拒绝`);
-      assert.equal(approvalFailure.reason, verdict.reason, `${scenario.name}：主因应当一致`);
-      assert.equal(approvalFailure.error_code, verdict.code, `${scenario.name}：错误码应当一致`);
+      assert.equal(decision.allow, true, `${scenario.name}: a workspace grant is the policy authorization`);
+      assert.deepEqual(decision.failures, []);
+      assert.deepEqual(decision.checks.map((check) => check.check), ['connection', 'workspace', 'generation', 'file_rules']);
     }
   });
 

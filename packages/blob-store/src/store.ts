@@ -22,7 +22,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 
@@ -73,6 +73,21 @@ export class BlobGcRefusedError extends Error {
   }
 }
 
+/** The configured physical snapshot-store quota would be exceeded. */
+export class BlobQuotaExceededError extends Error {
+  readonly used_bytes: number;
+  readonly limit_bytes: number;
+  readonly incoming_bytes: number;
+
+  constructor(usedBytes: number, limitBytes: number, incomingBytes: number) {
+    super(`快照存储配额不足：当前 ${usedBytes} 字节，新增需要 ${incomingBytes} 字节，上限 ${limitBytes} 字节。`);
+    this.name = 'BlobQuotaExceededError';
+    this.used_bytes = usedBytes;
+    this.limit_bytes = limitBytes;
+    this.incoming_bytes = incomingBytes;
+  }
+}
+
 /** 写入结果。`deduplicated` 表示内容已存在、本次没有产生新字节。 */
 export interface PutResult {
   readonly sha256: string;
@@ -110,6 +125,7 @@ export interface BlobRegistry {
     readonly storage_ref: string;
   }): { readonly kind: 'created' | 'existing'; readonly blob: RegistryBlob };
   findByContent(sha256: string, size: number): RegistryBlob | null;
+  releaseRef(id: string): void;
   listPendingGc(): readonly RegistryBlob[];
   markDeleted(id: string): void;
   markVerified(id: string): void;
@@ -131,6 +147,8 @@ export interface BlobStoreOptions {
   readonly tempRoot?: string;
   /** 提供后才可执行回收：没有仓储就无法知道引用计数。 */
   readonly registry?: BlobRegistry;
+  /** Hard cap for physical object bytes; omitted only by isolated legacy/test stores. */
+  readonly maxBytes?: number;
   /** 注入 id 生成器，便于测试固定值。 */
   readonly newId?: () => string;
 }
@@ -147,12 +165,19 @@ export class BlobStore {
   readonly #tempRoot: string;
   readonly #registry: BlobRegistry | undefined;
   readonly #newId: () => string;
+  readonly #maxBytes: number | undefined;
+  #usedBytes: number | null = null;
+  #quotaQueue: Promise<void> = Promise.resolve();
 
   constructor(options: BlobStoreOptions) {
     this.#objectsRoot = path.resolve(options.objectsRoot);
     this.#tempRoot = options.tempRoot ?? tempRootOf(this.#objectsRoot);
     this.#registry = options.registry;
     this.#newId = options.newId ?? (() => `blb_${randomBytes(12).toString('hex')}`);
+    if (options.maxBytes !== undefined && (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1)) {
+      throw new BlobLayoutError('快照存储配额必须是正的安全整数。');
+    }
+    this.#maxBytes = options.maxBytes;
   }
 
   get objectsRoot(): string {
@@ -164,14 +189,97 @@ export class BlobStore {
     await mkdir(this.#tempRoot, { recursive: true });
   }
 
+  async #withQuotaLock<T>(work: () => Promise<T>): Promise<T> {
+    if (this.#maxBytes === undefined) return await work();
+    const previous = this.#quotaQueue;
+    let release!: () => void;
+    this.#quotaQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  }
+
+  async #measureObjectBytes(directory = this.#objectsRoot): Promise<number> {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+      throw cause;
+    }
+
+    let total = 0;
+    for (const entry of entries) {
+      const target = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new BlobLayoutError('快照对象目录中出现链接，无法安全核算存储配额。');
+      }
+      if (entry.isDirectory()) {
+        total += await this.#measureObjectBytes(target);
+      } else if (entry.isFile()) {
+        const info = await lstat(target);
+        if (!info.isFile() || info.isSymbolicLink()) {
+          throw new BlobLayoutError('快照对象目录中出现非普通文件，无法安全核算存储配额。');
+        }
+        total += info.size;
+      } else {
+        throw new BlobLayoutError('快照对象目录中出现未知对象，无法安全核算存储配额。');
+      }
+      if (!Number.isSafeInteger(total)) {
+        throw new BlobLayoutError('快照存储占用超出安全计数范围。');
+      }
+    }
+    return total;
+  }
+
+  async #ensureUsedBytes(): Promise<number> {
+    if (this.#usedBytes === null) this.#usedBytes = await this.#measureObjectBytes();
+    return this.#usedBytes;
+  }
+
+  async #assertBatchFits(items: readonly { readonly bytes: Buffer; readonly expectedSha256?: string }[]): Promise<void> {
+    if (this.#maxBytes === undefined) return;
+    const used = await this.#ensureUsedBytes();
+    const incomingByDigest = new Map<string, number>();
+    for (const item of items) {
+      const digest = sha256Of(item.bytes);
+      if (item.expectedSha256 !== undefined) {
+        const expected = item.expectedSha256.toLowerCase();
+        if (!isSha256Hex(expected)) throw new BlobLayoutError(`调用方给出的期望哈希不合法：${item.expectedSha256}`);
+        if (expected !== digest) {
+          throw new BlobIntegrityError('待写入字节与调用方声明的哈希不符，拒绝落盘。', {
+            storage_ref: storageRefOf(digest),
+            expected_sha256: expected,
+            actual_sha256: digest,
+          });
+        }
+      }
+      if (!existsSync(objectPath(this.#objectsRoot, digest))) incomingByDigest.set(digest, item.bytes.length);
+    }
+    const incoming = [...incomingByDigest.values()].reduce((sum, size) => sum + size, 0);
+    if (!Number.isSafeInteger(incoming) || used + incoming > this.#maxBytes) {
+      throw new BlobQuotaExceededError(used, this.#maxBytes, incoming);
+    }
+  }
+
   /**
    * 写入字节并返回其内容引用。**不**触碰数据库。
    *
-   * @param expectedSha256 调用方已知的哈希（例如 `base_hash`）。
+  * @param expectedSha256 调用方已知的哈希（例如 `base_hash`）。
    *   提供时会在写盘**之前**校验：不符说明调用方拿错了字节，
    *   此时写进去只会把错误的字节永久固化。
-   */
+  */
   async put(bytes: Buffer, options: { readonly expectedSha256?: string } = {}): Promise<PutResult> {
+    return await this.#withQuotaLock(async () => {
+      await this.#assertBatchFits([{ bytes, expectedSha256: options.expectedSha256 }]);
+      return await this.#putUnlocked(bytes, options);
+    });
+  }
+
+  async #putUnlocked(bytes: Buffer, options: { readonly expectedSha256?: string } = {}): Promise<PutResult> {
     const digest = sha256Of(bytes);
 
     if (options.expectedSha256 !== undefined) {
@@ -227,6 +335,7 @@ export class BlobStore {
     }
 
     const directorySynced = await this.#syncDirectory(path.dirname(target));
+    if (this.#maxBytes !== undefined) this.#usedBytes = (this.#usedBytes ?? 0) + bytes.length;
 
     return {
       sha256: digest,
@@ -308,28 +417,60 @@ export class BlobStore {
     bytes: Buffer,
     options: { readonly expectedSha256?: string; readonly id?: string } = {},
   ): Promise<{ readonly id: string; readonly put: PutResult }> {
+    const [result] = await this.putAndRegisterBatch([{ bytes, ...options }]);
+    if (!result) throw new BlobLayoutError('快照批次没有返回登记结果。');
+    return result;
+  }
+
+  /**
+   * Reserve capacity for the entire snapshot batch before writing any object,
+   * then persist/register/verify in order under one quota lock.
+   */
+  async putAndRegisterBatch(
+    items: readonly { readonly bytes: Buffer; readonly expectedSha256?: string; readonly id?: string }[],
+  ): Promise<readonly { readonly id: string; readonly put: PutResult }[]> {
     const registry = this.#requireRegistry();
-
-    // 1) 落盘并 fsync —— 在这一步返回之前，数据库里不会有任何指向它的记录。
-    const put = await this.put(bytes, { expectedSha256: options.expectedSha256 });
-
-    // 2) 登记并占用一个引用。
-    const outcome = registry.ensure({
-      id: options.id ?? this.#newId(),
-      sha256: put.sha256,
-      size: put.size,
-      storage_ref: put.storage_ref,
+    if (items.length === 0) return [];
+    return await this.#withQuotaLock(async () => {
+      await this.#assertBatchFits(items);
+      const registeredIds: string[] = [];
+      const results: { id: string; put: PutResult }[] = [];
+      try {
+        for (const item of items) {
+          // 1) 落盘并 fsync；数据库引用晚于对象字节。
+          const put = await this.#putUnlocked(item.bytes, { expectedSha256: item.expectedSha256 });
+          // 2) 登记并占用一个引用。
+          const outcome = registry.ensure({
+            id: item.id ?? this.#newId(),
+            sha256: put.sha256,
+            size: put.size,
+            storage_ref: put.storage_ref,
+          });
+          registeredIds.push(outcome.blob.id);
+          // 3) 回读校验 before marking this snapshot usable by a proposal.
+          await this.getVerified({
+            sha256: outcome.blob.sha256,
+            size: outcome.blob.size,
+            storage_ref: outcome.blob.storage_ref,
+          });
+          results.push({ id: outcome.blob.id, put });
+        }
+        return results;
+      } catch (cause) {
+        const cleanupErrors: unknown[] = [];
+        for (const id of registeredIds.reverse()) {
+          try {
+            registry.releaseRef(id);
+          } catch (cleanupError) {
+            cleanupErrors.push(cleanupError);
+          }
+        }
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError([cause, ...cleanupErrors], '快照批次失败，且部分引用回收失败。');
+        }
+        throw cause;
+      }
     });
-
-    // 3) 登记后立刻回读校验：把「登记了却取不到字节」这类不一致
-    //    挡在修改集进入可执行状态之前，而不是等到应用时才发现。
-    await this.getVerified({
-      sha256: outcome.blob.sha256,
-      size: outcome.blob.size,
-      storage_ref: outcome.blob.storage_ref,
-    });
-
-    return { id: outcome.blob.id, put };
   }
 
   /**
@@ -363,6 +504,14 @@ export class BlobStore {
      * 逐对象的额外保留判据。返回一个**原因**表示保留，返回 `null` 表示
      * 本判据不保护它（其余三个条件仍然适用）。
      */
+    readonly protect?: (blob: RegistryBlob) => string | null;
+  }): Promise<GcReport> {
+    return await this.#withQuotaLock(() => this.#collectGarbageUnlocked(options));
+  }
+
+  async #collectGarbageUnlocked(options: {
+    readonly isSafeToCollect: () => boolean | Promise<boolean>;
+    readonly unsafeReason?: string;
     readonly protect?: (blob: RegistryBlob) => string | null;
   }): Promise<GcReport> {
     const registry = this.#registry;
@@ -416,6 +565,7 @@ export class BlobStore {
       // 先删字节，后改状态：顺序反了会留下「标记已删除但字节还在」的孤儿，
       // 而孤儿不会被任何后续 GC 认领。
       await rm(target, { force: true });
+      if (this.#usedBytes !== null) this.#usedBytes = Math.max(0, this.#usedBytes - blob.size);
       registry.markDeleted(blob.id);
       collected.push({ id: blob.id, sha256: blob.sha256 });
     }

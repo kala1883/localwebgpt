@@ -28,9 +28,11 @@ npm run chatgpt:local
 
 启动器会先构建本地控制台，再启动 daemon；随后用同一组参数执行 `tunnel-client doctor`，通过后以前台方式启动隧道。若隧道子进程意外退出，启动器在原 daemon 内按 1、2、5、10、30、60 秒（封顶）退避，再运行 doctor；doctor 通过才重新启动隧道，doctor 失败则停止并要求操作者处理，避免凭据错误时无限空转。恢复过程中不会重建 daemon 或写执行器。runtime key 只在 tunnel-client 所需的环境里；它启动 MCP 子进程时，薄启动入口会先移除 runtime key、`OPENAI_API_KEY` 和 tunnel ID，再加载适配器。daemon 只向 tunnel-client 提供 MCP adapter 专属 IPC 凭据，不提供控制台 audience 凭据；秘密不进入命令行、配置文件或启动日志。Ctrl+C 用于结束前台隧道与本地服务。
 
-daemon 启动后，从一次性本地控制台链接进入 **ChatGPT 连接** 页，选中“我确认……”并点击“在本机启用 ChatGPT 连接”；这一步只启用模型侧连接，不创建工作区授权，也不打开读取/写入门禁。
+也可从另一个 PowerShell 窗口请求停止 LocalWebGPT：源码目录运行 `.\packaging\windows\Stop-LocalWebGPT.ps1`，打包 runtime 根目录运行 `.\Stop-LocalWebGPT.ps1`。命令向本机控制管道发送固定停止请求，不按进程名或 PID 终止；服务会拒绝新操作、等在途处理器结束后关闭。若恰好在工具调用中停止，ChatGPT 可能收不到该次回执；重连后用 `change_get` 核对状态，不能盲目重复应用。Windows 下 Node 会强制终止本启动器自己创建的 tunnel-client 子进程，daemon 仍会等待已进入的操作结束后再关闭状态库。
 
-**顺序不能交换：先本机启用，再在 ChatGPT 点 Create。** ChatGPT 创建 MCP App 时会立即请求 `tools/list`；本项目把工具目录也放在连接启用守卫之后。新装默认停用时，ChatGPT 会收到 `CONNECTION_DISABLED` 并创建失败。这里不绕过守卫，是因为停用连接连本机能力目录也不应读取。启用后，ChatGPT 可发现受门禁筛选的工具；实际工作区操作仍须独立通过 G0、能力门禁和逐工作区授权。
+daemon 启动后，从一次性本地控制台链接进入 **ChatGPT 连接** 页，选中“我确认……”并点击“在本机启用 ChatGPT 连接”；这一步只启用模型侧连接，不创建工作区授权。
+
+**顺序不能交换：先本机启用，再在 ChatGPT 点 Create。** ChatGPT 创建 MCP App 时会立即请求 `tools/list`；本项目把工具目录也放在连接启用守卫之后。新装默认停用时，ChatGPT 会收到 `CONNECTION_DISABLED` 并创建失败。启用后，ChatGPT 可发现工具；实际工作区操作仍须获得本地逐工作区授权。
 
 如果检查失败，先按 `doctor` 诊断处理，不要继续在 ChatGPT 侧创建应用。进程重启或更换 PowerShell 会话后，重新设置环境变量。结束后可清除当前会话变量：
 
@@ -42,7 +44,7 @@ Remove-Item Env:CONTROL_PLANE_API_KEY, Env:CONTROL_PLANE_TUNNEL_ID -ErrorAction 
 
 先在本机控制台完成连接确认，并等待上一阶段的 `tunnel-client` doctor 通过、隧道处于运行状态。然后在 ChatGPT 开启 Developer mode，进入 Plugins，点加号新建开发者模式应用；Connection 选择 **Tunnel**，选中刚创建的隧道（或输入其 `tunnel_id`）。本项目没有 OAuth 授权服务器，因此 Authentication 选 **No authentication / None**；Tunnel runtime key 只给本地 `tunnel-client`，不要填进 OAuth 设置。创建后核对发现的工具。新开对话，从工具菜单添加该应用，再发起工具调用。若隧道列表为空，先检查它是否关联到目标 ChatGPT 工作区以及创建者是否有 Tunnels Read + Use。
 
-传输连通只证明 ChatGPT 能到达 MCP 服务，不等于有工作区读写权限。当前版本的 G0/能力开关仍关闭；真实工作区读写验收必须等安全门禁通过，并只对专用测试目录执行“读取 → 本地人工批准 → 回读”。模型拿到的具体工具结果会发送到 ChatGPT；工作区本身不会被整体上传。
+传输连通只证明 ChatGPT 能到达 MCP 服务，不等于有工作区读写权限。在本地控制台为专用测试目录授予读取和“文件修改”工具后，验证“读取 → 单文件创建/编辑 → 回读”。获授目录中的写操作不再逐次等待批准，但仍检查路径、冲突、快照、审计和受保护执行器。模型拿到的具体工具结果会发送到 ChatGPT；工作区本身不会被整体上传。
 
 ## B. 本机恢复快照导出（与 ChatGPT 无关）
 

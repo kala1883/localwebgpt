@@ -148,6 +148,28 @@ export interface ChangePrepareInput {
   readonly items: readonly ChangeItem[];
 }
 
+/** 单文件专用 MCP 入口；处理时规范化为同一份 `change_prepare` 提案。 */
+export interface FileCreateInput {
+  readonly workspace_id: string;
+  readonly idempotency_key: string;
+  readonly summary: string;
+  readonly path: string;
+  readonly content: string;
+  readonly newline: WritableNewlineStyle;
+  readonly bom: boolean;
+}
+
+/** 单文件专用 MCP 入口；必须使用新鲜 `file_read` 返回的哈希和读取票据。 */
+export interface FileEditInput {
+  readonly workspace_id: string;
+  readonly idempotency_key: string;
+  readonly summary: string;
+  readonly path: string;
+  readonly base_sha256: string;
+  readonly read_token: string;
+  readonly edits: readonly LineEdit[];
+}
+
 // ---------------------------------------------------------------------------
 // 修改集视图
 // ---------------------------------------------------------------------------
@@ -392,7 +414,7 @@ export function isTerminalChangeState(state: ChangeSetState): boolean {
 }
 
 export const CHANGE_STATE_LABELS: Readonly<Record<ChangeSetState, string>> = {
-  PENDING_APPROVAL: '待批准',
+  PENDING_APPROVAL: '待执行',
   REJECTED: '已拒绝',
   EXPIRED: '已过期',
   INVALIDATED: '已失效',

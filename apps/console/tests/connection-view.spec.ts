@@ -44,7 +44,7 @@ describe('ConnectionView', () => {
 
     const enable = wrapper.find(`[data-testid="enable-${CONNECTION_ID}"]`);
     assert.equal(enable.attributes('disabled'), '');
-    assert.match(wrapper.find('[data-testid="connection-safety-note"]').text(), /没有工作区授权|门禁仍关闭/);
+    assert.match(wrapper.find('[data-testid="connection-safety-note"]').text(), /工作区.*登记要访问的目录.*文件修改工具/);
     assert.equal(setup.authorizeMutation.mock.calls.length, 0);
 
     await wrapper.find('[data-testid="connection-confirm"] input').setValue(true);

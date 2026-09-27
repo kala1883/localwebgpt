@@ -202,6 +202,8 @@ export const FILE_ACCESS_EXTRACTORS = {
    * 不是行号区间。把计数写进 `start_line` 那种字段是编造。
    */
   change_prepare: (data) => changeFilePathsOf(data, 'change_prepare'),
+  file_create: (data) => changeFilePathsOf(data, 'file_create'),
+  file_edit: (data) => changeFilePathsOf(data, 'file_edit'),
 
   /**
    * `change_get` 的结果里，路径**与（请求了 `path` 时）该文件的完整差异**
@@ -230,7 +232,7 @@ export const FILE_ACCESS_EXTRACTORS = {
 } satisfies Readonly<Record<ImplementedToolName, FileAccessExtractor>>;
 
 /**
- * `change_prepare` / `change_get` / `change_apply` 共用的路径提取。
+ * `change_prepare` / `file_create` / `file_edit` / `change_get` / `change_apply` 共用的路径提取。
  *
  * 三者回的都是「一份修改集的逐文件清单」，其中两处是 `ChangeSetView`
  * （`change_get` 把它套在 `change` 下），`change_apply` 是操作回执

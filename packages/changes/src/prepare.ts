@@ -69,6 +69,7 @@ import {
   type FileEncoding,
   type NewlineStyle,
 } from '@lwb/contracts';
+import { BlobQuotaExceededError } from '@lwb/blob-store';
 import type { BlobStore } from '@lwb/blob-store';
 import {
   inspectBytes,
@@ -647,14 +648,11 @@ export function filePreviewsOf(items: readonly ChangeItemRecord[], sizeOfBlob: (
 }
 
 /**
- * 面向模型与用户的下一步提示。
- *
- * 这句话是**固定文案**，不是模型生成的：它描述的是一条不可协商的流程
- * （写入必须由本地操作者批准），因此不能由不受信的一方来措辞。
+ * 面向模型与用户的下一步提示。目录级文件修改 grant 已包含持续写入授权。
  */
 export const NEXT_ACTION_PENDING_APPROVAL =
-  '修改集已建立，**尚未写入任何文件**。请把完整差异交给本地操作者，在控制台核对后批准；' +
-  '批准必须由本地操作者完成，模型与 MCP 通道都无法批准。批准前可以继续读取以核对内容。';
+  '修改集已建立，**尚未写入任何文件**。若该工作区已授予文件修改权限，请调用 change_apply 执行；' +
+  '若未授权，需由本地操作者在工作区设置中授予。只有执行回执为 APPLIED 才能说已保存。';
 
 export function changeSetViewOf(
   change: ChangeSetRecord,
@@ -665,10 +663,8 @@ export function changeSetViewOf(
     change_id: change.id,
     workspace_id: change.workspace_id,
     state: change.state,
-    // V1 恒为 true：修改集建立时的状态由仓储写死为 PENDING_APPROVAL，
-    // 而直写开关（direct_write_enabled）在 G2/G3 通过之前保持关闭。
-    // 因此这里不是「读了一个开关」，而是陈述当前这条路径的唯一事实。
-    approval_required: true,
+    // PENDING_APPROVAL 是持久化状态机的待执行起点；它不代表还需逐次人工批准。
+    approval_required: false,
     digest: change.digest,
     short_code: shortCodeOf(change.digest),
     summary: change.summary,
@@ -831,16 +827,47 @@ export async function prepareChange(
     // 两处 `expectedSha256` 都是白拿的一致性检查：新字节的哈希由引擎从
     // 实际字节算出，旧字节的哈希由护栏从实际字节算出。传进去，就多一道
     // 「算出来的哈希与落盘的内容对得上」的确认。
-    const files: PreparedFileWithBlobs[] = [];
+    const snapshotInputs: { readonly bytes: Buffer; readonly expectedSha256?: string }[] = [];
     for (const file of prepared) {
-      const oldBlobId =
-        file.old_bytes === null
-          ? null
-          : (await deps.blobs.putAndRegister(file.old_bytes, { expectedSha256: file.base_sha256 ?? undefined })).id;
-      const newBlobId = (
-        await deps.blobs.putAndRegister(file.new_bytes, { expectedSha256: file.target_sha256 })
-      ).id;
-      files.push({ ...file, old_blob_id: oldBlobId, new_blob_id: newBlobId });
+      if (file.old_bytes !== null) {
+        snapshotInputs.push({ bytes: file.old_bytes, expectedSha256: file.base_sha256 ?? undefined });
+      }
+      snapshotInputs.push({ bytes: file.new_bytes, expectedSha256: file.target_sha256 });
+    }
+
+    let snapshotRefs: Awaited<ReturnType<BlobStore['putAndRegisterBatch']>>;
+    try {
+      // The store reserves quota for the complete batch before persisting the
+      // first snapshot, so an over-limit proposal leaves no partial snapshot refs.
+      snapshotRefs = await deps.blobs.putAndRegisterBatch(snapshotInputs);
+    } catch (cause) {
+      if (cause instanceof BlobQuotaExceededError) {
+        throw new BridgeError(
+          'STORAGE_UNAVAILABLE',
+          '本机快照存储已达到配置上限；提案未建立，工作区文件未写入。',
+          {
+            reason: 'SNAPSHOT_QUOTA_EXCEEDED',
+            used_bytes: cause.used_bytes,
+            limit_bytes: cause.limit_bytes,
+            incoming_bytes: cause.incoming_bytes,
+          },
+        );
+      }
+      throw cause;
+    }
+
+    const files: PreparedFileWithBlobs[] = [];
+    let snapshotIndex = 0;
+    for (const file of prepared) {
+      let oldBlobId: string | null = null;
+      if (file.old_bytes !== null) {
+        const oldBlob = snapshotRefs[snapshotIndex++];
+        if (oldBlob === undefined) throw new BridgeError('INTERNAL_ERROR', '快照批次缺少旧版本对象。');
+        oldBlobId = oldBlob.id;
+      }
+      const newBlob = snapshotRefs[snapshotIndex++];
+      if (newBlob === undefined) throw new BridgeError('INTERNAL_ERROR', '快照批次返回的对象数量不一致。');
+      files.push({ ...file, old_blob_id: oldBlobId, new_blob_id: newBlob.id });
     }
 
     const changeId = `chg_${newId()}`;

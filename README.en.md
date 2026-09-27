@@ -2,7 +2,7 @@
 
 LocalWebGPT is a Windows-local MCP bridge. ChatGPT on the web calls local tools through OpenAI Secure MCP Tunnel. The operator explicitly registers each local directory or file and chooses the tools allowed for that root in the local console. It does not scan or upload an entire disk automatically. File content returned by a tool is sent to ChatGPT, so read-only access still sends data off the machine.
 
-中文说明：[README.md](README.md) · [Windows install and upgrade](docs/install-and-upgrade.md) · [ChatGPT Tunnel acceptance](docs/chatgpt-tunnel-acceptance.md)
+中文说明：[README.md](README.md) · [Operator runbook](docs/operator-runbook.md) · [V1 acceptance record](docs/release/V1-acceptance.md) · [Windows install and upgrade](docs/install-and-upgrade.md) · [ChatGPT Tunnel acceptance](docs/chatgpt-tunnel-acceptance.md)
 
 ## How it works
 
@@ -60,11 +60,13 @@ Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
 .\packaging\windows\Start-LocalWebGPT.ps1
 ```
 
-Validation should report that `.env` is valid without displaying the key. The launcher starts the local daemon and prints a **one-time local-console URL**. Open that exact URL in a browser (do not share it; it contains a temporary authorization token), go to **ChatGPT Connection**, review the confirmation, and click **Enable ChatGPT connection on this machine**. This enables connection-level tool discovery only; it does not authorize a directory or open global read/write gates. After confirmation, the launcher runs Tunnel doctor and starts `tunnel-client`; wait for a healthy Tunnel before creating the ChatGPT App.
+Validation should report that `.env` is valid without displaying the key. The launcher starts the local daemon and prints a **one-time local-console URL**. Open that exact URL in a browser (do not share it; it contains a temporary authorization token), go to **ChatGPT Connection**, review the confirmation, and click **Enable ChatGPT connection on this machine**. This enables connection-level tool discovery only; it does not authorize a directory. After confirmation, the launcher runs Tunnel doctor and starts `tunnel-client`; wait for a healthy Tunnel before creating the ChatGPT App.
 
 > Why this local step comes first: LocalWebGPT also guards MCP tool-list discovery behind its connection-enable check. ChatGPT requests tool discovery when you click Create, so creation can fail if the local connection has not been enabled. Keep the local launcher and Tunnel running while using the App.
 
 If PowerShell cannot find Node/npm, install a supported Node.js version and open a new terminal. Correct `.env` issues using the validation error; the launcher never prints secret values.
+
+To stop the service, open another PowerShell window and run `.\packaging\windows\Stop-LocalWebGPT.ps1` from the source checkout (`.\Stop-LocalWebGPT.ps1` from a packaged runtime), then wait for the launcher window to return to its prompt. This sends a fixed local stop request rather than killing an arbitrary PID; the daemon waits for in-flight operations before closing.
 
 ## 4. Create the MCP App in ChatGPT
 
@@ -81,7 +83,7 @@ If PowerShell cannot find Node/npm, install a supported Node.js version and open
 Open the local console using the one-time URL from the launcher and go to **Workspaces**:
 
 1. Register a directory or file by pasting its full local path. Start with a narrow test directory. The project rejects overly broad roots such as an entire drive or the user's home directory.
-2. Choose **Read-only** or **Read + propose (local approval required)**. The latter allows change proposals; it is not direct-write permission. Every actual apply still requires review and approval on the local machine.
+2. Choose **Read-only** or **Read + modify**. The latter lets you grant “File modifications” for this root; once granted, ChatGPT can directly create/edit text files without a per-change local approval.
 3. Open **Configure ChatGPT tools** for that root and select the allowed tools:
 
    | Console grant | MCP tools |
@@ -90,17 +92,17 @@ Open the local console using the one-time URL from the launcher and go to **Work
    | Read file contents | `file_read` and related snapshot/error details |
    | Search text | `text_search` |
    | Read Git status and diffs | `git_status`, `git_diff`, `git_log` |
-   | Prepare change proposals | `change_prepare`, proposal revert, and `change_apply` requests |
+   | Create/edit files | Single-file `file_create` / `file_edit` apply directly; multi-file changes use `change_prepare` and `change_apply` |
 
-Each grant applies only to that root. Saving with no tools selected revokes that root's ChatGPT tool access. Calls also require an enabled connection, an active workspace, and the relevant global gate. **The source defaults to fail-closed:** read, Git, and proposal tools remain unavailable until G0/compatibility verification passes; direct write additionally requires the native guard and G4. Do not hard-code gates open in normal use just to clear `POLICY_DENIED`; check the local console status.
+Each grant applies only to that root. Saving with no tools selected revokes that root's ChatGPT tool access. Calls require an enabled connection and active workspace. Read, Git, and file modification are controlled by the per-workspace grants on this page; platform acceptance status is informational, not a hidden global feature switch. Granting “File modifications” lets ChatGPT directly create/edit text files in that root without a per-change local approval. Path denials, conflict checks, snapshots, audit, and the protected writer remain active. There is no arbitrary shell, out-of-root access, automatic Git commit/push, or file deletion.
 
 ## 6. Suggested acceptance and troubleshooting
 
-Confirm the Tunnel is healthy, then test `bridge_status` → `workspace_list` → `file_list` / `file_read` / `text_search` against a test root. Continue to modifications only after the gates have been formally verified. For write acceptance, use a **dedicated temporary Git directory**: prepare a proposal, confirm local bytes are unchanged before approval, approve locally, apply, and independently read the file back. Do not use a personal directory for the first write test.
+Confirm the Tunnel is healthy, then test `bridge_status` → `workspace_list` → `file_list` / `file_read` / `text_search` against a test root. In the local console, grant “File modifications” to a **dedicated temporary Git directory**, then test a single-file `file_create` / `file_edit` and independently read it back. For multi-file changes, use `change_prepare` followed by `change_apply`. Do not use a personal directory for the first write test.
 
 - Create fails with HTTP 424 or tool-list errors: check that ChatGPT Connection was enabled in the local console, the launcher is still running, and `tunnel-client` is healthy.
 - Tunnel is missing from the picker: verify Platform organization/ChatGPT workspace association and `Tunnels Read + Use` for the app creator.
-- App appears but reads fail with `POLICY_DENIED` / `CAPABILITY_DISABLED`: check the root's tool grants, workspace state, and global gates. Tunnel connectivity is not file authorization.
+- App appears but reads/writes fail with `NOT_AUTHORIZED`: check that root's tool grants and workspace state. Tunnel connectivity is not file authorization.
 - ChatGPT shows stale tools: refresh the connection in Plugins management and start a new conversation.
 
 ## Official references

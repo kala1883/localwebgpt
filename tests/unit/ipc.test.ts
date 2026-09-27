@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { createServer, type Server } from 'node:net';
+import { createConnection, createServer, type Server } from 'node:net';
 import { after, describe, it } from 'node:test';
 
 import {
@@ -34,8 +34,9 @@ import {
   type MessageSink,
 } from '@lwb/ipc';
 import { pipeNameForSid, controlPipeName } from '@lwb/ipc';
-import { acquireSingleInstance, releaseSingleInstance } from '@lwb/ipc';
+import { acquireSingleInstance, LOCAL_STOP_ACK, LOCAL_STOP_COMMAND, releaseSingleInstance } from '@lwb/ipc';
 import type { ProcessIdentity, ProcessProbe } from '@lwb/ipc';
+import { startDataPipe } from '../../apps/daemon/src/runtime/ipc-server.ts';
 
 // ---------------------------------------------------------------- 工具
 
@@ -133,6 +134,30 @@ describe('LWB-008 验收标准 1：单实例互斥', () => {
     if (second.kind === 'acquired') await releaseSingleInstance(second.server);
   });
 
+  it('控制管道只接受精确的当前用户停止命令，并确认后通知运行时', async () => {
+    const instance = await acquireSingleInstance({ userSid: SID, onConnection: (socket) => socket.end() });
+    assert.equal(instance.kind, 'acquired');
+    if (instance.kind !== 'acquired') return;
+
+    try {
+      const client = createConnection(instance.pipe_name);
+      const response = new Promise<string>((resolve, reject) => {
+        let body = '';
+        client.setEncoding('utf8');
+        client.once('error', reject);
+        client.on('data', (chunk: string) => { body += chunk; });
+        client.once('end', () => resolve(body));
+      });
+      client.write(LOCAL_STOP_COMMAND.slice(0, 3));
+      client.write(LOCAL_STOP_COMMAND.slice(3));
+
+      assert.equal(await response, LOCAL_STOP_ACK);
+      await instance.stop_requested;
+    } finally {
+      await releaseSingleInstance(instance.server);
+    }
+  });
+
   it('不同 SID 使用不同管道名，互不阻塞', async () => {
     const otherSid = `S-1-5-21-4444444444-5555555555-666666666-${process.pid}`;
     assert.notEqual(pipeNameForSid(SID), pipeNameForSid(otherSid));
@@ -163,6 +188,61 @@ describe('LWB-008 验收标准 1：单实例互斥', () => {
   it('非法 SID 被拒绝，而不是拼出一个可疑的管道名', () => {
     assert.throws(() => pipeNameForSid('not-a-sid'), /不是合法的用户 SID/);
     assert.throws(() => pipeNameForSid(''), /不是合法的用户 SID/);
+  });
+});
+
+describe('LWB-039：停止服务时先排空在途操作', () => {
+  it('关闭数据管道会拒绝新请求，并等待已经进入的处理器完成后才断开 socket', async () => {
+    const operations = new OperationRegistry();
+    let signalStarted!: () => void;
+    let finishOperation!: () => void;
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const work = new Promise<void>((resolve) => { finishOperation = resolve; });
+    operations.register({
+      name: 'slow-operation',
+      required: 'tools.read',
+      handler: async () => {
+        signalStarted();
+        await work;
+        return { finished: true };
+      },
+    });
+
+    const server = await startDataPipe({
+      userSid: SID,
+      secrets: { 'mcp-adapter': ADAPTER_SECRET, console: CONSOLE_SECRET },
+      operations,
+      isRegisteredConnection: (id) => id === 'conn-1',
+    });
+    const client = new IpcClient({
+      pipeName: server.pipe_name,
+      secret: ADAPTER_SECRET,
+      audience: 'mcp-adapter',
+      connectionId: 'conn-1',
+    });
+    let closePromise: Promise<void> | null = null;
+
+    try {
+      await client.connect();
+      const call = client.call('slow-operation', {});
+      await started;
+
+      closePromise = server.close();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(operations.activeCount, 1);
+      assert.equal(server.open_connections, 1, '在途处理器完成之前不能断开 IPC socket');
+      const lateCall = await client.call('slow-operation', {});
+      assert.equal(lateCall.ok, false, '进入 drain 后必须拒绝同一 socket 上的新操作');
+
+      finishOperation();
+      await closePromise;
+      assert.equal(operations.activeCount, 0);
+      await call;
+    } finally {
+      finishOperation();
+      if (closePromise === null) await server.close();
+      await client.close();
+    }
   });
 });
 

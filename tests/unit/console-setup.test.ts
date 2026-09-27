@@ -326,57 +326,55 @@ describe('B 组 · 平台可调用性', () => {
 // C 组 · 直写门禁（验收标准 2）
 // ---------------------------------------------------------------------------
 
-describe('C 组 · 直写门禁', () => {
-  it('C1 四格里任何一格为假，直写就是关的，并逐条说理由', () => {
+describe('C 组 · 文件修改能力状态（验收状态只作诊断）', () => {
+  it('C1 外部验收格不再阻断目录写能力', () => {
     for (const key of Object.keys(ALL_PASS) as readonly (keyof Gates)[]) {
       const gates = { ...ALL_PASS, [key]: false };
       const gate = writeGate({ gates, flags: FLAGS_ON });
-      assert.equal(gate.direct_write, false, `${key} 为假时不该开`);
-      assert.equal(gate.reasons.length, 1);
+      assert.equal(gate.direct_write, true, `${key} 是验收状态，不应成为全局写入开关`);
+      assert.deepEqual(gate.reasons, []);
     }
   });
 
-  it('C2 四格全开但服务端开关关着，仍然是关的', () => {
+  it('C2 服务能力不可用时如实显示不可用', () => {
     const gate = writeGate({ gates: ALL_PASS, flags: FLAGS_OFF });
     assert.equal(gate.direct_write, false);
-    assert.ok(gate.reasons.some((line) => line.includes('服务端的能力开关')));
+    assert.ok(gate.reasons.some((line) => line.includes('目录写入功能当前不可用')));
   });
 
-  it('C3 读数缺失按未通过处理，且理由**说得出口**', () => {
+  it('C3 服务状态缺失显示未知；平台验收格缺失不影响权限状态', () => {
     const gate = writeGate({ gates: null, flags: FLAGS_ON });
-    assert.equal(gate.direct_write, false);
-    assert.equal(gate.reasons[0], '门禁读数缺失，按未通过处理。');
+    assert.equal(gate.direct_write, true);
+    assert.deepEqual(gate.reasons, []);
 
     const other = writeGate({ gates: ALL_PASS, flags: null });
     assert.equal(other.direct_write, false);
-    assert.equal(other.reasons[0], '能力开关读数缺失，按未打开处理。');
+    assert.equal(other.reasons[0], '本机服务能力状态暂时不可用。');
   });
 
-  it('C4 今天生产环境：四格全关，理由四条', () => {
+  it('C4 未启用服务能力时只给一个直接原因', () => {
     const gate = writeGate({ gates: ALL_FAIL, flags: FLAGS_OFF });
     assert.equal(gate.direct_write, false);
-    assert.equal(gate.reasons.length, 4);
-    assert.match(gate.summary, /直写：关闭/);
+    assert.equal(gate.reasons.length, 1);
+    assert.match(gate.summary, /目录写入功能不可用/);
   });
 
-  it('C5 四格与开关全部为真时门禁**会**打开', () => {
-    // 与 B1 同一条理由：一个恒为关的判据与一个写死的 false 分不开。
+  it('C5 服务端支持写入时，目录授权功能可用', () => {
     const gate = writeGate({ gates: ALL_PASS, flags: FLAGS_ON });
     assert.equal(gate.direct_write, true);
     assert.deepEqual(gate.reasons, []);
   });
 
-  it('C6 风险说明里那句「直写当前关闭」是现算的，不是写死的', () => {
+  it('C6 风险说明明确逐目录授权后直接写入，无逐次批准', () => {
     const proposeRisk = (gl: ReturnType<typeof writeGate>, proposalEnabled: boolean): string =>
       modeOffers(gl, proposalEnabled).find((offer) => offer.mode === 'read_propose_apply_with_local_approval')?.risk ?? '';
     const closed = proposeRisk(writeGate({ gates: ALL_FAIL, flags: FLAGS_OFF }), false);
     const open = proposeRisk(writeGate({ gates: ALL_PASS, flags: FLAGS_ON }), true);
 
-    assert.match(closed, /当前关闭/);
-    assert.match(open, /当前已打开/);
-    assert.match(closed, /全局提议能力当前关闭/);
-    assert.match(open, /全局提议能力当前已打开/);
-    // 写死的文案会在门禁通过那天开始说谎 —— 这条断言钉住它是现算的。
+    assert.match(closed, /本机服务的目录写入功能当前不可用/);
+    assert.match(open, /直接创建和编辑文本文件/);
+    assert.match(open, /不会逐次等待本机批准/);
+    // 风险说明直接说清本地目录 grant 是权限来源。
     assert.notEqual(closed, open);
   });
 });
@@ -761,8 +759,8 @@ describe('G 组 · 工作区', () => {
     const off = exposureSummary(rows, FLAGS_OFF);
     assert.equal(off.registered, 2);
     assert.match(off.headline, /已登记 2 个根/);
-    assert.match(off.headline, /没有根同时满足连接、目录授权与全局能力门禁/);
-    assert.match(off.lines[0] ?? '', /读取能力当前\*\*关闭\*\*/);
+    assert.match(off.headline, /没有根同时满足连接与目录授权/);
+    assert.match(off.lines[0] ?? '', /本机读取功能当前不可用/);
 
     const on = exposureSummary(
       rows,
@@ -772,7 +770,7 @@ describe('G 组 · 工作区', () => {
     );
     assert.equal(on.accessible, 2);
     assert.match(on.headline, /2 个根当前具备有效的 ChatGPT 内容工具访问条件/);
-    assert.match(on.lines[0] ?? '', /读取能力当前\*\*打开\*\*/);
+    assert.match(on.lines[0] ?? '', /读取工具可用/);
   });
 
   it('G4a 工作区提议模式与提议 grant 不得被误报成当前可用能力', () => {
@@ -781,16 +779,16 @@ describe('G 组 · 工作区', () => {
     const access = [{ workspace_id: row.workspace_id, enabled: true, capabilities: ['propose'] as const }];
     const summary = exposureSummary([row], flags, access, true);
     assert.equal(summary.proposal_granted, 1);
-    assert.equal(summary.accessible, 0, '提议全局门禁关闭时，不能说该根当前可用');
-    assert.match(summary.lines[1] ?? '', /全局提议门禁当前关闭/);
+    assert.equal(summary.accessible, 0, '缺少 file list/read/search/git grant 时，不能说该根具备内容工具访问');
+    assert.match(summary.lines[1] ?? '', /本机文件修改功能当前不可用/);
   });
 
   it('G5 一个都没登记时不留白，明说「没有任何本机内容暴露」', () => {
     const summary = exposureSummary([], null);
     assert.equal(summary.registered, 0);
     assert.match(summary.headline, /没有任何目录被登记/);
-    // 能力开关读不到时按关闭说（保守），但要说得出这是读数问题。
-    assert.match(summary.lines[0] ?? '', /关闭/);
+    // 能力开关读不到时必须说「未知」，不能把未知伪装成关闭或通过。
+    assert.match(summary.lines[0] ?? '', /状态未知/);
   });
 
   it('G6 已移除的登记仍然列出来，且计入「另有多少个」', () => {
@@ -804,7 +802,7 @@ describe('G 组 · 工作区', () => {
     assert.equal(describeWorkspace(workspace()).state_label, '启用');
     assert.equal(describeWorkspace(workspace({ enabled: false })).state_label, '已暂停');
     assert.equal(describeWorkspace(workspace({ removed: true })).state_label, '已移除');
-    assert.equal(describeWorkspace(workspace({ mode: 'read_propose_apply_with_local_approval' })).mode_label, '只读 + 提议（需本地批准）');
+    assert.equal(describeWorkspace(workspace({ mode: 'read_propose_apply_with_local_approval' })).mode_label, '读取 + 修改（逐目录授权）');
   });
 
   it('G8 只读的风险说明里必须包含「不等于不出本机」', () => {

@@ -1933,22 +1933,96 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - GitHub Push Protection 拒绝了首次 `main` squash push：当前源码中的三个测试/证据样例包含 Slack token 形状字面量。未使用 GitHub 的绕过链接；改为运行时拼装合成 canary，保留 egress 脱敏覆盖但不把完整 token 外形存入源码。
 - 本地秘密扫描器新增 Slack API token 形状检测。生成目录 `tests/fixtures/generated` 只有在 Git 明确忽略且其中没有已跟踪文件时才跳过；一旦强制跟踪，扫描器仍检查其中内容。
 - 验证：`npm run check:secrets` PASS；秘密扫描与 egress 定向测试 **56/56 PASS**；完整 `npm run check` 主测试 **1762 项 / 1749 PASS / 0 FAIL / 13 SKIP**，控制台 **164/164 PASS**。
-- 修复后的源码快照已通过完整本机检查并以 squash 单提交推送至远端 `main`（`0361cad`）。没有使用 GitHub 放行例外；旧功能分支及其中的历史密钥提交均未推送。若该历史凭据仍有效，账号持有人仍应撤销/轮换，且不要直接推送旧分支。
+- 修复后的源码快照已通过完整本机检查并以 squash 单提交推送至远端 `main`（`0361cad`）。没有使用 GitHub 放行例外；旧功能分支及其中的历史密钥提交均未推送。用户已确认历史凭据撤销，本项不再是阻塞。
 
 ## 2026-09-27 本轮继续：LWB-040 迁移前数据库快照（PARTIAL）
 
 - daemon 在打开状态库前只读核对旧 schema；schema 低于当前版本时，先拒绝含 `QUEUED` / `VALIDATING` / `APPLYING` / `RECOVERY_REQUIRED` 操作的升级，再用 SQLite backup API 生成快照。
 - 快照先做 `quick_check` 与迁移记录/校验和复核，验证通过后才改为 `.pre-migration-...sqlite` 名称并允许 schema 迁移；备份失败则在迁移前停止。已覆盖 WAL 一致快照、原库字节不变、迁移后数据仍在、快照保留旧 schema、待恢复操作阻断和当前 schema 不重复备份。
 - 定向 SQLite 测试 **3/3 PASS**，类型检查、FsGuard 导入检查、secret scan 通过。自动还原、快照保留/清理 UI、卸载语义和签名安装器仍未完成，LWB-040 继续保持 PARTIAL。
+## 2026-09-28 本轮继续：单文件提案入口与 LocalWebGPT 停止命令
 
-## 2026-09-27 本轮继续：LWB-041 工具工作流 Skill 与 ChatGPT 评测集（PARTIAL）
+- 新增 MCP `file_create` 与 `file_edit`：前者为单个新文本文件创建待审批提案，后者必须使用最新 `file_read` 的哈希/票据及精确行编辑；二者复用既有 `change_prepare`/`change_apply` 安全链，工具调用本身不改用户文件。目录授权、审计、并发守卫、模型说明、Console 能力文案和 ChatGPT 评测用例均已同步，工具总数由 12 增至 14。
+- 新增 `packaging/windows/Stop-LocalWebGPT.ps1` 并纳入 runtime 构建：只向 SID 定向的本机管道发送固定停止命令，不按任意 PID 或进程名终止。停止会阻止新 IPC/控制面操作，等待已进入的 handler 结束，再断开 socket 并关闭状态库；Windows 下 Node 对本启动器拥有的 tunnel-client 子进程执行强制终止，因此在途调用的网页回执可能丢失，重连后须用 `change_get` 核对，不能盲目重复应用。
+- 新增真实命名管道停止握手、在途操作排空、文件工具契约/权限/审计与评测测试。最终全量 `npm run check` 通过：主测试 **1774 项 / 1761 PASS / 0 FAIL / 13 SKIP**，Console **164/164 PASS**；FsGuard 检查了 214 个文件，秘密扫描通过。ChatGPT 手工评测仍标为 `NOT_RUN`；停止脚本 PowerShell 语法解析通过，未实际停止用户当前运行的服务。
+- 任务余额（将本文件任务矩阵与后续记录合并）：V1 的 LWB-001–046 为 **33 DONE、7 PARTIAL、6 NOT_STARTED**，故 **13 项尚未完成**；V1.1/V2 的 LWB-047–054 仍有 **8 项未开始**。整份 54 项计划合计 **21 项尚未完成**。其中 PARTIAL：001、002、004、037、039、040、041；V1 尚未开始：038、042–046。
+- 用户已确认旧历史凭据已撤销；该事项不再阻塞后续工作。
 
-- 新增 `plugin/skills/local-workspace/SKILL.md`：明确 workspace 选择、相对路径、读取范围、文件内容中的提示注入处理，以及“提议 ≠ 本机批准 ≠ 已保存”；Skill 不改变任何服务端权限。
-- 新增 `tests/evals/chatgpt/cases.json` 与运行说明，覆盖直接/间接请求、跟进、只分析不写、提议/审批、超时、越界、秘密拒绝、文件提示注入与不支持的 Git 写操作。该集合状态明确为 `NOT_RUN`，不冒充真实网页评测。
-- 新增评测契约单测 **3/3 PASS**；根类型检查与 secret scan 通过。真实 ChatGPT 会话调用轨迹、冲突/重连验收仍未执行，LWB-041 继续保持 PARTIAL。
+## 2026-09-28 本轮继续：LWB-038 启动时快照保留回收（PARTIAL）
 
-## 2026-09-27 本轮继续：LWB-041 工具工作流 Skill 与 ChatGPT 评测集（PARTIAL）
+- `packages/changes/src/invalidation.ts` 新增 `collectSnapshotGarbage`，统一把权威修改集/操作状态与撤销保留窗口算出的 `snapshotGuard` 接到真实 `BlobStore.collectGarbage`。
+- daemon 现在在启动恢复与过期修改集扫尾后、工具/控制面可接入前回收安全过期的零引用快照，并清理崩溃遗留临时 blob。失败日志不含路径；引用未终结、待恢复或仍在保留窗口内的快照由逐对象 guard 保留。
+- LWB-024 真实 BlobStore 回收验收现通过生产 helper；启动接线由全量 `npm run check` 验证：主测试 **1778 项 / 1765 PASS / 0 FAIL / 13 SKIP**，Console **164/164 PASS**。LWB-038 仍为 PARTIAL：未实现文件系统配额预留/硬上限，也未做长期运行回收频率验收；装配根测试因本用户已有 daemon 占用单实例管道而跳过，未停止该进程做 destructive test。
+- 余额仍为 13 项未完成：V1 **33 DONE、9 PARTIAL、4 NOT_STARTED**（未开始：042–044、046），V1.1/V2 另 8 项未开始；54 项计划共 21 项未完成。PARTIAL 项为 001、002、004、037–041、045。
 
-- 新增 `plugin/skills/local-workspace/SKILL.md`：明确 workspace 选择、相对路径、读取范围、文件内容中的提示注入处理，以及“提议 ≠ 本机批准 ≠ 已保存”；Skill 不改变任何服务端权限。
-- 新增 `tests/evals/chatgpt/cases.json` 与运行说明，覆盖直接/间接请求、跟进、只分析不写、提议/审批、超时、越界、秘密拒绝、文件提示注入与不支持的 Git 写操作。该集合状态明确为 `NOT_RUN`，不冒充真实网页评测。
-- 新增评测契约单测 **3/3 PASS**；根类型检查与 secret scan 通过。真实 ChatGPT 会话调用轨迹、冲突/重连验收仍未执行，LWB-041 继续保持 PARTIAL。
+## 2026-09-28 本轮继续：LWB-045 SPDX 与构建指纹（PARTIAL）
+
+- 新增 `npm run release:evidence`：基于锁定依赖图生成 SPDX-2.3 SBOM，记录源提交、工作树状态、源/运行包指纹、锁文件/SBOM 摘要及 Node/npm 版本；`build-runtime.ps1` 在 Windows runtime 检查后为实际输出目录写入同类记录，并附 tunnel-client、cloudflared、SQLite 二进制摘要。
+- 当前 checkout 的 `docs/release/sbom.json` 含 **303 个包**；`docs/release/build-record.md` 明确标注为 source-checkout evidence、当前工作树为 dirty，声明它不是数字签名或安全门禁签署。另用隔离临时 runtime 验证了打包模式的清单与二进制摘要记录；SPDX/指纹定向测试 **3/3 PASS**，secret scan 通过。LWB-045 仍为 PARTIAL：尚未用干净提交实际构建正式 runtime 包，也没有独立供应链审查。
+- LWB-045 从 NOT_STARTED 推进到 PARTIAL；LWB-038 也已从 NOT_STARTED 推进到 PARTIAL。当前 V1 余额仍为 **13 项未完成**，状态为 **33 DONE、9 PARTIAL、4 NOT_STARTED**（未开始：042–044、046）。V1.1/V2 另有 8 项未开始，54 项总计划仍有 **21 项未完成**。
+
+## 2026-09-28 本轮继续：LWB-044 Windows 性能基准与护栏重连（PARTIAL）
+
+- 新增 `tests/performance/lwb-044.test.ts` 与 `docs/evidence/performance.md`。在 Windows 10.0.26200 / Node 22.20.0 / i7-13620H / 16 GiB / C: NTFS 上，对 1,004 个合成硬拒绝 `.env.*` 文件、80 个源码文件、一个 256 KiB 长行等 294,155 字节夹具，真实测量文件读取、搜索、Git 状态和本地批准后写入；记录 P50/P95、RSS、句柄数及响应体大小。
+- 5 次样本的读 warm P50/P95=24.17/45.99ms，长行搜索=100.66/112.42ms，Git 状态=4146.26/4509.46ms；搜索 P50/P95=3018.85/3071.35ms，3/5 次因 3 秒预算返回明确的有界部分结果（最终 payload 657 字节），没有伪称完整；Git payload 6,383 字节。RSS 短测增加约 15.6 MiB，句柄数 259→259，故只能说明本次没有观察到句柄净增长，不能证明无长期泄漏。
+- 基准强制结束的仅是本测试 worker 自己启动的 PowerShell helper：当前调用 fail-closed、不重放；下一次独立读取自动启动并自检新 helper，实测约 1.11 秒恢复。5 秒 idle 后读取也成功。新增搜索时钟注入使集成基准真正使用单调实时时钟，而普通测试仍保持原冻结时钟。
+- 定向 Windows 基准 **1/1 PASS**；类型检查与 `git diff --check` 通过。LWB-044 仍为 PARTIAL：Windows 睡眠/休眠唤醒、小时级 soak、真冷缓存、多机器尾延迟及网页端验收未运行。
+- V1 余额：**33 DONE、10 PARTIAL、3 NOT_STARTED**（未开始：042、043、046），仍有 13 项未完成；V1.1/V2 另 8 项，54 项计划合计仍有 21 项未完成。PARTIAL：001、002、004、037–041、044–045。
+
+## 2026-09-28 本轮继续：LWB-043 TransportAndAI 受控副本场景回归（PARTIAL）
+
+- 新增 `tests/windows/lwb043-user-journey.test.ts` 与 `docs/evidence/user-journeys.md`。测试要求显式提供一个 Git clean 的 TransportAndAI 副本；本次使用 `transportandai-ma026-vue` 的提交 `99f312a451f7e897ac66acb7640393dab4857413`，只复制四个代表文件到临时 NTFS 仓库，源副本测试前后均保持 clean。
+- 真正通过 LocalWebGPT handler + Windows PowerShell/Win32 护栏读取 MyAgent/AiGroup/文档；AiGroup 搜索返回 2 个匹配。对保存但未暂存的 Vue 磁盘改动先读并取哈希，再验证 Vue `file_edit` 与 docs `file_create` 在本地批准前均不写入，批准后应用回读哈希一致。最终复跑操作分别为 `op_19cb6f687d10436caab06ca27ef849fd` 与 `op_2991ce7a648d44ffbccd81e24ac74342`。
+- 最终仅临时副本中的 Vue 文件变更和新 docs 文件未暂存；Git index/HEAD 不变，无 commit/push；工作区外 canary 与源副本均字节未变。LWB-043 仍为 PARTIAL：真实 ChatGPT 网页端验收未跑；V1 disk reader 无法读取未保存编辑器缓冲区；原始带用户改动的 TransportAndAI 主工作树未被修改。
+- 定向 journey **1/1 PASS**。V1 余额：**33 DONE、11 PARTIAL、2 NOT_STARTED**（未开始：042、046），仍有 13 项未完成；V1.1/V2 另 8 项，54 项计划合计仍有 21 项未完成。PARTIAL：001、002、004、037–041、043–045。
+
+## 2026-09-28 本轮继续：LWB-042 安全回归套件与风险矩阵（PARTIAL）
+
+- 新增 `tests/security/lwb-042.test.ts`，使 `npm run test:security` 有实际测试目标；覆盖跨连接授权、硬拒绝秘密文件在 guarded read 前拦截、超大路径/查询前置拒绝、伪造 `approved` 字段与错摘要均不产生批准/操作/写入。该套件 **3/3 PASS**。
+- 安全相关定向组：控制平面/工具/egress/policy/真 NTFS apply/search/git 合计 **259/259 PASS**；daemon audit **49/49 PASS**；Console **164/164 PASS**；真实护栏进程死亡专项 **5/5 PASS**。类型检查、secret scan、214 文件 FsGuard import scan 通过。
+- 新增 `docs/evidence/security-review.md`，把真实测试证据与覆盖缺口分开，并标明模型提示注入、真实网页、升级链独立审查等残余项。LWB-042 状态改为 PARTIAL：本实现者没有伪称非实现者独立签署，也没有把关闭的生产门禁打开。
+- 修正了任务索引漂移：`docs/LWB_DEVELOPMENT_TASKS.md` 与 `docs/LWB_TASKS.json` 中早期任务状态此前仍显示 NOT_STARTED，和本进度账及逐任务证据冲突；现按已有进度矩阵同步状态。该同步只是修正文档索引，不是本轮重新审计 33 项 DONE，也不替代每项证据。
+- V1 余额：**33 DONE、12 PARTIAL、1 NOT_STARTED**（未开始：046），仍有 13 项未完成；V1.1/V2 另 8 项，54 项计划合计仍有 21 项未完成。PARTIAL：001、002、004、037–045。
+
+## 2026-09-28 本轮继续：LWB-039 重连前复核本机连接启用状态（PARTIAL）
+
+- 隧道子进程异常退出并完成退避后，`superviseTunnel` 现在再次调用同一条本机连接启用等待逻辑；未启用时不运行 doctor、不启动第二个隧道子进程。启用后才重新 doctor 并重连。此操作只读取连接开关，不修改目录授权或生产门禁。
+- 新增两个重连用例：退避期间撤权、之后显式重新启用才恢复；如果一直停用且收到停止信号，则不 doctor/不重启。`tests/unit/chatgpt-local-launch.test.ts` **14/14 PASS**，全仓 TypeScript 检查通过。
+- LWB-039 仍为 PARTIAL：上述为模拟 supervisor/连接状态的单元测试；实际 Windows 睡眠/唤醒、真实 tunnel-client/ChatGPT 页面、开机启动和安装器仍未验证。
+
+## 2026-09-28 本轮继续：LWB-039 隧道重连前复核连接授权（PARTIAL）
+
+- `superviseTunnel` 在隧道子进程异常退出、退避等待后，先重新检查本机 ChatGPT 连接是否仍启用，再运行 `doctor`；每次实际启动隧道前再复查一次，以覆盖操作者恰在 doctor 执行期间停用连接的窗口。停用期间不启动远端隧道，也不改目录授权或生产能力门禁。
+- 新增三条 supervisor 回归（退避时撤权后重新启用 / 一直关闭时不重启 / doctor 期间撤权时阻止下一次 run）；`tests/unit/chatgpt-local-launch.test.ts` **15/15 PASS**，类型检查通过。细节见 `docs/evidence/lwb-039-reconnect.md`。
+- LWB-039 仍 PARTIAL：真实 Windows sleep/wake、真实 Secure MCP Tunnel process 与 ChatGPT 页面、每用户开机启动选项和安装器尚未验。此修改不改变生产能力门禁、不授予目录权限。
+
+## 2026-09-28 本轮继续：LWB-038 快照配额、批次预检与周期回收（PARTIAL）
+
+- `BlobStore` 增加物理对象字节硬配额、单实例批次串行、内容寻址去重核算和整批预检；变更准备阶段统一登记整批旧/新快照。配额不足返回 `STORAGE_UNAVAILABLE/SNAPSHOT_QUOTA_EXCEEDED`，不落对象、不登记引用，工作区尚未接触。
+- runtime 默认上限 1 GiB；根 `.env` 的 `snapshot_store_max_bytes` 可设置正整数字节，但不超过 2 GiB。daemon 增加每小时单飞维护，先过期扫尾，再在无执行/恢复状态时按 `snapshotGuard` 回收；启动时清理崩溃临时文件，周期任务不碰活跃 `.tmp`，停止服务会取消并 drain 维护任务。
+- 单元组合 **86/86 PASS**，真实 Windows NTFS 配额拒绝 **1/1 PASS**（file_edit 与 file_create 均在配额错误前没有写工作区/对象）；类型、secret、FsGuard 检查及启动脚本 PowerShell parse 通过。证据 `docs/evidence/lwb-038-quota.md`。
+- LWB-038 仍 PARTIAL：未运行小时级/磁盘满 soak，也未做完整 daemon 运行一小时验证；配额控制受保护对象库逻辑字节，不等价于整个 OS 卷的空间预留。
+- 任务余额不变：V1 **33 DONE、12 PARTIAL、1 NOT_STARTED**（046），仍有 13 项未完成；V1.1/V2 另 8 项，整份 54 项合计 21 项未完成。
+
+## 2026-09-28 本轮继续：LWB-038 快照存储硬配额与周期维护（PARTIAL）
+
+- 新增 `LWB_SNAPSHOT_STORE_MAX_BYTES` 本机配置：默认 1 GiB、可调但不超过 2 GiB 硬上限；`Start-LocalWebGPT.ps1` 可从根 `.env` 读取 `snapshot_store_max_bytes`，启动后恢复调用前的环境值。
+- `BlobStore.putAndRegisterBatch` 在落第一个对象前核算整批新增的唯一快照字节；配额不足映射为 `STORAGE_UNAVAILABLE/SNAPSHOT_QUOTA_EXCEEDED`。内容寻址去重不重复占额；GC 删除对象后释放当前实例计数，重启后重新扫描磁盘对象树。
+- daemon 增加单飞每小时维护：过期扫尾后，只有无活动执行/恢复要求时才回收；对象级保留继续由 `snapshotGuard` 判定。临时 `.tmp` 只在启动时回收，防止运行中误删 prepare 临时文件；shutdown 会取消计时并等待已启动维护结束。
+- 新增配额配置、并发/去重/GC 释额、scheduler shutdown 和真实 NTFS 超额拒绝测试；局部组合 **87/87 unit PASS、1/1 Windows PASS**，类型检查、secret scan、FsGuard 导入检查和 PowerShell launcher parse 通过。LWB-038 仍 PARTIAL：未做小时级 soak；该 cap 限制快照对象逻辑字节，不等于 OS 卷级空间预留。
+- 配额/runtime 改动后重新执行完整 `npm run check`：根/Console 类型、静态导入与秘密扫描通过；主测试 **1781 PASS / 13 SKIP / 0 FAIL**、Console **164/164 PASS**。性能基准保持 opt-in，正常全检未运行压测。
+- 紧接着的全仓 `npm run check` **PASS**：主测试 **1781 PASS / 13 SKIP / 0 FAIL**，Console **164/164 PASS**。LWB-044 基准已改为显式 opt-in，常规全检不再执行会生成大目录并结束临时 helper 的重型测量。
+
+## 2026-09-28 本轮继续：LWB-040 手工卸载与状态保留语义（PARTIAL）
+
+- `docs/install-and-upgrade.md` 新增 V1 手工卸载步骤：先检查恢复页、通过 SID 定向命令停止并等待启动窗口返回，再只移除精确 runtime 输出目录；明确不得删除工作区或 `%LOCALAPPDATA%\LocalWorkspaceBridge`（数据库、快照、恢复记录和凭证默认保留）。
+- V1 尚无自动卸载器，也没有在自定义或与授权工作区重叠的安装路径上验证移除；卸载器、长时升级恢复与签名安装器仍未完成，LWB-040 继续 PARTIAL。
+
+## 2026-09-28 本轮继续：按工作区授权直接创建/编辑，移除全局审批门禁（实现完成，外部验收未完成）
+
+- 根据用户要求简化权限流程：外部平台验收状态保留为诊断信息，不再作为隐藏全局能力开关；每个目录在本地控制台的工具 grant 是读/写权限来源。`propose` 在 UI 中显示为“文件修改”，授予后允许该连接在该根创建/编辑文本文件并应用多文件修改集。
+- 单文件 `file_create` / `file_edit` 现在一个 MCP 调用内准备变更、验证授权与摘要、通过 Win32 受保护执行器写入并返回逐文件回执；多文件继续 `change_prepare` → `change_apply`，但不再等待每次本机批准。后台仍保存以 `workspace-grant:<id>` 标记的摘要绑定执行记录，用于既有队列、去重和审计，不代表人工点击。
+- Setup 页移除 G0/G2/G3/G4 写入门禁矩阵，改为“目录权限在工作区页设置”的指引；Connection 页与中英文 README、ChatGPT 隧道验收说明同步改写。新增 `docs/adr/004-workspace-grants-and-direct-file-tools.md` 记录这项产品决策与未验证边界。
+- 本轮验证：根/Console TypeScript 检查通过；FsGuard 扫描（216 文件）和工作树 secret scan 通过；`tests/unit/` **1320/1320 PASS**；Console **159/159 PASS**；`tests/security/lwb-042.test.ts` **3/3 PASS**；真 NTFS 单文件工具、应用与撤权专项 **13/13 PASS**；`tests/windows/changes-revert.test.ts` 与 MCP adapter 端到端组合 **40/40 PASS**。
+- `npm run check` 在本轮最初暴露旧 LWB-034 审批流程断言与新 grant 流程不一致；已修订暂停测试，使其验证暂停废止旧待执行提案、恢复后新提案可直接执行。最终全仓检查 **PASS**：根测试 **1773 PASS / 13 SKIP / 0 FAIL**，Console **159/159 PASS**；类型检查、FsGuard 扫描（216 文件）与工作树 secret scan 均通过。
+- 限制仍在：当前只对本地登记的 NTFS 工作区生效，不默认开放整盘/用户主目录，不开放 Shell、删除、Git 提交/推送；路径硬拒绝、工作区代次、冲突、快照、审计、恢复及紧急暂停保留。真实 ChatGPT 网页端读写/回读仍 NOT_RUN，平台身份与外部独立安全审查仍未签署。

@@ -21,11 +21,11 @@
  *
  * ## 二、`next_action` 必须随状态而变，不能借用 `prepare` 的那一句
  *
- * `changeSetViewOf()` 把 `next_action` 固定成「等本地操作者批准」。那对
+ * `changeSetViewOf()` 把 `next_action` 固定成「已建立，按工作区 grant 调用 change_apply」。那对
  * `change_prepare` 是**唯一正确**的一句话 —— 那个函数只在「刚刚建立」时
  * 被调用，状态必然是 `PENDING_APPROVAL`。但 `change_get` 会在几小时之后
  * 被调用，那时状态可能是 `APPLIED`、`CONFLICT` 或 `RECOVERY_REQUIRED`。
- * 把「等待批准」原样返回，等于让模型读到一句**与事实相反**的指示：
+ * 把「调用 change_apply」原样返回，等于让模型读到一句**与事实相反**的指示：
  * 它可能据此告诉用户「还没保存」，也可能据此重新发起一次提案。
  *
  * 因此这里用 `nextActionFor()` —— 一张**类型上穷尽**的表
@@ -266,12 +266,12 @@ export function ownedChangeOf(
  *
  * 文案里反复出现的两句话是刻意的，它们对应两件最容易被说反的事：
  *  - 只有 `APPLIED` 才能说「已保存」；
- *  - 模型与 MCP 通道都无法批准，也无法解除冲突或恢复状态。
+ *  - 模型不能越过逐工作区 grant；也无法解除冲突或恢复状态。
  */
 const NEXT_ACTION: Readonly<Record<ChangeSetState, string>> = {
   PENDING_APPROVAL:
-    '修改集已建立，**尚未写入任何文件**。请把完整差异交给本地操作者，在控制台核对后批准；' +
-    '批准必须由本地操作者完成，模型与 MCP 通道都无法批准。批准前可以继续读取以核对内容。',
+    '修改集已建立，**尚未写入任何文件**。若该工作区已授予文件修改权限，请调用 change_apply 执行；' +
+    '若未授权，需由本地操作者在工作区设置中授予。',
   REJECTED: '本地操作者已拒绝本修改集。它不可再应用；如仍需修改，请重新读取目标文件后另行提案。',
   EXPIRED: '本修改集已超过有效期（24 小时）而失效。如需继续，请重新读取目标文件后另行提案。',
   INVALIDATED:
@@ -324,9 +324,7 @@ function receiptMessageOf(state: ChangeSetState): string {
 function viewFor(record: ChangeSetRecord, items: readonly ChangeItemRecord[], deps: ChangeQueryDeps): ChangeSetView {
   const base = changeSetViewOf(record, items, (blobId) => deps.repos.blobs.requireById(blobId).size);
   // 只覆盖 `next_action`：其余字段都是记录的**事实**，本文件没有资格改。
-  // `approval_required` 保持 `true` 是如实的 —— 它的意思是「本修改集只能由
-  // 本地批准驱动」，而不是「现在还在等」。后一件事由 `state` 与
-  // `next_action` 回答，两者都不会被这个字段顶替。
+  // 目录级文件修改 grant 是人工设置的持久授权；不再要求每份修改集逐次批准。
   return { ...base, next_action: nextActionFor(record.state) };
 }
 

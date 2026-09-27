@@ -3,11 +3,11 @@
   "version": "design-v1.0",
   "date": "2026-09-25",
   "artifact_type": "architecture-and-development-plan",
-  "implementation_status": "NOT_IMPLEMENTED",
-  "verification_status": "NOT_RUN",
+  "implementation_status": "IN_PROGRESS",
+  "verification_status": "PARTIAL",
   "core_tasks": 46,
   "extension_tasks": 8,
-  "note": "所有任务、测试目标与界面均为待实施设计。本文件不是可安装插件，不证明用户账号可用，也不包含真实仓库审查。",
+  "note": "Task statuses mirror the execution ledger in docs/PROGRESS.md; detailed evidence and NOT_RUN items remain per-task. This plan is not an installable plugin, does not certify ChatGPT account/tunnel availability, and is not a release sign-off.",
   "tasks": [
     {
       "id": "LWB-001",
@@ -15,7 +15,7 @@
       "title": "冻结范围、风险边界与验收样例",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [],
       "deliverables": [
         "docs/adr/001-scope.md",
@@ -44,7 +44,7 @@
       "title": "验证真实 ChatGPT 账号与隧道接入",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-001"
       ],
@@ -76,7 +76,7 @@
       "title": "验证 Windows 文件句柄与写入可行性",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-001"
       ],
@@ -108,7 +108,7 @@
       "title": "锁定协议、依赖与威胁模型",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-001",
         "LWB-002",
@@ -143,7 +143,7 @@
       "title": "建立独立工程与自动测试骨架",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-004"
       ],
@@ -178,7 +178,7 @@
       "title": "实现 SQLite 模型与迁移",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-005"
       ],
@@ -209,7 +209,7 @@
       "title": "实现受保护存储和凭证管理",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-005",
         "LWB-006"
@@ -242,7 +242,7 @@
       "title": "实现单实例、认证 IPC 和生命周期",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-005",
         "LWB-007"
@@ -274,7 +274,7 @@
       "title": "实现目录/单文件授权与工作区代次",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-006",
         "LWB-007",
@@ -308,7 +308,7 @@
       "title": "实现 Windows 路径与文件身份防护",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-003",
         "LWB-009"
@@ -341,7 +341,7 @@
       "title": "实现统一权限与敏感数据出站策略",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-009",
         "LWB-010"
@@ -374,7 +374,7 @@
       "title": "实现安全的本地控制平面",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-008",
         "LWB-009",
@@ -407,7 +407,7 @@
       "title": "实现一致的文件读取与读取票据",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-010",
         "LWB-011"
@@ -440,7 +440,7 @@
       "title": "实现分页目录与文件定位",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-010",
         "LWB-011",
@@ -472,7 +472,7 @@
       "title": "实现本地文本搜索",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-011",
         "LWB-013",
@@ -505,7 +505,7 @@
       "title": "实现真正只读的 Git 查询",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-010",
         "LWB-011",
@@ -540,7 +540,7 @@
       "title": "实现 MCP 工具适配与连接上下文",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-008",
         "LWB-011",
@@ -577,7 +577,7 @@
       "title": "实现读取审计、配额、撤权与阶段验收",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-006",
         "LWB-011",
@@ -612,7 +612,7 @@
       "title": "实现精确文本编辑契约",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-006",
         "LWB-013"
@@ -645,7 +645,7 @@
       "title": "实现不可变修改集和差异预览",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-007",
         "LWB-011",
@@ -679,7 +679,7 @@
       "title": "实现本地批准与拒绝",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-012",
         "LWB-020"
@@ -712,7 +712,7 @@
       "title": "实现状态机与幂等存储",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-006",
         "LWB-020",
@@ -746,7 +746,7 @@
       "title": "实现控制台修改队列和基础预览",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-012",
         "LWB-020",
@@ -780,7 +780,7 @@
       "title": "实现代次、过期与审批撤销",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-009",
         "LWB-011",
@@ -813,7 +813,7 @@
       "title": "接入修改提议工具并验收审批闭环",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-017",
         "LWB-020",
@@ -848,7 +848,7 @@
       "title": "实现写执行协调器",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-008",
         "LWB-022",
@@ -880,7 +880,7 @@
       "title": "实现受保护的既有文件写入",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-003",
         "LWB-010",
@@ -915,7 +915,7 @@
       "title": "实现不覆盖的文本文件创建",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-010",
         "LWB-019",
@@ -947,7 +947,7 @@
       "title": "实现多文件日志与持久化边界",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-006",
         "LWB-007",
@@ -983,7 +983,7 @@
       "title": "实现启动恢复与未知结果协调",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-022",
         "LWB-029"
@@ -1016,7 +1016,7 @@
       "title": "实现安全撤销提议",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-020",
         "LWB-021",
@@ -1049,7 +1049,7 @@
       "title": "实现应用工具与操作查询",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-025",
         "LWB-026",
@@ -1083,7 +1083,7 @@
       "title": "完成竞争、崩溃与故障专项测试",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-027",
         "LWB-028",
@@ -1120,7 +1120,7 @@
       "title": "实现安全暂停与紧急停用",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-018",
         "LWB-024",
@@ -1154,7 +1154,7 @@
       "title": "完成首次配置和连接状态界面",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-012",
         "LWB-017",
@@ -1187,7 +1187,7 @@
       "title": "完善差异查看与批准体验",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "DONE",
       "depends_on": [
         "LWB-023",
         "LWB-032"
@@ -1219,7 +1219,7 @@
       "title": "实现冲突、恢复和历史界面",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-030",
         "LWB-031",
@@ -1253,7 +1253,7 @@
       "title": "实现资源限制、审计保留与诊断",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-007",
         "LWB-018",
@@ -1287,7 +1287,7 @@
       "title": "实现启动、退出、睡眠和重连管理",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-008",
         "LWB-034",
@@ -1320,7 +1320,7 @@
       "title": "实现安装、升级和卸载语义",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-006",
         "LWB-007",
@@ -1353,7 +1353,7 @@
       "title": "完成工具说明与真实对话评测",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-032",
         "LWB-036",
@@ -1365,13 +1365,13 @@
         "tests/evals/chatgpt/"
       ],
       "execution_steps": [
-        "编写先列工作区、再定位/读取、再提议/批准/查询的工作流说明；Skill 不承载权限。",
+        "编写先列工作区、再定位/读取、再按工作区 grant 创建/编辑并核验回执的工作流说明；Skill 不承载权限。",
         "建立直接请求、间接请求、跟进、拒绝、越界、超时和不支持请求的评测集。",
         "真实 ChatGPT 网页测试读取、编辑、保存 Markdown、冲突和重连；记录调用序列。"
       ],
       "acceptance_criteria": [
-        "模型不会把代码块当已执行、不会把 PENDING_APPROVAL 当已保存。",
-        "用户仅要求分析时不产生写操作。",
+        "模型不会把代码块当已执行；只有工具返回 state=APPLIED 与回执后才声称写入成功。",
+        "用户仅要求分析时不产生写操作；单文件写入遵循工作区授权并直接返回可核验回执。",
         "不会在不支持的模式下承诺工具可写，也不会用任意 Shell 代偿。"
       ],
       "evidence_required": [
@@ -1387,7 +1387,7 @@
       "title": "完成独立安全审查",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-010",
         "LWB-011",
@@ -1425,7 +1425,7 @@
       "title": "完成目标场景回归",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-033",
         "LWB-041",
@@ -1457,7 +1457,7 @@
       "title": "完成性能与长时间运行测试",
       "release": "V1",
       "priority": "P1",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-015",
         "LWB-016",
@@ -1492,7 +1492,7 @@
       "title": "完成构建来源与供应链检查",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-040",
         "LWB-042"
@@ -1524,7 +1524,7 @@
       "title": "完成 V1 发布门禁与交付",
       "release": "V1",
       "priority": "P0",
-      "status": "NOT_STARTED",
+      "status": "PARTIAL",
       "depends_on": [
         "LWB-041",
         "LWB-042",
@@ -1538,9 +1538,9 @@
         "docs/operator-runbook.md"
       ],
       "execution_steps": [
-        "汇总 G0—G6 证据，逐条确认功能、权限、并发、幂等、恢复、隐私与安装验收。",
+        "汇总功能、授权范围、并发、幂等、恢复、隐私与安装证据；把未验证项列为限制，不把状态字段当隐藏全局开关。",
         "交付安装包、工具契约、配置说明、故障恢复指南、限制说明和测试报告。",
-        "先启用只读，再逐工作区启用批准写入；出现数据完整性风险立即停写保留日志。"
+        "先启用只读，再逐工作区授予文件修改；授权根内可直接写入，出现数据完整性风险立即停写并保留日志。"
       ],
       "acceptance_criteria": [
         "所有必须通过的安全与数据完整性测试通过，无虚构 PASS。",

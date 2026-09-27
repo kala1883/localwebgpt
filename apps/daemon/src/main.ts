@@ -41,8 +41,11 @@ async function main(): Promise<number> {
     return EXIT_STARTUP_FAILED;
   }
 
-  const signal = await waitForShutdownSignal();
-  process.stdout.write(`收到 ${signal}，正在退出（先断连接、再关状态库）。\n`);
+  const reason = await Promise.race([
+    waitForShutdownSignal(),
+    runtime.stop_requested.then(() => 'LOCAL_STOP_COMMAND'),
+  ]);
+  process.stdout.write(`收到 ${reason}，正在退出（先断连接、再关状态库）。\n`);
   await runtime.shutdown();
   process.stdout.write('已退出。\n');
   return EXIT_OK;

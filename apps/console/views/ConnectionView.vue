@@ -47,7 +47,7 @@ async function setEnabled(row: ConnectionRow, enabled: boolean): Promise<void> {
     await props.client.call(endpoint, authorized);
     enableConfirmed.value = false;
     notice.value = enabled
-      ? '模型侧连接已由本机启用。工作区授权和 G0/能力门禁未改变。'
+      ? '模型侧连接已由本机启用。工作区授权保持原样，请在“工作区”页按目录配置工具权限。'
       : '模型侧连接已停用。';
     await refresh();
   } catch (cause) {
@@ -70,7 +70,7 @@ onMounted(() => void refresh());
     <header class="connection__header">
       <div>
         <h2>ChatGPT MCP 连接</h2>
-        <p>连接开关只控制模型侧凭据能否调用当前可用工具；不会登记工作区、授予目录权限或更改 G0/读写门禁。</p>
+        <p>连接开关只控制模型侧凭据能否调用工具；不会登记工作区或授予目录权限。实际可用工具取决于“工作区”页逐目录设置。</p>
       </div>
       <button type="button" data-testid="refresh-connections" :disabled="loading || !sessionActive" @click="refresh">
         {{ loading ? '读取中…' : '重新读取' }}
@@ -120,7 +120,7 @@ onMounted(() => void refresh());
     </article>
 
     <p class="connection__safety" data-testid="connection-safety-note">
-      新安装默认停用是有意的。当前项目门禁仍关闭、没有工作区授权；启用后最多用于检查 Tunnel 与连接级工具发现，不代表文件读取或写入已获准。
+      新安装默认停用是有意的。启用后还需在“工作区”页登记要访问的目录，并为该目录选择读取或文件修改工具；不要授权不需要暴露的目录。
     </p>
   </section>
 </template>

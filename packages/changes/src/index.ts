@@ -96,6 +96,7 @@ export {
   invalidateMany,
   invalidatePendingForConnection,
   invalidatePendingForWorkspace,
+  collectSnapshotGarbage,
   planSnapshotRetention,
   reclaimedChangeMetadata,
   revalidateExecutionBindings,

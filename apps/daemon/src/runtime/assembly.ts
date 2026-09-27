@@ -74,7 +74,7 @@ import { arch, hostname, platform } from 'node:os';
 import { LIMITS, newLocalId } from '@lwb/contracts';
 import type { CapabilityFlags } from '@lwb/contracts';
 import { BlobStore } from '@lwb/blob-store';
-import { sweepExpired } from '@lwb/changes';
+import { collectSnapshotGarbage, sweepExpired } from '@lwb/changes';
 import { RecoveryService } from '@lwb/recovery';
 import { EgressBudgetStore } from '@lwb/egress';
 import { createReadTicketAuthority } from '@lwb/files';
@@ -98,6 +98,8 @@ import { createControlPlane } from '../control/control-plane.ts';
 import { ControlSessionStore } from '../control/session.ts';
 import { registerApprovalOperations } from '../control/approvals.ts';
 import { registerChangeOperations } from '../control/changes.ts';
+import { snapshotStoreMaxBytesFromEnvironment } from './snapshot-quota.ts';
+import { startSnapshotMaintenanceLoop } from './snapshot-maintenance.ts';
 import { registerConnectionOperations } from '../control/connections.ts';
 import { registerHistoryOperations } from '../control/history.ts';
 import { registerPauseOperations } from '../control/pause.ts';
@@ -238,6 +240,8 @@ export interface DaemonRuntime {
    * 第二个实例会让「谁签发的恢复授权」这个问题有两个答案。
    */
   readonly recovery: RecoveryService;
+  /** Resolves when the current Windows user requests a controlled local stop. */
+  readonly stop_requested: Promise<void>;
   /**
    * Minimal environment for a trusted local MCP/tunnel child process.
    * Contains only the model audience secret, never the console secret. Callers
@@ -339,6 +343,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
 
     // ---- 1. 参数 ----
     const startup = parseStartupOptions(options.argv, options.env);
+    const snapshotMaxBytes = snapshotStoreMaxBytesFromEnvironment(
+      options.env['LWB_SNAPSHOT_STORE_MAX_BYTES'],
+    );
 
     // ---- 2. 受保护根 ----
     const { layout, overridden } = resolveStoreLayout(startup.home_override);
@@ -366,8 +373,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
     // ---- 5. 单实例互斥（在创建任何状态之前）----
     const lock = await acquireSingleInstance({
       userSid,
-      // 控制管道今天只承担互斥，不承载协议。挂着的连接会表现为
-      // 「daemon 没反应」，那会把排查方向引到进程是否活着上面。
+      // acquireSingleInstance 自己识别固定停止命令；不匹配的连接直接关闭。
       onConnection: (socket) => socket.end(),
     });
     if (lock.kind === 'occupied') {
@@ -449,7 +455,12 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
     // （`Op-Harden` 给根设的规则带 `ContainerInherit|ObjectInherit`）。
     // 它不在 `STORE_SUBDIRECTORIES` 里，因此加固时不预先创建 ——
     // 第一次写快照时按需建立，ACL 由继承得到。
-    const blobs = new BlobStore({ objectsRoot: layout.objects, registry: repos.blobs });
+    const blobs = new BlobStore({
+      objectsRoot: layout.objects,
+      registry: repos.blobs,
+      maxBytes: snapshotMaxBytes,
+    });
+    log(`快照对象存储字节上限：${String(snapshotMaxBytes)}。`);
 
     const recovery = new RecoveryService({
       repos,
@@ -462,6 +473,69 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
     // **先处理未终结操作，再开放写能力。** 这一行与下面 `createToolSurface`
     // 的先后顺序就是 LWB-030 步骤 1 的全部实现 —— 见文件头的第 12 步说明。
     const sweepReport = await recovery.sweepStartup();
+
+    // ---- 12.1 启动快照保留与回收（LWB-038）----
+    // 单实例锁已持有、恢复扫描已完成、数据管道尚未开放：此刻不会有新的
+    // 工具操作与回收并发。逐 blob 的保护仍由权威状态表重新计算，待恢复与
+    // 撤销窗口内的唯一快照不会被这次启动清理删除。
+    const startupCleanupAt = new Date().toISOString();
+    const sweep = sweepExpired(repos, { now: startupCleanupAt });
+    const temporaryBlobs = await blobs.sweepTempFiles();
+    try {
+      const garbage = await collectSnapshotGarbage(
+        repos,
+        blobs,
+        { now: startupCleanupAt },
+        { isSafeToCollect: () => true },
+      );
+      if (garbage.refused) {
+        log('启动快照回收被安全判据拒绝；本轮没有删除快照对象。');
+      } else {
+        log(
+          `启动快照维护完成：回收 ${String(garbage.collected.length)} 个已过保留期对象，` +
+            `保留或跳过 ${String(garbage.skipped.length)} 个仍被引用的对象；` +
+            `清理 ${String(temporaryBlobs.length)} 个崩溃遗留临时文件。`,
+        );
+      }
+    } catch {
+      // 仅回收 pending_gc 且 refcount 为零的快照；失败不影响工作区文件，
+      // 留给下次启动重试，且不把本机对象路径写入普通日志。
+      log('启动快照回收未能完成；相关待回收对象保留供下次启动重试。');
+    }
+
+    // ---- 12.2 定期快照维护（LWB-038）----
+    // 周期性处理运行期间过期的修改集与待回收快照。GC 的全局前提同时
+    // 检查活动执行与待恢复工作区；逐对象保留仍由 snapshotGuard 复算。
+    // 不周期清理 `.tmp`：活动 prepare 可能正在写同卷临时文件；临时文件只在
+    // 启动恢复、数据管道开放之前清理。
+    const snapshotMaintenance = startSnapshotMaintenanceLoop({
+      run: async () => {
+        const now = new Date().toISOString();
+        const expired = sweepExpired(repos, { now });
+        const noActiveOrRecovery = (): boolean =>
+          repos.operations.listByStates(['QUEUED', 'VALIDATING', 'APPLYING', 'RECOVERY_REQUIRED']).length === 0 &&
+          !repos.workspaces.list().some((workspace) => recovery.requiresRecovery(workspace));
+        const garbage = await collectSnapshotGarbage(
+          repos,
+          blobs,
+          { now },
+          { isSafeToCollect: noActiveOrRecovery },
+        );
+        if (garbage.refused) {
+          log(
+            `定期快照回收暂缓：过期修改集 ${String(expired.expired_changes.length)}，` +
+              '存在执行或恢复中的操作；下个周期重试。',
+          );
+        } else {
+          log(
+            `定期快照维护完成：过期修改集 ${String(expired.expired_changes.length)}，` +
+              `回收 ${String(garbage.collected.length)} 个快照对象；保留或跳过 ${String(garbage.skipped.length)} 个。`,
+          );
+        }
+      },
+      onError: () => log('定期快照维护未完成；未确认的快照保留供下个周期重试。'),
+    });
+    stack.push('定期快照维护', () => snapshotMaintenance.stop());
 
     // ---- 12a. 全局暂停（LWB-034）----
     //
@@ -489,11 +563,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
     // 恢复处理「上一次写落到了哪」，协调器处理「这一次由谁写」。
     //
     // 它在这里**不会自己跑起来** —— 没有后台循环，因此启动一个协调器
-    // 不产生任何写入。它今天唯一的入口是工具面的 `change_apply`，
-    // 而那个工具在本装配下**不可用**（`direct_write_enabled` 为假，
-    // 门禁全关）。接线在这里的意义是：当门禁通过、开关打开时，
-    // 需要补的不是「把一个执行器接到工具面上」这段新代码，而是
-    // 一个布尔值。
+    // 不产生任何写入。它今天唯一的入口是工具面的 `change_apply`；能否
+    // 作用于某根，由本地控制台保存的逐工作区 `propose` grant 决定。
     //
     // 写盘的人用 `createNativeApplier`（LWB-027 ~ LWB-029），
     // 探测上一个写手还活着没有用 `createProcessProbe` —— 两者都是
@@ -550,14 +621,12 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
       registry,
       blobs,
       budgets,
-      // 门禁全关 ⇒ 四个开关全关。`capabilityFlagsWith` 是纯函数，
-      // 因此「G0 未过 ⇒ 读也是关的」在这里不是一句注释，是一次计算。
-      //
+      // 外部验收状态只作 bridge_status 诊断；每个操作的真实权限由工作区 grant 决定。
       // `recovery_required` 是**逐工作区**的，而它取的是刚刚跑完的那次扫描
       // 的结论（`requiresRecovery` 每次现查状态库与写槽，不缓存 —— 恢复
       // 记录会在 daemon 运行期间被操作者处理掉，一个缓存会让「处理完了」
       // 直到下次重启才生效）。
-      capability_flags: capabilityFlagsWith(BRIDGE_GATES, (workspace) =>
+      capability_flags: capabilityFlagsWith((workspace) =>
         recovery.requiresRecovery(workspace),
       ),
       now: Date.now,
@@ -595,7 +664,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
       repos,
       blobs,
       budgets,
-      capability_flags: capabilityFlagsWith(BRIDGE_GATES, (workspace) =>
+      capability_flags: capabilityFlagsWith((workspace) =>
         recovery.requiresRecovery(workspace),
       ),
     });
@@ -618,11 +687,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
         version: DAEMON_VERSION,
         protocol_version: IPC_PROTOCOL_VERSION,
         gates: BRIDGE_GATES,
-        capability_flags: capabilityFlagsFrom(BRIDGE_GATES),
+        capability_flags: capabilityFlagsFrom(),
         // 控制台看到的是**同一份**推导（第三个参数同样是暂停的报告）：
         // 一个被紧急停用的服务，如果只有模型那一侧被告诉「停着」，
         // 而操作者面前的控制台还写着「运行中」，那这次停用就只做了一半。
-        limitations: limitationsOf(capabilityFlagsFrom(BRIDGE_GATES), BRIDGE_GATES, pause.status()),
+        limitations: limitationsOf(capabilityFlagsFrom(), BRIDGE_GATES, pause.status()),
         workspaces: repos.workspaces.list().length,
         connections: repos.connections.list().length,
         // 「当前是哪台机器」必须由**持有这台机器的那一侧**回答。
@@ -657,8 +726,6 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
     stack.push('数据管道', () => pipe.close());
 
     // ---- 16. 启动时清理 ----
-    const sweep = sweepExpired(repos, { now: new Date().toISOString() });
-
     // ---- 17. 启动令牌 ----
     const bootstrap = sessions.mintBootstrap();
 
@@ -668,7 +735,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
       store_root: layout.root,
       store_root_overridden: overridden,
       gates: BRIDGE_GATES,
-      capability_flags: capabilityFlagsFrom(BRIDGE_GATES),
+      capability_flags: capabilityFlagsFrom(),
       guard: { backend: capability.backend, reason: capability.resolved_backend_reason },
       pipe_name: pipe.described_name,
       control_origin: address.origin,
@@ -714,6 +781,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
       repos,
       sessions,
       recovery,
+      stop_requested: lock.stop_requested,
       mcpAdapterEnvironment: () => ({
         LWB_IPC_PIPE: pipe.pipe_name,
         LWB_IPC_SECRET_MCP_ADAPTER: ipcSecrets.value['mcp-adapter'],
@@ -852,9 +920,8 @@ function logSessionEvent(event: SessionEvent, log: LogSink): void {
 /**
  * 打印启动摘要。**这一份是整个进程里唯一一处「把所有事实一次说清」的输出。**
  *
- * 它的读者是做「为什么它不工作」排查的操作者，因此顺序按那个问题的
- * 排查方向排：先说地址（能不能进控制台），再说门禁（为什么工具面拒绝），
- * 最后说数据管道（适配器能不能连上）。
+ * 它的读者是排障操作者：先说控制台地址与 IPC 管道，再说连接、工作区和
+ * grant 数量、daemon 能力状态以及仍未完成的外部验收。
  */
 function printStartup(
   facts: StartupFacts,
@@ -870,13 +937,10 @@ function printStartup(
   );
   log(`模型侧连接：${String(facts.connections)} 条；已登记工作区：${String(facts.workspaces)} 个；授权行：${String(facts.grants)} 条。`);
   if (facts.grants === 0) {
-    // 这一条必须说出来，否则「工具面拒绝了一切」会被读成故障。
-    // 生产装配下没有任何接口能创建授权行（见 PROGRESS.md 的偏差记录），
-    // 因此这一行在真实部署里**每次启动**都会出现。
-    log('提示：授权行为 0，模型侧调用一律会被拒绝（CAPABILITY_NOT_GRANTED）。这不是故障。');
+    log('提示：尚未为任何工作区授予 ChatGPT 工具权限；控制台状态与工作区清单仍可使用。');
   }
   log(`原生护栏：${facts.guard.backend} —— ${facts.guard.reason}`);
-  log('能力开关（由门禁计算，全部为关是当前门禁下的**正确**结果）：');
+  log('daemon 支持的全局能力（具体目录访问仍由 workspace grant 控制）：');
   for (const [name, value] of Object.entries(facts.capability_flags)) {
     log(`  ${name} = ${String(value)}`);
   }

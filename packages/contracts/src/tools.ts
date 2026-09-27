@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 
-import type { ChangeApplyInput, ChangeGetInput, ChangeListInput, ChangePrepareInput, ChangeRevertPrepareInput } from './change.ts';
+import type { ChangeApplyInput, ChangeGetInput, ChangeListInput, ChangePrepareInput, ChangeRevertPrepareInput, FileCreateInput, FileEditInput } from './change.ts';
 import type { GitDiffInput, GitStatusInput } from './git.ts';
 import { LIMITS } from './limits.ts';
 import type { FileListInput } from './list.ts';
@@ -27,6 +27,8 @@ export const TOOL_NAMES = [
   'git_status',
   'git_diff',
   'change_prepare',
+  'file_create',
+  'file_edit',
   'change_get',
   'change_list',
   'change_apply',
@@ -228,6 +230,32 @@ const changePrepareInput = z.strictObject({
   items: z.array(changeItem).min(1).max(LIMITS.MAX_CHANGE_FILES),
 });
 
+const proposalSummary = z
+  .string()
+  .min(1)
+  .max(500)
+  .describe('本次修改的简要说明。这是不受信文案，只用于展示，不作为批准依据。');
+
+const fileCreateInput = z.strictObject({
+  workspace_id: workspaceId,
+  idempotency_key: idempotencyKey,
+  summary: proposalSummary,
+  path: relativePath,
+  content: z.string().describe('新文件的完整文本内容（UTF-8）。'),
+  newline: z.enum(['lf', 'crlf']).describe('写入使用的换行风格。'),
+  bom: z.boolean().describe('是否写入 UTF-8 BOM。'),
+});
+
+const fileEditInput = z.strictObject({
+  workspace_id: workspaceId,
+  idempotency_key: idempotencyKey,
+  summary: proposalSummary,
+  path: relativePath,
+  base_sha256: z.string().regex(/^[0-9a-f]{64}$/).describe('来自最新 file_read 的整个文件 SHA-256。'),
+  read_token: z.string().min(1).describe('来自最新 file_read 的读取票据。'),
+  edits: z.array(lineEdit).min(1).max(LIMITS.MAX_EDITS_PER_FILE).describe('互不重叠的精确行区间补丁。'),
+});
+
 const changeGetInput = z.strictObject({
   change_id: z.string().min(1).max(128).optional(),
   operation_id: z.string().min(1).max(128).optional(),
@@ -260,6 +288,8 @@ export const TOOL_INPUT_SCHEMAS = {
   git_status: gitStatusInput,
   git_diff: gitDiffInput,
   change_prepare: changePrepareInput,
+  file_create: fileCreateInput,
+  file_edit: fileEditInput,
   change_get: changeGetInput,
   change_list: changeListInput,
   change_apply: changeApplyInput,
@@ -286,6 +316,8 @@ interface ToolInputContracts {
   readonly git_status: GitStatusInput;
   readonly git_diff: GitDiffInput;
   readonly change_prepare: ChangePrepareInput;
+  readonly file_create: FileCreateInput;
+  readonly file_edit: FileEditInput;
   readonly change_get: ChangeGetInput;
   readonly change_list: ChangeListInput;
   readonly change_apply: ChangeApplyInput;
@@ -334,6 +366,8 @@ export const INPUT_CONTRACT_WITNESS: AllInputChecks = {
   git_status: true,
   git_diff: true,
   change_prepare: true,
+  file_create: true,
+  file_edit: true,
   change_get: true,
   change_list: true,
   change_apply: true,
@@ -418,15 +452,33 @@ export const TOOLS: readonly ToolDefinition[] = [
   },
   {
     name: 'change_prepare',
-    title: '生成待批准的修改集',
+    title: '准备多文件修改',
     description:
       '把一组确定的行级编辑/创建操作冻结为不可变修改集，返回 change_id 与摘要。' +
       '**本工具不会修改任何用户文件**，但它会创建持久化记录，因此不是只读操作。' +
       '调用前必须先 file_read 取得该文件最新的 sha256 与 read_token。' +
-      '返回 PENDING_APPROVAL 表示「等待本地操作者在控制台批准」，' +
-      '此时**绝不能**告诉用户文件已经保存。',
+      '若工作区已授予“文件修改”，随后调用 change_apply 即可执行，无需逐次本地批准；' +
+      '否则会返回授权拒绝。',
     inputSchema: TOOL_INPUT_SCHEMAS.change_prepare,
     annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  {
+    name: 'file_create',
+    title: '创建文本文件',
+    description:
+      '在已授予“文件修改”的工作区中直接创建一个新文本文件。目标必须不存在；冲突时绝不覆盖。' +
+      '创建经受保护执行器完成并返回逐文件回执；不需要逐次本机批准。',
+    inputSchema: TOOL_INPUT_SCHEMAS.file_create,
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+  },
+  {
+    name: 'file_edit',
+    title: '编辑文本文件',
+    description:
+      '基于最新 file_read 的完整读取票据、哈希与精确行区间，直接编辑一个已授权文本文件。' +
+      '冲突时不覆盖；修改经受保护执行器完成并返回逐文件回执，无需逐次本机批准。',
+    inputSchema: TOOL_INPUT_SCHEMAS.file_edit,
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
   {
     name: 'change_get',
@@ -447,11 +499,11 @@ export const TOOLS: readonly ToolDefinition[] = [
   },
   {
     name: 'change_apply',
-    title: '应用已获本地批准的修改集',
+    title: '应用修改集',
     description:
-      '应用一个**已经获得本地操作者批准**的修改集。' +
-      '本工具**不能**产生批准：没有有效本地批准时只返回 APPROVAL_REQUIRED。' +
-      '不接受任何 approved / force / user_id 参数，也不要尝试自行批准。' +
+      '在该工作区具有“文件修改”授权时应用一个修改集；无需逐次本机批准。' +
+      'daemon 会重算摘要、重新检查工作区代次和文件冲突，并以一次性执行记录交给受保护执行器。' +
+      '不接受任何 approved / force / user_id 参数。' +
       '只有 state=APPLIED 才代表已落盘。只要 in_progress 为 true（state 仍是 QUEUED / VALIDATING / APPLYING），' +
       '就表示本次调用没有等到结论，**绝不能**说文件已经保存 —— 请改用 change_get 查询，不要重复调用本工具。' +
       '重复调用本身是安全的：无论换不换幂等键，返回的都是该修改集唯一那条操作，不会产生第二次写入。',
@@ -462,7 +514,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'change_revert_prepare',
     title: '生成逆向修改集',
     description:
-      '针对一次已应用的修改生成**新的**逆向修改集；它同样需要本地批准，不会直接恢复文件。' +
+      '针对一次已应用的修改生成**新的**逆向修改集；它不会直接恢复文件，获授文件修改后可用 change_apply 执行。' +
       '若当前文件已被用户继续修改，会返回冲突而不是覆盖。' +
       'V1 不支持自动删除由插件创建的文件。',
     inputSchema: TOOL_INPUT_SCHEMAS.change_revert_prepare,

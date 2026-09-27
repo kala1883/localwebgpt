@@ -73,6 +73,7 @@ import {
   invalidateMany,
   invalidatePendingForConnection,
   invalidatePendingForWorkspace,
+  collectSnapshotGarbage,
   planSnapshotRetention,
   reclaimedChangeMetadata,
   revalidateExecutionBindings,
@@ -1301,11 +1302,7 @@ describe('LWB-024 F 组：清理不会删除运行中、待恢复或仍在撤销
       }
     }
 
-    const guard = snapshotGuard(repos, { now: NOW });
-    const report = await store.collectGarbage({
-      isSafeToCollect: () => true,
-      protect: (blob) => guard.protect(blob),
-    });
+    const report = await collectSnapshotGarbage(repos, store, { now: NOW }, { isSafeToCollect: () => true });
 
     assert.equal(report.refused, false);
     // 「只删了该删的那些」比「该删的删了」强：前者还排除了多删。

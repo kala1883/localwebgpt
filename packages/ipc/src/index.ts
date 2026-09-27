@@ -84,6 +84,8 @@ export {
   SingleInstanceError,
   acquireSingleInstance,
   isAddressInUse,
+  LOCAL_STOP_ACK,
+  LOCAL_STOP_COMMAND,
   releaseSingleInstance,
   type SingleInstanceOutcome,
 } from './single-instance.ts';

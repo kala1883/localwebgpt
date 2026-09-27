@@ -38,16 +38,17 @@ import { ALL_DEFAULT_RULES, classifyFile } from './rules.ts';
 // ---------------------------------------------------------------------------
 
 /**
- * 五层检查，也是「主因」的优先级顺序（**不是**短路的顺序 —— 五层都会跑）。
+ * 四项检查，也是「主因」的优先级顺序（**不是**短路的顺序 —— 四项都会跑）。
  *
  * 为什么 `generation` 排在 `file_rules` 前面：代次变了意味着**我们据以判定
  * 的那份策略快照可能已经过期**。此时报「命中了哪条文件规则」是在拿旧地图指路。
  * 先报代次，模型重新读取之后自然会撞上文件规则那条硬拒绝 —— 信息不丢，
  * 只是顺序更诚实。
  */
-export const POLICY_CHECKS = ['connection', 'workspace', 'generation', 'file_rules', 'approval'] as const;
+export const POLICY_CHECKS = ['connection', 'workspace', 'generation', 'file_rules'] as const;
 
-export type PolicyCheck = (typeof POLICY_CHECKS)[number];
+/** `approval` remains as a legacy type tag for old evidence readers; it is no longer a check. */
+export type PolicyCheck = (typeof POLICY_CHECKS)[number] | 'approval';
 
 /** 失败原因的稳定 slug。已发布的 slug 不可改名 —— 测试与审计按它比对。 */
 export type PolicyFailureReason =
@@ -68,12 +69,11 @@ export type PolicyFailureReason =
   | 'TICKET_GENERATION_MISSING'
   // 文件规则
   | 'HARD_DENY_RULE'
-  // 批准
   | 'APPROVAL_MISSING'
   | 'APPROVAL_EXPIRED'
   | 'APPROVAL_REVOKED'
   | 'APPROVAL_CONSUMED'
-  | 'APPROVAL_DIGEST_MISMATCH';
+  | 'APPROVAL_DIGEST_MISMATCH'
 
 export interface PolicyFailure {
   readonly check: PolicyCheck;
@@ -100,6 +100,7 @@ export const POLICY_ACTIONS = [
   'error_detail',
   'audit_export',
   'change_prepare',
+  'file_create',
   'change_revert_prepare',
   'change_apply',
 ] as const;
@@ -135,7 +136,7 @@ interface ActionSpec {
   readonly surface: EgressSurface;
   /** 属于提议链路：只读模式关闭的是**整条**链路，不只是写入那一步。 */
   readonly in_propose_chain: boolean;
-  /** 必须出示有效的本地批准。只有真正改动工作区的那一步需要。 */
+  /** Legacy metadata only; no model action requires a separate local approval. */
   readonly requires_approval: boolean;
   /** 必须绑定一次具体的票据代次。提议与写入都要，纯读取不需要。 */
   readonly requires_ticket: boolean;
@@ -152,16 +153,10 @@ interface ActionSpec {
  * 「MCP 适配器凭据不得包含其中任何一项」。因此**模型永远拿不到 `apply`**。
  * 如果 `change_apply` 要求 `apply`，模型调用它就只会得到 `NOT_AUTHORIZED`，
  * 而工具契约（`packages/contracts/src/tools.ts`）与 LWB-028 的验收标准要求的是：
- * 「模型单独调用应用工具只得到 `APPROVAL_REQUIRED`」。
+ * 逐工作区的 `propose` 授权本身就是本地操作者授予的写权限。
  *
- * 两者只能这样调和：**能力决定"能不能发起"，批准决定"能不能落地"**。
- *  - 模型（`propose`）：可以提议，也可以请求应用 —— 请求的应用在缺少本地批准时
- *    得到 `APPROVAL_REQUIRED`，这是 `await_human`，不是越权。
- *  - 控制面（`apply`）：控制台「批准并应用」入口持有的能力。
- *
- * 也就是说，**写入的授权来源自始至终是本地操作者的批准**，不是某个能力位；
- * 能力位管的是工具面。这与「模型绝不能自行批准」是一致的：这里放宽的
- * 只是"能发起请求"，没有放宽"能产生授权"。
+ * 因此 MCP 侧只检查同一工作区的 `propose` grant。一次性摘要/执行记录由 daemon
+ * 内部生成，用于执行器去重与审计，不是第二个用户审批开关。
  */
 export const ACTION_SPECS: Readonly<Record<PolicyAction, ActionSpec>> = {
   list: { capability: 'list', flag: 'read_enabled', surface: 'directory_listing', in_propose_chain: false, requires_approval: false, requires_ticket: false },
@@ -176,8 +171,10 @@ export const ACTION_SPECS: Readonly<Record<PolicyAction, ActionSpec>> = {
   // 审计导出只给本地控制面：它天然包含跨工作区、跨连接的记录。
   audit_export: { capability: 'control', flag: 'read_enabled', surface: 'audit_export', in_propose_chain: false, requires_approval: false, requires_ticket: false },
   change_prepare: { capability: 'propose', flag: 'proposal_enabled', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
+  // 创建不需要先读一个不存在的目标；daemon 仍会将当前工作区代次绑定进提案。
+  file_create: { capability: 'propose', flag: 'proposal_enabled', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: false },
   change_revert_prepare: { capability: 'propose', flag: 'proposal_enabled', surface: 'snapshot_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
-  change_apply: { capability: 'propose', flag: 'direct_write_enabled', surface: 'change_receipt', in_propose_chain: true, requires_approval: true, requires_ticket: true },
+  change_apply: { capability: 'propose', flag: 'direct_write_enabled', surface: 'change_receipt', in_propose_chain: true, requires_approval: false, requires_ticket: true },
 };
 
 // ---------------------------------------------------------------------------
@@ -231,24 +228,11 @@ export interface PresentedTicket {
   readonly policy_version: number | null;
 }
 
-/**
- * 批准视图。
- *
- * 刻意**没有** `approved: boolean` 字段。方案与 ADR 反复强调
- * 「`approved:true` / `user_id` / `session_id` / `conversation_label` /
- * `principal_id` 永远不能作为授权证据」，最彻底的落实方式不是逐条检查它们，
- * 而是让这种字段在本层**不存在**：一个从请求体里读到的布尔值，在这里
- * 没有任何途径变成 `state: 'ACTIVE'`。
- *
- * `state` 与两个摘要都来自 daemon 的批准状态库。
- */
+/** Legacy approval-ticket shape; ignored by the four-item policy decision. */
 export interface ApprovalView {
   readonly state: ApprovalState;
-  /** 被批准的那份修改集摘要。 */
   readonly change_digest: string;
-  /** 本次实际要应用的摘要。 */
   readonly presented_digest: string;
-  /** 到期时刻（epoch ms）。 */
   readonly expires_at: number;
 }
 
@@ -262,8 +246,8 @@ export interface ActionView {
    * 绝对路径由护栏按工作区根解析，本层拿不到、也构造不出工作区外的对象。
    */
   readonly path: string;
-  /** 仅 `writes === true` 的动作需要；其余动作传 null。 */
-  readonly approval: ApprovalView | null;
+  /** Legacy snapshot field. Workspace grants, not this view, authorize model writes. */
+  readonly approval?: ApprovalView | null;
 }
 
 export interface PolicyRequest {
@@ -319,7 +303,7 @@ export interface PolicyDecision {
   readonly primary: PolicyFailure | null;
   /** 全部失败项，按 `POLICY_CHECKS` 顺序。本地审计用，**不**整体返回给模型。 */
   readonly failures: readonly PolicyFailure[];
-  /** 五层检查各自的结论。长度恒为 5 —— 用来证明没有任何一层被短路跳过。 */
+  /** 四项检查各自的结论。顺序与 `POLICY_CHECKS` 一致。 */
   readonly checks: readonly { readonly check: PolicyCheck; readonly passed: boolean }[];
   readonly obligations: EgressObligations;
   /** 文件规则的判定结果。`search_exclude` 只是性能排除，不构成拒绝。 */
@@ -499,80 +483,6 @@ function fileRuleFailures(req: PolicyRequest, verdict: RuleVerdict): PolicyFailu
   ];
 }
 
-function approvalFailures(req: PolicyRequest): PolicyFailure[] {
-  const spec = ACTION_SPECS[req.action.action];
-  if (!spec.requires_approval) return [];
-
-  const approval = req.action.approval;
-  if (approval === null) {
-    return [
-      {
-        check: 'approval',
-        reason: 'APPROVAL_MISSING',
-        error_code: 'APPROVAL_REQUIRED',
-        detail: '尚无有效的本地批准；批准只能由本地操作者在控制台给出，模型不能自行批准。',
-      },
-    ];
-  }
-
-  const out: PolicyFailure[] = [];
-
-  switch (approval.state) {
-    case 'EXPIRED':
-      out.push({
-        check: 'approval',
-        reason: 'APPROVAL_EXPIRED',
-        error_code: 'APPROVAL_EXPIRED',
-        detail: '本地批准已过期。',
-      });
-      break;
-    case 'REVOKED':
-      out.push({
-        check: 'approval',
-        reason: 'APPROVAL_REVOKED',
-        error_code: 'APPROVAL_EXPIRED',
-        detail: '本地批准已被操作者撤销。',
-      });
-      break;
-    case 'CONSUMED':
-      out.push({
-        check: 'approval',
-        reason: 'APPROVAL_CONSUMED',
-        error_code: 'CHANGE_STATE_INVALID',
-        detail: '该批准已被使用过；一个修改集只能对应一次写入操作。',
-      });
-      break;
-    case 'ACTIVE':
-      break;
-    default: {
-      // 穷尽性检查：新增 ApprovalState 取值时这里会编译失败。
-      const never: never = approval.state;
-      throw new Error(`未处理的批准状态：${String(never)}`);
-    }
-  }
-
-  // 摘要绑定（I06）：批准绑定的必须是**这一份**内容。
-  if (approval.change_digest !== approval.presented_digest) {
-    out.push({
-      check: 'approval',
-      reason: 'APPROVAL_DIGEST_MISMATCH',
-      error_code: 'APPROVAL_REQUIRED',
-      detail: '本次要应用的内容与获批内容不是同一份摘要；批准不适用于它。',
-    });
-  }
-
-  if (approval.expires_at <= req.now) {
-    out.push({
-      check: 'approval',
-      reason: 'APPROVAL_EXPIRED',
-      error_code: 'APPROVAL_EXPIRED',
-      detail: '本地批准已到期（执行开始前须重新校验有效期）。',
-    });
-  }
-
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // 判定
 // ---------------------------------------------------------------------------
@@ -587,13 +497,13 @@ export function decide(req: PolicyRequest): PolicyDecision {
   const rules = req.rules ?? ALL_DEFAULT_RULES;
   const rule_verdict = classifyFile(req.action.path, rules);
 
-  // 五层全跑，不短路。顺序只影响「谁是主因」。
+  // 四项检查全跑，不短路。顺序只影响「谁是主因」。
   const byCheck: Readonly<Record<PolicyCheck, PolicyFailure[]>> = {
     connection: connectionFailures(req),
     workspace: workspaceFailures(req),
     generation: generationFailures(req),
     file_rules: fileRuleFailures(req, rule_verdict),
-    approval: approvalFailures(req),
+    approval: [],
   };
 
   const failures: PolicyFailure[] = [];

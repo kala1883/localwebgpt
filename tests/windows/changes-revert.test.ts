@@ -547,8 +547,8 @@ describeWindows('LWB-031 真 NTFS：安全撤销提议', () => {
 
     assert.notEqual(proposal.change_id, r.change_id, '撤销建的是新的修改集');
     assert.notEqual(proposal.digest, sourceBefore.digest, '摘要必须不同：它绑定的字节不同');
-    assert.equal(proposal.state, 'PENDING_APPROVAL', '**不直接恢复**：它要靠自己的本地批准');
-    assert.equal(proposal.approval_required, true);
+    assert.equal(proposal.state, 'PENDING_APPROVAL', '**不直接恢复**：需再调用 change_apply');
+    assert.equal(proposal.approval_required, false);
     assert.equal(proposal.workspace_modified, false, '提议阶段工作区一个字节都没变');
     assert.equal(data.local_action_required, false);
     assert.equal(data.local_action_reason, null);

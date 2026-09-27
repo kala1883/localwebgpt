@@ -14,6 +14,12 @@
  * 「持有者是否还活着」，而那需要 PID + 启动时刻之类的启发式，会被 PID 复用骗过。
  * 命名管道由**操作系统**在进程退出（含崩溃、被强杀）时释放，没有过期与复用问题。
  *
+ * ## 单实例管道也承载固定停止请求
+ *
+ * 除互斥外，它只识别 `LOCAL_STOP_COMMAND` 这一条窄命令；其它数据交回调用方
+ * 关闭。SID 摘要只负责定位，Windows 命名管道 DACL 才是系统层访问控制。
+ * 不接受 PID、进程名或任意控制指令。
+ *
  * ## 但绑定成功 ≠ 可以写
  *
  * 这里只负责**互斥**。允许写还要看租约（`lease.ts`）。
@@ -26,8 +32,18 @@ import { createServer, type Server } from 'node:net';
 import { controlPipeName, describePipe } from './pipe-name.ts';
 
 export type SingleInstanceOutcome =
-  | { readonly kind: 'acquired'; readonly server: Server; readonly pipe_name: string }
+  | {
+      readonly kind: 'acquired';
+      readonly server: Server;
+      readonly pipe_name: string;
+      /** Resolves only after the current user's explicit stop command is accepted. */
+      readonly stop_requested: Promise<void>;
+    }
   | { readonly kind: 'occupied'; readonly reason: string };
+
+/** Narrow control-pipe command; it can stop only this user's LocalWebGPT daemon. */
+export const LOCAL_STOP_COMMAND = 'LWB_STOP\n';
+export const LOCAL_STOP_ACK = 'STOPPING\n';
 
 export class SingleInstanceError extends Error {
   constructor(message: string) {
@@ -48,17 +64,57 @@ export function isAddressInUse(error: unknown): boolean {
 /**
  * 绑定控制管道，以此获得单实例互斥。
  *
- * @param onConnection 每个连上来的调用者；**握手在调用方内部完成**，
- *   本函数刻意不碰任何认证逻辑，避免把「互斥」与「认证」混成一件事。
+ * @param onConnection 收到停止命令以外的数据或空闲连接时的处理器。
  */
 export async function acquireSingleInstance(options: {
   readonly userSid: string;
   readonly onConnection: (socket: import('node:net').Socket) => void;
 }): Promise<SingleInstanceOutcome> {
   const pipeName = controlPipeName(options.userSid);
+  let resolveStop!: () => void;
+  const stopRequested = new Promise<void>((resolve) => {
+    resolveStop = resolve;
+  });
 
   const server = createServer((socket) => {
-    options.onConnection(socket);
+    let received = Buffer.alloc(0);
+    let handled = false;
+    const stopBytes = Buffer.from(LOCAL_STOP_COMMAND, 'utf8');
+    let idleTimer: NodeJS.Timeout | undefined;
+
+    const rejectConnection = (): void => {
+      if (handled) return;
+      handled = true;
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      options.onConnection(socket);
+    };
+
+    idleTimer = setTimeout(rejectConnection, 1_000);
+    idleTimer.unref();
+
+    socket.on('data', (chunk: Buffer) => {
+      if (handled) return;
+      received = Buffer.concat([received, chunk]);
+      if (
+        received.length > stopBytes.length ||
+        !stopBytes.subarray(0, received.length).equals(received)
+      ) {
+        rejectConnection();
+        return;
+      }
+      if (!received.equals(stopBytes)) return;
+
+      handled = true;
+      clearTimeout(idleTimer);
+      socket.end(LOCAL_STOP_ACK);
+      resolveStop();
+    });
+
+    socket.once('error', () => rejectConnection());
+    socket.once('close', () => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      if (!handled) rejectConnection();
+    });
   });
 
   return await new Promise<SingleInstanceOutcome>((resolve, reject) => {
@@ -81,7 +137,7 @@ export async function acquireSingleInstance(options: {
 
     const onListening = (): void => {
       server.removeListener('error', onError);
-      resolve({ kind: 'acquired', server, pipe_name: pipeName });
+      resolve({ kind: 'acquired', server, pipe_name: pipeName, stop_requested: stopRequested });
     };
 
     server.once('error', onError);

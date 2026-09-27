@@ -32,6 +32,9 @@ export interface OperationDefinition {
 
 export class OperationRegistry {
   readonly #operations = new Map<string, OperationDefinition>();
+  readonly #idleWaiters = new Set<() => void>();
+  #active = 0;
+  #draining = false;
 
   register(definition: OperationDefinition): void {
     if (this.#operations.has(definition.name)) {
@@ -48,5 +51,39 @@ export class OperationRegistry {
 
   names(): readonly string[] {
     return [...this.#operations.keys()].sort();
+  }
+
+  /** Execute one registered operation while accounting for orderly shutdown. */
+  async invoke(
+    definition: OperationDefinition,
+    input: unknown,
+    context: RequestContext,
+  ): Promise<unknown> {
+    if (this.#draining) throw new Error('本地服务正在关闭，拒绝新操作。');
+    this.#active += 1;
+    try {
+      return await definition.handler(input, context);
+    } finally {
+      this.#active -= 1;
+      if (this.#active === 0) {
+        for (const resolve of this.#idleWaiters) resolve();
+        this.#idleWaiters.clear();
+      }
+    }
+  }
+
+  /** Stop admitting operations before a runtime begins draining existing work. */
+  beginDrain(): void {
+    this.#draining = true;
+  }
+
+  /** Resolve after all handlers already admitted by `invoke` have settled. */
+  waitForIdle(): Promise<void> {
+    if (this.#active === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => this.#idleWaiters.add(resolve));
+  }
+
+  get activeCount(): number {
+    return this.#active;
   }
 }

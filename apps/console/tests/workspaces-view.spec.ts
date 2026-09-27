@@ -125,9 +125,9 @@ describe('A 组 · 暴露摘要在最上面，且两句话都说（验收标准 
     assert.equal(headline.attributes('data-exposed'), 'false');
     assert.equal(
       headline.text(),
-      '已登记 3 个根，但当前没有根同时满足连接、目录授权与全局能力门禁；内容工具不可用。',
+      '已登记 3 个根，但当前没有根同时满足连接与目录授权；内容工具不可用。',
     );
-    assert.match(wrapper.find('[data-testid="capability-note"]').text(), /读取能力当前关闭/);
+    assert.match(wrapper.find('[data-testid="capability-note"]').text(), /本机读取功能状态未知/);
   });
 
   it('A4 读取打开时通栏改成「读取能力打开中」，且摘要是三行', () => {
@@ -144,9 +144,9 @@ describe('A 组 · 暴露摘要在最上面，且两句话都说（验收标准 
 
     const lines = wrapper.findAll('[data-testid="exposure-line"]').map((line) => line.text());
     assert.equal(lines.length, 3);
-    assert.match(lines[0] ?? '', /全局读取能力当前\*\*打开\*\*/);
+    assert.match(lines[0] ?? '', /读取工具可用/);
     assert.match(lines[0] ?? '', /ChatGPT 连接已启用/);
-    assert.match(lines[1] ?? '', /全局提议门禁当前关闭/);
+    assert.match(lines[1] ?? '', /文件修改授权/);
     assert.match(lines[2] ?? '', /没有被移除的登记/);
   });
 
@@ -192,7 +192,7 @@ describe('A 组 · 暴露摘要在最上面，且两句话都说（验收标准 
     assert.equal(rows[0]?.find('[data-testid="ws-root"]').text(), 'D:\\code\\repo');
     assert.equal(rows[1]?.find('[data-testid="ws-root"]').text(), 'D:\\code\\a.txt');
     assert.equal(rows[0]?.find('[data-testid="ws-mode"]').text(), '只读');
-    assert.equal(rows[1]?.find('[data-testid="ws-mode"]').text(), '只读 + 提议（需本地批准）');
+    assert.equal(rows[1]?.find('[data-testid="ws-mode"]').text(), '读取 + 修改（逐目录授权）');
     assert.match(rows[0]?.find('[data-testid="ws-ids"]').text() ?? '', /目录 · 代次 1 · 策略版本 1/);
     assert.match(rows[1]?.find('[data-testid="ws-ids"]').text() ?? '', /单个文件 · 代次 4 · 策略版本 2/);
   });
@@ -229,26 +229,17 @@ describe('B 组 · 目录 / 单文件、两种模式与各自的说明（执行�
     // 这句话必须出现在**选只读的时候**：一个认为只读就是安全的用户
     // 不会去读页面底部的说明。
     assert.match(risks[0]?.text() ?? '', /只读不等于不出本机/);
-    assert.match(risks[1]?.text() ?? '', /每次实际应用仍需你在本机核对差异并批准/);
+    assert.match(risks[1]?.text() ?? '', /直接创建和编辑文本文件/);
+    assert.match(risks[1]?.text() ?? '', /不会逐次等待本机批准/);
   });
 
-  it('B2 提议模式的风险说明里那句「直写」由门禁现算，不是写死的', () => {
-    const off = mountView({ gates: null, flags: null });
+  it('B2 风险说明只依赖服务能力读数，不再由平台签署状态锁死', () => {
+    const off = mountView({ flags: null });
     const offRisk = off.findAll('[data-testid="mode-risk"]')[1]?.text() ?? '';
-    assert.match(offRisk, /当前关闭（门禁读数缺失，按未通过处理。）/);
+    assert.match(offRisk, /本机服务能力状态暂时不可用/);
 
-    // 喂一份「门禁全过 + 开关打开」的读数，同一句变成「当前已打开」——
-    // 写死文案的实现在这里会说谎。
-    const on = mountView({
-      gates: {
-        g0_platform_verified: true,
-        native_guard_verified: true,
-        compatibility_section3_passed: true,
-        g4_concurrency_fault_passed: true,
-      },
-      flags: { ...FLAGS_OFF, direct_write_enabled: true },
-    });
-    assert.match(on.findAll('[data-testid="mode-risk"]')[1]?.text() ?? '', /当前已打开。/);
+    const on = mountView({ flags: { ...FLAGS_OFF, direct_write_enabled: true } });
+    assert.match(on.findAll('[data-testid="mode-risk"]')[1]?.text() ?? '', /直接创建和编辑文本文件/);
   });
 
   it('B3 提议模式不勾风险说明就提交不了，且理由逐条在列', async () => {

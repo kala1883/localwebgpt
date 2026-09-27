@@ -223,7 +223,7 @@ export class ConnectionSession {
 
     try {
       const result = await this.#withTimeout(
-        Promise.resolve(definition.handler(message['input'], context)),
+        this.#options.operations.invoke(definition, message['input'], context),
         requestId,
         operationName,
       );

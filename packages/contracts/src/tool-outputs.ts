@@ -663,9 +663,9 @@ export const CHANGE_REVERT_PREPARE_OUTPUT = okEnvelopeOf(changeRevertPrepareData
  * **编译错误**：下面那张表的类型是 `Record<已实现的名字, …>`，
  * 两个方向都少一个多一个都不行。
  *
- * 提议链路的三个工具（`change_prepare` / `change_get` / `change_list`）
+ * 提议链路工具（`change_prepare` / `change_get` / `change_list`）
  * 在 LWB-025 进来，写入那两个（`change_apply` / `change_revert_prepare`）
- * 在 LWB-032 进来 —— 到此 `TOOL_NAMES` 的 12 个工具**全部**有了实现与输出
+ * 在 LWB-032 进来；`file_create` / `file_edit` 是单文件入口扩展 —— 到此 `TOOL_NAMES` 的 14 个工具**全部**有了实现与输出
  * 契约。
  *
  * ## 「全都在表里」不等于「模型能用」
@@ -685,6 +685,8 @@ export const IMPLEMENTED_TOOL_NAMES = [
   'git_status',
   'git_diff',
   'change_prepare',
+  'file_create',
+  'file_edit',
   'change_get',
   'change_list',
   'change_apply',
@@ -707,6 +709,8 @@ export const TOOL_OUTPUT_SCHEMAS: Readonly<Record<ImplementedToolName, z.ZodObje
   git_status: GIT_STATUS_OUTPUT,
   git_diff: GIT_DIFF_OUTPUT,
   change_prepare: CHANGE_PREPARE_OUTPUT,
+  file_create: CHANGE_APPLY_OUTPUT,
+  file_edit: CHANGE_APPLY_OUTPUT,
   change_get: CHANGE_GET_OUTPUT,
   change_list: CHANGE_LIST_OUTPUT,
   change_apply: CHANGE_APPLY_OUTPUT,

@@ -315,6 +315,8 @@ async function expectProtocolError(
  */
 const NOT_READ_ONLY: Readonly<Partial<Record<ToolName, string>>> = {
   change_prepare: '不改文件，但会建立修改集与快照，并占用操作者的待批准列表',
+  file_create: '在已授权目录直接创建新文本文件',
+  file_edit: '基于最新读取票据在已授权目录直接编辑文本文件',
   change_revert_prepare: '不改文件，但会建立一份新的修改集与快照，同样需要本地批准',
   change_apply: '按本地批准写入用户文件',
 };
@@ -438,7 +440,7 @@ describe('工具清单（tools/list）', () => {
     // `IMPLEMENTED_TOOL_NAMES` 里**的工具 —— 也就是「契约里先加了名字，
     // 实现还没跟上」那一格。
     //
-    // LWB-032 之后那一格是**空的**：12 个契约工具全部有实现与输出契约。
+    // LWB-032 之后那一格是**空的**：14 个契约工具全部有实现与输出契约。
     // 因此这条用例无法再用真名字构造出来，而它守的那段代码仍然在
     // （将来加第 13 个工具时它会重新有用）。这里不删用例、也不伪造一个
     // 假分支去绕过类型，而是把那句「空集」变成一个**会失败的断言**：
@@ -611,13 +613,15 @@ describe('tools/call 转发（真 daemon 操作表 + 真客户端）', () => {
     // 「表里写了这些名字」。因此断言写成「跑通的 ∪ 明确排除的 = 全部已实现」，
     // 而排除项必须在这里逐条给出理由。
     //
-    // 排除的两个是**写入那两个**：它们的入参只能从一次成功的应用里取，
+    // 排除的是直接写入工具：它们的结果只能从真实护栏执行后得到，
     // 而应用要真的写进用户文件 —— 本装置的后端（`makeFixtureOps`）
     // 在写方法上直接抛「写操作不在工具面范围内」，这是刻意的：
     // 真实的句柄级复核、`CREATE_NEW`、刷盘与回读只有真护栏做得到。
     // 因此它们由 `tests/windows/daemon-apply-tool.test.ts` 在**真 NTFS**
     // 上覆盖，而不是在这里被一个桩假装覆盖。
     const NEEDS_REAL_GUARD: Readonly<Partial<Record<ToolName, string>>> = {
+      file_create: '单文件创建会直接写入',
+      file_edit: '单文件编辑会直接写入',
       change_apply: '要真的写进用户文件',
       change_revert_prepare: '入参只能来自一次已应用且已终结的修改集',
     };
@@ -691,6 +695,67 @@ describe('tools/call 转发（真 daemon 操作表 + 真客户端）', () => {
   });
 });
 
+describe('单文件直接写工具的 MCP 输出契约', () => {
+  it('file_create 与 file_edit 都把 APPLIED 逐文件回执通过 MCP outputSchema 返回', async () => {
+    const receipt = {
+      change_id: 'change-direct-write',
+      operation_id: 'operation-direct-write',
+      state: 'APPLIED',
+      in_progress: false,
+      recovered: false,
+      files: [{
+        path: 'src/example.txt',
+        state: 'VERIFIED',
+        before_sha256: null,
+        after_sha256: 'a'.repeat(64),
+        error_code: null,
+      }],
+      tests_run: false,
+      message: '已逐文件核验。',
+    };
+    const caller = new ScriptedCaller((operation) =>
+      operation === TOOL_CATALOG_OPERATION
+        ? ipcOk(catalogEnvelope(IMPLEMENTED_TOOL_NAMES))
+        : ipcOk(okEnvelope(receipt, 'req_1')),
+    );
+    const adapter = await makeAdapter(caller);
+    try {
+      const common = {
+        workspace_id: 'workspace-1',
+        summary: 'direct-write adapter contract',
+        path: 'src/example.txt',
+      };
+      const created = await adapter.client.callTool({
+        name: 'file_create',
+        arguments: {
+          ...common,
+          idempotency_key: 'adapter-create-key',
+          content: 'created',
+          newline: 'lf',
+          bom: false,
+        },
+      });
+      const edited = await adapter.client.callTool({
+        name: 'file_edit',
+        arguments: {
+          ...common,
+          idempotency_key: 'adapter-edit-key',
+          base_sha256: 'b'.repeat(64),
+          read_token: 'fresh-read-token',
+          edits: [{ start_line: 1, end_line_exclusive: 2, old_lines: ['old'], new_lines: ['new'] }],
+        },
+      });
+      assert.notEqual(created.isError, true, textOf(created));
+      assert.notEqual(edited.isError, true, textOf(edited));
+      assert.deepEqual(caller.calls.map((call) => call.operation), ['file_create', 'file_edit']);
+      assert.equal((created.structuredContent as { data?: { state?: string } }).data?.state, 'APPLIED');
+      assert.equal((edited.structuredContent as { data?: { files?: readonly unknown[] } }).data?.files?.length, 1);
+    } finally {
+      await adapter.close();
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 协议错误
 // ---------------------------------------------------------------------------
@@ -716,7 +781,7 @@ describe('协议错误（不是工具结果）', () => {
     // 这条用例原本问的是「契约里有名字、但本版本没实现 ⇒ 适配器转发、
     // daemon 回 `UNKNOWN_OPERATION` ⇒ 翻成 `UNSUPPORTED_OPERATION`」。
     //
-    // LWB-032 之后**那个前提没有了**：12 个契约工具全部有实现，
+    // LWB-032 之后**那个前提没有了**：14 个契约工具全部有实现，
     // 而 daemon 的操作表就是 `IMPLEMENTED_TOOL_NAMES` —— 于是没有任何一个
     // 合法工具名能走到 `UNKNOWN_OPERATION`。那条映射本身仍然被下面
     // 「IPC 失败 → 模型可见载荷」的 `CASES` 表逐条钉着，没有漏。

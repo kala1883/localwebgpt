@@ -222,24 +222,20 @@ describeWindows('装配根', () => {
     }
   }
 
-  it('启动成功，四个能力开关全部关闭，且事实如实回报', async (context) => {
+  it('启动成功，全局能力可用；外部验收状态单独如实回报', async (context) => {
     if (skipIfBlocked(context)) return;
     const home = await freshHome();
     const { lines, sink } = collector();
     const runtime = await start(context, home, sink);
 
-    // 未通过 G0 时不得进入真实目录联调：默认值就是这个结论的执行体。
-    // 五个字段逐一列出，而不是断言「四个 false」—— 少列一个字段的断言
-    // 会在契约新增开关时**继续通过**，而那时它已经不再证明全部关闭了。
     assert.deepEqual(runtime.facts.capability_flags, {
-      read_enabled: false,
-      git_enabled: false,
-      proposal_enabled: false,
-      direct_write_enabled: false,
-      // 需要人工恢复：今天恒为 false（没有恢复日志，已记录在案的偏差）。
-      // 列出来是为了让「契约新增了一个开关」变成一次断言失败。
+      read_enabled: true,
+      git_enabled: true,
+      proposal_enabled: true,
+      direct_write_enabled: true,
       recovery_required: false,
     });
+    assert.equal(runtime.facts.gates.g0_platform_verified, false, '网页账号验收仍是单独的未验证事实');
     assert.equal(runtime.facts.store_root_overridden, true, '临时根必须自述为「被覆盖」。');
     assert.equal(runtime.facts.guard.backend.length > 0, true);
     assert.equal(runtime.facts.version, DAEMON_VERSION);

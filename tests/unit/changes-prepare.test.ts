@@ -997,7 +997,7 @@ describe('LWB-020 上限与形态', () => {
       inputWith([editItem('README.md', original, [{ start_line: 2, end_line_exclusive: 3, old_lines: ['第二行'], new_lines: ['待批准'] }])], 'k-state'),
     );
     assert.equal(result.state, 'PENDING_APPROVAL');
-    assert.equal(result.approval_required, true);
+    assert.equal(result.approval_required, false);
     assert.equal(repos.changes.requireById(result.change_id).state, 'PENDING_APPROVAL');
     assert.equal(repos.approvals.findActive(result.change_id), null, 'prepare 不得产生任何批准记录');
     assert.equal(repos.operations.findByChangeId(result.change_id), null, 'prepare 不得产生任何执行记录');
@@ -1017,7 +1017,7 @@ describe('LWB-020 上限与形态', () => {
 
     const result = await run(payload);
     assert.equal(result.state, 'PENDING_APPROVAL');
-    assert.equal(result.approval_required, true);
+    assert.equal(result.approval_required, false);
     assert.equal(result.workspace_modified, false);
     assert.equal(repos.approvals.findActive(result.change_id), null);
   });
@@ -1040,7 +1040,7 @@ describe('LWB-020 上限与形态', () => {
     );
     assert.equal(result.workspace_modified, false);
     assert.match(result.next_action, /尚未写入任何文件/);
-    assert.match(result.next_action, /模型与 MCP 通道都无法批准/);
+    assert.match(result.next_action, /授予文件修改权限/);
     assert.equal(result.short_code, shortCodeOf(result.digest));
     assert.equal(result.summary, '测试用摘要');
     assert.equal(result.workspace_id, WORKSPACE);

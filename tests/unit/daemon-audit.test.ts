@@ -101,6 +101,16 @@ describe('LWB-018 · 文件范围提取', () => {
     ]);
   });
 
+  it('单文件创建/编辑提案成功时记录出站文件路径，失败时记录被请求目标', () => {
+    const proposal = { files: [{ path: 'src/new.ts' }] };
+    const expected = [{ path: 'src/new.ts', start_line: null, end_line: null, delivered: true }];
+    assert.deepEqual(extractFileAccess('file_create', proposal), expected);
+    assert.deepEqual(extractFileAccess('file_edit', proposal), expected);
+    const denied = [{ path: 'src/denied.ts', start_line: null, end_line: null, delivered: false }];
+    assert.deepEqual(targetFileAccess('file_create', { path: 'src/denied.ts' }), denied);
+    assert.deepEqual(targetFileAccess('file_edit', { path: 'src/denied.ts' }), denied);
+  });
+
   it('不碰工作区的两个工具记零行', () => {
     assert.deepEqual(extractFileAccess('bridge_status', { paused: false }), []);
     assert.deepEqual(extractFileAccess('workspace_list', { workspaces: [] }), []);

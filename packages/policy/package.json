@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "策略判定：五层能力交集、硬拒绝与搜索排除分离、操作者豁免。纯逻辑，不触碰文件系统。",
+  "description": "策略判定：连接/工作区/代次/文件规则授权、硬拒绝与搜索排除、操作者豁免。纯逻辑，不触碰文件系统。",
   "exports": {
     ".": "./src/index.ts",
     "./*": "./src/*.ts"

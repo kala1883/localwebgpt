@@ -7,7 +7,7 @@
  *
  * | 名字 | 谁绑 | 作用 |
  * | --- | --- | --- |
- * | `controlPipeName(sid)` | `acquireSingleInstance` | **只**是互斥量：绑定成功即「本用户下没有第二个 daemon」 |
+ * | `controlPipeName(sid)` | `acquireSingleInstance` | 互斥量与固定本机停止命令 |
  * | `dataPipeName(sid)` | 本模块 | 真正跑协议：适配器与控制台在这里握手、发请求 |
  *
  * 合成一条会让两件相反的事在日志里长得一样：「第二个实例被拒绝启动」
@@ -18,12 +18,10 @@
  * 第二个实例因此不会先打开状态库、写完启动日志、再发现自己该退出 ——
  * 那段时间里它已经动过用户的库了。
  *
- * ## 控制管道上来的连接一律断开
+ * ## 控制管道与数据管道分开维护
  *
- * 它今天不承载任何协议。一个连上去却收不到任何字节的连接会**挂住**，
- * 而挂住的表现是「daemon 没反应」—— 排查方向被引到进程是否活着上面。
- * 主动断开至少把「这条管道不说话」这件事说清楚。将来如果要在这条管道上
- * 服务什么，改的是这里，而不是管道名的含义。
+ * 固定停止请求由 `single-instance.ts` 识别；这里仅服务 MCP/控制台数据协议，
+ * 并在关闭时先拒绝新操作、等待已进入的处理器完成，再断开 socket。
  *
  * ## 数据管道绑不上就拒绝启动
  *
@@ -129,14 +127,17 @@ export async function startDataPipe(options: DataPipeOptions): Promise<DataPipe>
       return sockets.size;
     },
     async close() {
-      // 先断连接再关监听：`server.close()` 只停止接受**新**连接，
-      // 已建立的 socket 会让进程继续活着，于是「退出后连接确实不可调用」
-      // 这句话要等到所有适配器自己退出才成立。
+      // 先关监听并拒绝新操作，再等已进入的 IPC/控制面 handler 全部结束；
+      // 否则下面关闭 SQLite / 原生助手时，change_apply 可能仍在运行。
+      const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
+      options.operations.beginDrain();
+      await options.operations.waitForIdle();
+
+      // 活跃请求都已落到明确结果后才断开闲置 socket。server.close 还要等
+      // 这些 socket 关完才 resolve，因此保留它的 Promise 到这里再 await。
       for (const socket of sockets) socket.destroy();
       sockets.clear();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await serverClosed;
     },
   };
 }

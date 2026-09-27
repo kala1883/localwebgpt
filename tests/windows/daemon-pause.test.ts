@@ -55,7 +55,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { approveChange } from '@lwb/approvals';
 import { answerToolCall } from '@lwb/audit';
 import { isExecutionChangeState, operationReceiptFor } from '@lwb/changes';
 import type {
@@ -269,17 +268,6 @@ describeWindows('LWB-034 真 NTFS：安全暂停与紧急停用', () => {
     return prepared;
   }
 
-  /** 本地批准。`harness.now()` 那口钟的理由见 LWB-032 的说明（两只表要对得上）。 */
-  function approve(harness: ToolHarness, prepared: ChangePrepareData, actor: string): void {
-    approveChange({
-      repos: harness.repos,
-      change_id: prepared.change_id,
-      digest: prepared.digest,
-      actor,
-      now: new Date(harness.now()).toISOString(),
-    });
-  }
-
   const applyTool = (
     harness: ToolHarness,
     changeId: string,
@@ -362,7 +350,6 @@ describeWindows('LWB-034 真 NTFS：安全暂停与紧急停用', () => {
       ],
       idem('s1'),
     );
-    approve(harness, prepared, 'console:lwb-034-真盘测试');
 
     // --- 步骤 3 的另一半：已经交出去的内容收不回来 -------------------------
     // 先做一次**真的交出去过**的读取。它在审计里留下一条 `delivered = 1`
@@ -580,7 +567,6 @@ describeWindows('LWB-034 真 NTFS：安全暂停与紧急停用', () => {
       ],
       idem('s1b'),
     );
-    approve(harness, prepared, 'console:lwb-034-真盘测试');
 
     press = () => {
       inFlight.operation_id = harness.repos.operations.findByChangeId(prepared.change_id)?.id ?? null;
@@ -623,8 +609,7 @@ describeWindows('LWB-034 真 NTFS：安全暂停与紧急停用', () => {
     const file = absOf(harness, 'note.txt');
 
     const prepared = await propose(harness, [{ relative: 'note.txt', at: '原样', to: '改过' }], idem('s2'));
-    approve(harness, prepared, 'console:lwb-034-真盘测试');
-    assert.equal(harness.repos.changes.requireById(prepared.change_id).state, 'APPROVED');
+    assert.equal(harness.repos.changes.requireById(prepared.change_id).state, 'PENDING_APPROVAL');
     const untouched = await fingerprint(file);
 
     const console = consoleOf(harness);
@@ -660,17 +645,14 @@ describeWindows('LWB-034 真 NTFS：安全暂停与紧急停用', () => {
       assert.equal(replay.data.state, 'INVALIDATED', '重放只能如实回答「这条已经作废」');
       assert.equal(replay.data.in_progress, false);
     } else {
-      // 错误码是**粗粒度**的：`APPROVAL_REVOKED` 与「过期」共用
-      // `APPROVAL_EXPIRED` 这个码（`gateReasonToErrorCode` 的说明：
-      // 与 `packages/policy` 的 `approvalFailures` 逐条对齐）。
-      // 因此这里断言的是**原因**，它才是「为什么不能用」那句话。
-      assert.equal(replay.error.code, 'APPROVAL_EXPIRED', `重放的实际回答：${replay.error.code}`);
+      // 暂停作废的是待执行修改集本身；旧提案不能在恢复服务后复活。
+      assert.equal(replay.error.code, 'CHANGE_STATE_INVALID', `重放的实际回答：${replay.error.code}`);
       assert.equal(
         replay.error.details?.['reason'],
-        'APPROVAL_REVOKED',
-        '原因必须是「批准被撤销」，而不是「时间到了」—— 两者对操作者意味着完全不同的下一步',
+        'NOT_AWAITING_DECISION',
+        '原因必须是旧修改集已经失效，而不是权限不足',
       );
-      assert.match(replay.error.message, /撤销/, '给人看的那句话也要说是撤销，不能只说过期');
+      assert.match(replay.error.message, /不接受新的决定/);
     }
     assert.equal(await fingerprint(file), untouched, '被作废的批准不得改动文件');
     assert.equal(
@@ -682,7 +664,6 @@ describeWindows('LWB-034 真 NTFS：安全暂停与紧急停用', () => {
     // --- 反过来：新提案照常可用 -------------------------------------------
     // 少了这一半，上面那句「写不进去」可能只是「这个装置根本不写盘」。
     const fresh = await propose(harness, [{ relative: 'note.txt', at: '原样', to: '改过' }], idem('s2-fresh'));
-    approve(harness, fresh, 'console:lwb-034-真盘测试');
     const applied = dataOf(await applyTool(harness, fresh.change_id, idem('s2-fresh-apply')), '新提案的应用');
     assert.equal(applied.state, 'APPLIED', `恢复之后新提案必须能落地：${applied.message}`);
     assert.equal((await readFile(file)).toString('utf8'), '改过\n第二行\n');
@@ -716,7 +697,6 @@ describeWindows('LWB-034 真 NTFS：安全暂停与紧急停用', () => {
       ],
       idem('s3'),
     );
-    approve(harness, prepared, 'console:lwb-034-真盘测试');
 
     /** 与 §1b 同一条理由：结果会被撤回，因此操作号只能在按下之前从账上读。 */
     const inFlight: { operation_id: string | null } = { operation_id: null };

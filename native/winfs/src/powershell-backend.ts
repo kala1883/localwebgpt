@@ -236,12 +236,24 @@ export class PowerShellWinfsBackend implements WinfsOps {
 
   async #call(request: Record<string, unknown>): Promise<HelperResult | WinfsError> {
     await this.ensureStarted();
-    if (!this.#helper) {
+    const helper = this.#helper;
+    if (!helper) {
       return this.#unavailable(String(request.op));
     }
     try {
-      return await this.#helper.call(request);
+      const result = await helper.call(request);
+      if (!helper.isAlive && this.#helper === helper) {
+        // 不重放这一次操作：请求可能在助手退出前已触及文件。
+        // 只清掉失效 transport，让下一次独立调用重新启动并自检助手。
+        this.#helper = null;
+        this.#capability = null;
+      }
+      return result;
     } catch (error) {
+      if (!helper.isAlive && this.#helper === helper) {
+        this.#helper = null;
+        this.#capability = null;
+      }
       return {
         ok: false,
         code: 'NATIVE_GUARD_UNAVAILABLE',

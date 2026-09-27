@@ -106,6 +106,14 @@ export class ResidentHelper {
   /** 助手已不在时的原因；非 null 即拒绝继续调用。 */
   #gone: string | null = null;
 
+  /** 助手退出或通信通道失效后为 false；供后端安全地在下一次请求前重启。 */
+  get isAlive(): boolean {
+    return this.#child !== null &&
+      this.#gone === null &&
+      this.#child.exitCode === null &&
+      this.#child.signalCode === null;
+  }
+
   async start(): Promise<HelperResult> {
     this.#gone = null;
     this.#stderr = '';
@@ -206,6 +214,10 @@ export class ResidentHelper {
 
   async stop(): Promise<void> {
     if (!this.#child) return;
+    if (!this.isAlive) {
+      this.#child = null;
+      return;
+    }
     try {
       this.#child.stdin.write('__exit__\n');
       this.#child.stdin.end();

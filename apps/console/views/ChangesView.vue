@@ -278,7 +278,7 @@ function sortedRisks(): readonly { readonly level: string; readonly code: string
       <!-- 分区 2a：抬头（工作区、提议连接、短核对编号、有效期） -->
       <header class="changes__head">
         <h2 class="changes__title">
-          待批准修改集
+          待执行修改集
           <code class="changes__short" data-testid="short-code">{{ described.facts.short_code }}</code>
         </h2>
         <dl class="changes__meta">
@@ -463,7 +463,7 @@ function sortedRisks(): readonly { readonly level: string; readonly code: string
           界面坏了或自己看漏了，而真实原因（没有会话 / 已过期 / 状态不对）
           正是他下一步该处理的事。
         -->
-        <p v-if="!affordance.can_approve" class="changes__blocked" data-testid="blocked-reason">
+        <p v-if="!affordance.can_approve && affordance.blocked_reason !== 'NOT_REQUIRED'" class="changes__blocked" data-testid="blocked-reason">
           批准入口不可用（{{ affordance.blocked_reason }}）。
         </p>
         <p v-if="affordance.can_approve" class="changes__hint" data-testid="not-written-hint">

@@ -27,15 +27,21 @@
 ```dotenv
 tunnel_id=tunnel_从 Platform 复制的 ID
 runtime_API_key=从 Platform 创建的 runtime key
+# 可选：默认 1 GiB；可调至 2 GiB 以内，daemon 会拒绝超过硬上限的值
+snapshot_store_max_bytes=536870912
 ```
 
-`.env` 被 Git 忽略。构建脚本不会复制源码 `.env`，所以打包后应在 runtime 根目录另行创建该文件。启动时凭据只传给当前 PowerShell 子进程及其启动链；脚本退出后恢复调用前的环境变量，不把密钥放入参数或日志。若模型连接尚未启用，脚本会等待你打开终端打印的一次性本地控制台链接，在“ChatGPT 连接”页明确确认并启用；完成后脚本自动运行 doctor 并启动隧道。该步骤仅启用连接级工具发现，不会登记任何目录、授予全盘权限或更改 G0/G2/G3 门禁。开发源码目录对应脚本为 `packaging/windows/Start-LocalWebGPT.ps1`。
+`snapshot_store_max_bytes` 是可选的本机快照对象硬上限（十进制字节），缺省为 1 GiB，最大不可超过 2 GiB；超过上限时提案以 `STORAGE_UNAVAILABLE` 拒绝，工作区不写入。上限低于当前已有对象占用时不会删除旧快照，新的不同快照会被拒绝；相同内容去重仍可复用。daemon 启动时及运行中每小时执行保留感知回收；若活跃/待恢复操作阻止回收，则容量要等后续周期或重启后才能释放。
+
+`.env` 被 Git 忽略。构建脚本不会复制源码 `.env`，所以打包后应在 runtime 根目录另行创建该文件。启动时凭据只传给当前 PowerShell 子进程及其启动链；脚本退出后恢复调用前的环境变量，不把密钥放入参数或日志。若模型连接尚未启用，脚本会等待你打开终端打印的一次性本地控制台链接，在“ChatGPT 连接”页明确确认并启用；完成后脚本自动运行 doctor 并启动隧道。该步骤只启用连接级工具发现，不会登记目录或授予工作区读写权；请在“工作区”页登记目录并分别勾选所需工具。开发源码目录对应脚本为 `packaging/windows/Start-LocalWebGPT.ps1`。
 
 可用 `-ValidateOnly` 单独检查 `.env` 格式；该模式不启动 daemon 或隧道，也不显示凭据。
 
+停止已运行服务时，在另一个 PowerShell 窗口执行源码目录的 `.\packaging\windows\Stop-LocalWebGPT.ps1`，或 runtime 根目录的 `.\Stop-LocalWebGPT.ps1`；等待启动窗口返回提示符。命令不按 PID 杀进程；服务先拒绝新操作并等待在途处理器结束。若停在一次工具调用期间，重连后查询 `change_get` 确认状态，勿盲目重复应用。
+
 ## 升级与卸载限制
 
-升级前的数据库保护已接入启动链，但 LWB-040 仍未完成：升级器、卸载器、自动恢复备份和签名安装器尚未交付/验收。
+升级前的数据库保护已接入启动链，但 LWB-040 仍未完成：升级器、自动恢复备份和签名安装器尚未交付/验收。V1 暂无自动卸载器；以下是保留本地状态的手工卸载流程。
 
 当本机已有较旧 schema 的状态库时，daemon 在单实例锁与受保护目录检查之后、打开迁移连接之前，会：
 
@@ -43,4 +49,13 @@ runtime_API_key=从 Platform 创建的 runtime key
 2. 若存在 `QUEUED`、`VALIDATING`、`APPLYING` 或 `RECOVERY_REQUIRED` 操作，拒绝升级；先用兼容版本在本机完成恢复，再退出旧进程。
 3. 否则用 SQLite 在线备份 API 在 `%LOCALAPPDATA%\LocalWorkspaceBridge\db` 生成快照（涵盖 WAL 中已提交内容），检查 `quick_check` 和迁移元数据，再运行 schema 迁移。只有验证过的快照才会以 `.pre-migration-...sqlite` 名称保留。
 
-如果备份无法创建或验证，daemon 会在迁移前停止，原状态库不变；如果迁移后续失败，预迁移快照仍会保留。当前没有自动回滚/恢复命令或快照清理策略；不要在服务运行时手工覆盖状态库，也不要删除运行目录来“卸载”。构建器仍要求每次安装到一个全新的、仓库外路径，旧运行目录和用户状态保持分开。
+如果备份无法创建或验证，daemon 会在迁移前停止，原状态库不变；如果迁移后续失败，预迁移快照仍会保留。不要在服务运行时手工覆盖状态库。
+
+### 手工卸载（V1）
+
+1. 先在控制台的恢复页检查是否有待处理/无法判定的恢复记录。若有，先保留 runtime 和本地状态目录，不要继续删除。
+2. 在另一个 PowerShell 窗口，从**当初 `-OutputDirectory` 指定的 runtime 根目录**运行 `.Stop-LocalWebGPT.ps1`；等待启动窗口完全返回提示符。不要强杀进程。
+3. 只删除那个精确的 runtime 输出目录；不要删除它的父目录，不要删除 `%LOCALAPPDATA%\LocalWorkspaceBridge`，也不要删除任何已授权工作区。安装时应把 runtime 放在与工作区无重叠的独立目录（推荐 `%LOCALAPPDATA%\Programs\LocalWebGPT`）。如果不能确认路径没有与工作区重叠，就先不要删除。
+4. runtime 目录中的 `.env` 随 runtime 一起移除（其中的 tunnel runtime key 不会写进日志）。受保护本地状态默认**保留**：数据库、快照、恢复记录、审计和本机凭证仍在 `%LOCALAPPDATA%\LocalWorkspaceBridge`；若启动时使用自定义 `LWB_HOME`，保留该目录。V1 不提供自动清除状态/快照的卸载选项，因为待恢复操作可能依赖这些唯一字节。
+
+这套流程不触碰已授权工作区，但仍需人工确认 runtime 路径无重叠；自动卸载器与长时升级/卸载验收仍未完成。构建器要求 runtime 使用仓库外的新目录，旧运行目录与受保护状态分开。

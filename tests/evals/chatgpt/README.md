@@ -4,10 +4,10 @@
 
 ## Run protocol
 
-1. Use a dedicated disposable test workspace, not a personal or production directory. Record the `bridge_status` gates and per-workspace grants before each run.
+1. Use a dedicated disposable test workspace, not a personal or production directory. Record the `bridge_status` facts and per-workspace grants before each run.
 2. Start a new ChatGPT conversation with the MCP App selected. Execute each prompt as written; preserve the exact tool sequence, arguments (with IDs redacted), result state, and user-visible answer.
-3. For proposal cases, a human must inspect the diff and approve in the local console. Do not automate or infer that approval. Do not run `change_apply` before a local approval record exists.
-4. Verify file bytes and hashes independently for any approved write. Clean up only the disposable fixture using a separate, explicit local action.
-5. Redact credentials, one-time console URLs, absolute paths, and private content from evaluation records. A test result is not a security gate sign-off; G0–G6 require their own evidence and reviewer.
+3. Directory grants are the user authorization for reads and writes. In a disposable workspace with the relevant grant, `file_create` and `file_edit` write directly in one tool call; multi-file changes use `change_prepare` followed by `change_apply`. Do not claim success unless the tool returns an applied state and receipt.
+4. Verify file bytes and hashes independently after each write. Clean up only the disposable fixture with a separate, explicit local action; LocalWebGPT does not expose a delete tool.
+5. Redact credentials, one-time console URLs, absolute paths, and private content from evaluation records. Keep real ChatGPT session status `NOT_RUN` until tool calls/results are captured from that session. Automated tests do not substitute for webpage acceptance or an independent security review.
 
 Each case separates expected tools from forbidden calls and answer assertions. `must_not_call` names MCP tools; instructions such as “no Shell, commit, or push” are response-level assertions because those actions are not exposed as Local Workspace tools.

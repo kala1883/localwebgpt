@@ -2,7 +2,7 @@
 
 LocalWebGPT 是 Windows 本机 MCP bridge：ChatGPT 网页通过 OpenAI Secure MCP Tunnel 调用本机工具；操作者在本地控制台逐个登记目录/文件，并逐根选择允许的工具。它不会自动扫描或上传整个磁盘。工具返回的文件内容会发给 ChatGPT，因此“只读”仍然意味着内容离开本机。
 
-English: [README.en.md](README.en.md) · 安装与升级：[docs/install-and-upgrade.md](docs/install-and-upgrade.md) · 接入验收：[docs/chatgpt-tunnel-acceptance.md](docs/chatgpt-tunnel-acceptance.md)
+English: [README.en.md](README.en.md) · 完整操作手册：[docs/operator-runbook.md](docs/operator-runbook.md) · V1 验收记录：[docs/release/V1-acceptance.md](docs/release/V1-acceptance.md) · 安装与升级：[docs/install-and-upgrade.md](docs/install-and-upgrade.md) · 接入验收：[docs/chatgpt-tunnel-acceptance.md](docs/chatgpt-tunnel-acceptance.md)
 
 ## 工作方式
 
@@ -60,11 +60,13 @@ Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
 .\packaging\windows\Start-LocalWebGPT.ps1
 ```
 
-验证成功应显示 `Project-root .env is valid; credential values were not displayed.` 且不显示密钥。启动脚本会启动本机 daemon，并打印一个**一次性、本机控制台链接**。在浏览器打开终端给出的完整链接（不要分享链接，它含临时授权令牌），进入 **ChatGPT 连接**，阅读确认项并点击 **在本机启用 ChatGPT 连接**。这只启用连接级工具发现，不会授权任何目录，也不会打开全局读取/写入门禁。确认后脚本继续运行 Tunnel doctor 并启动 `tunnel-client`；等终端报告检查通过、隧道运行正常后再创建 ChatGPT App。
+验证成功应显示 `Project-root .env is valid; credential values were not displayed.` 且不显示密钥。启动脚本会启动本机 daemon，并打印一个**一次性、本机控制台链接**。在浏览器打开终端给出的完整链接（不要分享链接，它含临时授权令牌），进入 **ChatGPT 连接**，阅读确认项并点击 **在本机启用 ChatGPT 连接**。这只启用连接级工具发现，不会授权任何目录。确认后脚本继续运行 Tunnel doctor 并启动 `tunnel-client`；等终端报告检查通过、隧道运行正常后再创建 ChatGPT App。
 
 > 为什么先做本机确认：本项目把 MCP 工具目录也放在连接启用守卫后面，ChatGPT 点击 Create 时会立即发现工具；未启用时可能因 `tools/list` 不可用而创建失败。这是 LocalWebGPT 的本地安全顺序；之后仍要保持本机脚本和 Tunnel 在线。
 
 若 PowerShell 找不到 Node/npm，先安装符合要求的 Node.js 并重开终端。`.env` 检查失败时按错误提示修正字段名/格式；脚本不会回显密钥。
+
+停止服务时，另开一个 PowerShell 窗口运行源码目录的 `.\packaging\windows\Stop-LocalWebGPT.ps1`（打包 runtime 根目录为 `.\Stop-LocalWebGPT.ps1`），然后等待启动窗口返回提示符。该命令只发固定的本机停止请求，不按 PID 结束进程；它会等在途操作完成后再关闭 daemon。
 
 ## 4. 在 ChatGPT 网页创建 MCP App
 
@@ -81,7 +83,7 @@ Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
 打开启动终端给出的本机控制台链接，进入 **工作区**：
 
 1. 点击登记目录/文件，粘贴你确实需要让 ChatGPT 使用的完整本机路径；从窄范围测试目录开始。项目会拒绝整盘、用户主目录等过宽的根。
-2. 选择工作区模式：**只读**，或 **只读 + 提议（需本地批准）**。后者允许准备修改提议，不是直接写权限；每次实际应用仍需你在本机检查并批准。
+2. 选择工作区模式：**只读**，或 **读取 + 修改**。修改模式允许稍后在该目录授权 ChatGPT 直接创建/编辑文本文件；授权后不再逐次本机批准。
 3. 在该根的 **配置 ChatGPT 工具** 中逐项选择并保存：
 
    | 控制台授权 | MCP 工具范围 |
@@ -90,17 +92,17 @@ Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
    | 读取文件内容 | `file_read` 及相关快照/错误详情 |
    | 搜索文本 | `text_search` |
    | 读取 Git 状态与差异 | `git_status`、`git_diff`、`git_log` |
-   | 准备修改提议 | `change_prepare`、撤销提议及 `change_apply` 请求 |
+   | 创建/编辑文件 | 单文件 `file_create` / `file_edit` 直接写入；多文件先 `change_prepare` 再 `change_apply` |
 
-每一项授权都只对该根生效；空选保存会撤销该根全部 ChatGPT 工具授权。实际是否可调用还要同时满足连接启用、工作区已启用和全局门禁。**当前源码默认门禁 fail-closed**：G0/兼容性未完整验收时读取、Git、提议保持关闭；直写还要求原生护栏与 G4 通过。不要为了消除 `POLICY_DENIED` 而在普通使用中硬改门禁。状态可在本地控制台查看。
+每一项授权都只对该根生效；空选保存会撤销该根全部 ChatGPT 工具授权。实际调用还要求 ChatGPT 连接和工作区启用。读取、Git、文件修改分别由本页的目录授权控制；平台验收状态只作说明，不再作为隐藏的全局功能开关。授予“文件修改”即授权 ChatGPT 在该目录创建/编辑文本文件并直接应用，不会逐次等待批准。路径硬拒绝、冲突检查、快照、审计和受保护执行器仍然生效；不提供任意 Shell、目录外访问、自动 Git 提交/推送或删除文件。
 
 ## 6. 建议验收顺序与常见故障
 
-先确认 Tunnel 进程在线，再依次调用 `bridge_status` → `workspace_list` → 对测试根执行 `file_list` / `file_read` / `text_search`。只有门禁已获正式验证时才继续修改流程；在**专用临时 Git 目录**创建提议，确认文件在本机批准前未变化，再本机批准、应用并独立回读。不要用真实个人目录做首次写入测试。
+先确认 Tunnel 进程在线，再依次调用 `bridge_status` → `workspace_list` → 对测试根执行 `file_list` / `file_read` / `text_search`。在本地控制台对**专用临时 Git 目录**授予“文件修改”后，用 `file_create` / `file_edit` 做单文件测试并独立回读；多文件修改用 `change_prepare` 再 `change_apply`。不要用真实个人目录做首次写入测试。
 
 - 创建 App 报 424 / 无法获取工具列表：检查本机控制台的 ChatGPT 连接是否已启用、启动脚本是否仍在运行、`tunnel-client` 是否健康。
 - Tunnel 下拉框为空：核对 Platform 组织/ChatGPT 工作区关联及创建者的 `Tunnels Read + Use`。
-- 能看到 App 但读取返回 `POLICY_DENIED` / `CAPABILITY_DISABLED`：检查控制台里的该根工具授权、工作区状态与全局门禁；Tunnel 连通不代表文件授权。
+- 能看到 App 但读取/写入返回 `NOT_AUTHORIZED`：检查控制台里的该根工具授权和工作区状态；Tunnel 连通不代表文件授权。
 - 工具刚变更但 ChatGPT 仍看到旧列表：Plugins 管理页 Refresh，再新开对话。
 
 ## 官方资料

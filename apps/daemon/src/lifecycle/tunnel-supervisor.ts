@@ -8,6 +8,10 @@ export interface TunnelProcessResult {
 export interface TunnelSupervisorOptions {
   readonly run: () => Promise<TunnelProcessResult>;
   readonly doctor: () => Promise<TunnelProcessResult>;
+  /** Recheck local connection availability immediately before each run. */
+  readonly beforeRun?: () => Promise<boolean>;
+  /** Recheck local connection availability after an outage and before doctor/restart. */
+  readonly beforeRestart?: () => Promise<boolean>;
   readonly wait: (milliseconds: number) => Promise<void>;
   readonly shouldStop: () => boolean;
   readonly stopExitCode: () => number;
@@ -63,6 +67,8 @@ export async function waitForConnectionEnable(options: ConnectionEnableWaitOptio
 export async function superviseTunnel(options: TunnelSupervisorOptions): Promise<number> {
   let attempt = 0;
   while (!options.shouldStop()) {
+    if (options.beforeRun && !(await options.beforeRun())) return options.stopExitCode();
+    if (options.shouldStop()) return options.stopExitCode();
     const result = await options.run();
     if (options.shouldStop()) return options.stopExitCode();
 
@@ -73,6 +79,14 @@ export async function superviseTunnel(options: TunnelSupervisorOptions): Promise
         `${Math.ceil(delay / 1_000)} 秒后检查并尝试重连。`,
     );
     await options.wait(delay);
+    if (options.shouldStop()) return options.stopExitCode();
+
+    // The local operator may have disabled the ChatGPT connection while the
+    // tunnel was down (for example during sleep/reconnect). Do not restart
+    // the remote-facing child until the audited local enable flow is current.
+    if (options.beforeRestart && !(await options.beforeRestart())) {
+      return options.stopExitCode();
+    }
     if (options.shouldStop()) return options.stopExitCode();
 
     const diagnosis = await options.doctor();

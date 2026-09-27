@@ -8,7 +8,7 @@
  * IPC 凭据（audience 派生密钥，握手时验过）
  *   → 连接记录（本机注册、已启用、principal_kind 与通道相符）
  *     → 授权行 grants（连接 × 工作区，逐工作区一条）
- *       → 策略判定 decide()（能力 / 代次 / 文件规则 / 批准，五层全跑）
+ *       → 策略判定 decide()（连接 / 工作区 grant / 代次 / 文件规则）
  *         → 工作区登记表 authorizeAccess()（根身份每次重新探测）
  * ```
  *
@@ -47,11 +47,11 @@
  * 而**不是**一个 `ConnectionView` —— 并集形态的 `ConnectionView`
  * 在本进程里根本不存在，也就没有机会被误传给 `decide()`。
  *
- * ## 能力开关是**注入**的
+ * ## 服务能力与目录 grant 分工
  *
  * `capability_flags` 由装配根给出，本层不自造、也不从请求参数或工作区行推导。
- * 理由见 `apps/daemon/src/gates.ts`：在 G0 与 §3 通过之前，
- * 四个开关一律为关，而这是**门禁**决定，不是某个工作区的属性。
+ * 这些字段表示 daemon 支持哪些操作；真正的数据范围和读写权限仍来自
+ * 本次解析出的逐连接、逐工作区 grant。
  */
 
 import { BridgeError, CAPABILITY_NAMES } from '@lwb/contracts';
@@ -83,10 +83,10 @@ export interface ToolAccessDeps {
   /** 每连接一份出站预算。**不按工作区记**，见 `packages/egress/src/budget.ts`。 */
   readonly budgets: EgressBudgetStore;
   /**
-   * 工作区能力开关的来源。
+   * daemon 支持能力与逐工作区恢复状态的来源。
    *
    * 是函数而不是常量，因为 `recovery_required` 是**逐工作区**的事实；
-   * 其余四项由门禁决定，与工作区无关，实现里叠加即可。
+   * 是否访问某根还需由本文件里的工作区 grant 链单独检查。
    */
   readonly capability_flags: (workspace: WorkspaceRecord) => CapabilityFlags;
   /** 本地时钟（epoch ms）。判定需要它比较批准有效期；本层不读时钟。 */
@@ -232,27 +232,7 @@ export interface WorkspaceAccessRequest {
    * 动作的诚实说法，对需要票据的动作则是一次拒绝（fail-closed）。
    */
   readonly presented?: { readonly generation: number; readonly policy_version: number | null };
-  /**
-   * 本次动作所依据的**本地批准**（LWB-032）。
-   *
-   * `ACTION_SPECS` 里 `requires_approval: true` 的动作（今天只有
-   * `change_apply`）在拿到 `null` 时会被 `decide()` 判成
-   * `APPROVAL_REQUIRED` —— 那对「模型自己调应用工具」是**唯一正确**的答案。
-   *
-   * ## 它只能来自 `evaluateApplyGate`
-   *
-   * 与 `presented` 同一条规矩，而且更要紧：这里的三个字段（批准状态、
-   * 被批准的摘要、本次要应用的摘要）如果由调用方自己从请求参数拼出来，
-   * 那么「批准」这件事就变成了一段可以伪造的输入 —— 而 `approved: true`
-   * 之类的参数永远不能作为授权证据，是本工程的第一条规矩（ADR-003 §4）。
-   *
-   * 唯一的合法来源是 `@lwb/approvals` 的 `evaluateApplyGate`：它**重新加载**
-   * 修改集、**重算**摘要、现读工作区与连接、当场判批准的有效期，然后把那份
-   * 判定作为 `ApprovalView` 交出来。工具处理器做的只是把它递过来。
-   *
-   * 省略即 `null`：那是「本次动作不声称有任何批准」的诚实说法，
-   * 而它导致的是拒绝（fail-closed），不是放行。
-   */
+  /** Legacy input retained for old callers; current model writes are authorized by the workspace grant. */
   readonly approval?: ApprovalView | null;
 }
 

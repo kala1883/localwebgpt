@@ -1,26 +1,6 @@
 /**
- * 授权表单背后的判定（LWB-035 步骤 1、验收标准 1 与 2）。
- *
- * ## 验收标准 2「无法越过 G0/G4 开关直接授权直写」在本模块里的样子
- *
- * 这一条**不是**由界面保证的：真正拦人的是 daemon 的工具面
- * （`capabilityFlagsFrom` 那个与运算，见 `apps/daemon/src/gates.ts`）。
- * 界面的职责是**不提供这条路，并且说清为什么不提供**。
- *
- * 但「不提供」如果只是「表单里没写这个选项」，那它靠的是**记得别写**。
- * 因此这里多了一层：控制台把四个门禁格与能力开关**自己也与一遍**
- * （`writeGate`），只有全部为真才认为直写是开着的。
- *
- * 这一层与 daemon 那一层的关系是**单向**的：
- *
- *  - 服务端说开、门禁说关 ⇒ 控制台说**关**（少开一次，安全）。
- *  - 服务端说关、门禁说开 ⇒ 控制台说**关**（同样少开一次）。
- *  - 两边都说开 ⇒ 控制台说开。
- *
- * 也就是说，任何一侧说了假话，结果都只会更保守。这正是我们要的方向：
- * 界面不能成为一条绕过门禁的路，而「两边都与一遍」让它在结构上不可能
- * 成为那条路 —— 除非**四格门禁全部被改成真**，而那是一次留下评审记录的
- * 代码变更（`BRIDGE_GATES` 的注释写明了这一点）。
+ * 本地工作区授权页背后的判定。全局平台验收状态仅作提示；逐工作区 grant
+ * 是唯一决定 ChatGPT 可用工具与读写范围的产品权限。
  *
  * ## 表单只提交四个字段
  *
@@ -40,9 +20,9 @@ import type {
   WorkspaceRow,
 } from './readings.ts';
 
-/** 直写（不经批准直接改文件）此刻是否开着，以及为什么。 */
+/** 服务端是否支持目录级直接写入；具体工作区仍须单独授权。 */
 export interface WriteGate {
-  /** 只有在四项门禁与能力开关**全部**为真时才是 `true`。 */
+  /** 服务端写入能力是否可用，不代表某个目录已经获授权。 */
   readonly direct_write: boolean;
   /** 关着的原因，逐条对应一个没通过的格。开着时为空数组。 */
   readonly reasons: readonly string[];
@@ -51,44 +31,32 @@ export interface WriteGate {
 }
 
 /**
- * 把四个门禁格与能力开关与到一起。
- *
- * `gates` 或 `flags` 为 `null`（读数缺失）时结果是**关**，理由写「读数缺失，
- * 按未通过处理」。理由必须写出来：把「没读到」说成「没通过」是一种不准确，
- * 而把「没读到」说成「通过」是一种危险。
+ * 全局验收签署不再阻塞功能；只看 daemon 能力读数。逐目录授权由 grant 单独控制。
  */
 export function writeGate(input: {
-  readonly gates: Gates | null;
+  /** Legacy diagnostics field; does not affect availability. */
+  readonly gates?: Gates | null;
   readonly flags: CapabilityFlags | null;
 }): WriteGate {
-  const { gates, flags } = input;
+  const { flags } = input;
 
-  if (gates === null || flags === null) {
+  if (flags === null) {
     return {
       direct_write: false,
-      reasons: [
-        gates === null ? '门禁读数缺失，按未通过处理。' : '能力开关读数缺失，按未打开处理。',
-      ],
-      summary: '直写：关闭（读数不完整）。',
+      reasons: ['本机服务能力状态暂时不可用。'],
+      summary: '目录写入：服务状态未知。',
     };
   }
 
-  const reasons: string[] = [];
-  if (!gates.g0_platform_verified) reasons.push('G0（真实网页接入验证）未通过。');
-  if (!gates.compatibility_section3_passed) reasons.push('平台兼容性（§3）未全部验证通过。');
-  if (!gates.native_guard_verified) reasons.push('原生句柄护栏未通过验证。');
-  if (!gates.g4_concurrency_fault_passed) reasons.push('G4（竞争与故障专项测试）未通过。');
-  if (reasons.length === 0 && !flags.direct_write_enabled) {
-    reasons.push('门禁已全部通过，但服务端的能力开关没有把直写打开。');
-  }
+  const reasons = flags.direct_write_enabled ? [] : ['本机服务的目录写入功能当前不可用。'];
 
   const directWrite = reasons.length === 0;
   return {
     direct_write: directWrite,
     reasons,
     summary: directWrite
-      ? '直写：已打开（四项门禁与服务端开关一致）。'
-      : `直写：关闭（${String(reasons.length)} 项原因）。`,
+      ? '目录写入功能可用；是否授权由每个工作区单独决定。'
+      : `目录写入功能不可用（${String(reasons.length)} 项原因）。`,
   };
 }
 
@@ -121,17 +89,12 @@ const REQUIRES_ACK: Readonly<Record<WorkspaceMode, boolean>> = {
 /**
  * 两种模式的说明。
  *
- * `read_propose_apply_with_local_approval` 的文案里有三句**必须**在的话，
- * 因为它们各自封住一个真实的误解：
- *
- *  1. 「模型只能提出修改集」——它不是「让模型改文件」。
- *  2. 「每一次写入都要你在本机批准」——写盘由本地批准触发。
- *  3. 「直写由门禁控制，当前关闭」——这一条由 `writeGate` 现算，
- *     不在文案里写死（写死的话，门禁通过那天它会开始说谎）。
+ * 修改模式的风险说明明确告知：授权后会直接写入，不再逐次等待批准。
  */
 export function modeOffers(
   write: WriteGate,
-  proposalEnabled: boolean | null = null,
+  /** Legacy diagnostics argument; does not affect availability. */
+  _proposalEnabled?: boolean | null,
 ): readonly ModeOffer[] {
   return [
     {
@@ -139,20 +102,17 @@ export function modeOffers(
       label: '只读',
       risk:
         '此模式不会授予修改提议。读取是否实际可用，还取决于该根单独获授的工具、' +
-        'ChatGPT 连接启用及全局读取门禁。读取内容一旦返回就会经隧道发往 ChatGPT —— ' +
+        'ChatGPT 连接启用。读取内容一旦返回就会经隧道发往 ChatGPT —— ' +
         '只读不等于不出本机。',
       requires_ack: REQUIRES_ACK.read_only,
     },
     {
       mode: 'read_propose_apply_with_local_approval',
-      label: '只读 + 提议（需本地批准）',
+      label: '读取 + 修改',
       risk:
-        '此模式允许你为这个根配置修改提议，但实际可用还需要单独授予 propose 工具，' +
-        `并且全局提议能力${proposalEnabled === true ? '当前已打开' : proposalEnabled === false ? '当前关闭' : '没有读数，按关闭处理'}。` +
-        '模型自己不能写文件；每次实际应用仍需你在本机核对差异并批准。' +
-        '**这仍然不是「直写」**：不经批准直接改文件的能力叫直写，' +
-        `由门禁控制，${write.direct_write ? '当前已打开' : '当前关闭'}` +
-        `${write.direct_write ? '。' : `（${write.reasons.join('')}）。`}`,
+        '勾选“文件修改”后，ChatGPT 可在此授权目录内直接创建和编辑文本文件，不会逐次等待本机批准。' +
+        '每次写入仍检查路径、冲突并保留恢复快照；不提供任意命令执行或目录外访问。' +
+        (write.direct_write ? '' : `（${write.reasons.join('')}）`),
       requires_ack: true,
     },
   ];
@@ -282,21 +242,23 @@ export function exposureSummary(
       ? 'ChatGPT 连接已停用。'
       : 'ChatGPT 连接状态无可信读数。';
   const capabilityLine = readEnabled
-    ? `全局读取能力当前**打开**；具体目录仍须启用并获授读取工具。${connectionLine}`
-    : `全局读取能力当前**关闭**：文件列表/读取/搜索暂不可调用。${connectionLine}`;
+    ? `读取工具可用；具体目录仍须启用并获授读取工具。${connectionLine}`
+    : flags?.read_enabled === false
+      ? `本机读取功能当前不可用；目录授权不会改变这一服务状态。${connectionLine}`
+      : `读取工具状态未知。${connectionLine}`;
 
   const headline =
     live.length === 0
       ? '当前没有任何目录被登记，因此没有任何本机内容暴露给模型。'
       : accessible > 0
         ? `已登记 ${String(live.length)} 个根，其中 ${String(accessible)} 个根当前具备有效的 ChatGPT 内容工具访问条件；只有实际调用时才会有内容出站。`
-        : `已登记 ${String(live.length)} 个根，但当前没有根同时满足连接、目录授权与全局能力门禁；内容工具不可用。`;
+        : `已登记 ${String(live.length)} 个根，但当前没有根同时满足连接与目录授权；内容工具不可用。`;
 
   const proposalLine = flags === null
-    ? `全局提议开关无可信读数，按关闭处理；${String(proposalGranted)} 个根保存了提议授权。`
-    : flags.proposal_enabled
-      ? `${String(proposalGranted)} 个启用根已保存提议授权；每次实际应用仍需你在本机批准。`
-      : `全局提议门禁当前关闭；${String(proposalGranted)} 个根虽保存了提议授权，模型目前仍不能提出修改。`;
+    ? `${String(proposalGranted)} 个启用根保存了文件修改授权；本机能力状态未知。`
+    : flags.proposal_enabled && flags.direct_write_enabled
+      ? `${String(proposalGranted)} 个启用根保存了文件修改授权；ChatGPT 可直接应用文本创建/编辑。`
+      : `${String(proposalGranted)} 个启用根保存了文件修改授权，但本机文件修改功能当前不可用。`;
 
   return {
     headline,
@@ -321,7 +283,7 @@ export function describeWorkspace(row: WorkspaceRow): {
 } {
   return {
     mode_label:
-      row.mode === 'read_only' ? '只读' : '只读 + 提议（需本地批准）',
+      row.mode === 'read_only' ? '只读' : '读取 + 修改（逐目录授权）',
     state_label: row.removed ? '已移除' : row.enabled ? '启用' : '已暂停',
   };
 }

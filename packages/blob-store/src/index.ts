@@ -14,6 +14,7 @@ export {
 } from './layout.ts';
 
 export {
+  BlobQuotaExceededError,
   BlobGcRefusedError,
   BlobIntegrityError,
   BlobMissingError,

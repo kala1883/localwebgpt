@@ -168,23 +168,13 @@ describe('工具清单（验收 1：无控制面方法）', () => {
     }
   });
 
-  it('生产门禁（全关）下，可用的恰好是三条连接级工具', async () => {
+  it('外部验收状态未签署时，工具仍由逐工作区 grant 控制', async () => {
     const closed = await makeToolHarness({ gates: GATES_OFF });
     try {
       const catalog = await catalogOf(closed);
       const available = catalog.tools.filter((entry) => entry.available).map((entry) => entry.name);
 
-      // 这不是降级，是事实：平台未验证之前，任何会读用户工作区的工具
-      // 都不该出现。剩下这三条都只读状态库，分别回答「本机什么状态」
-      // 「我能看到哪些工作区」「我提过的提案怎么样了」。
-      assert.deepEqual([...available].sort(), ['bridge_status', 'change_list', 'workspace_list']);
-
-      const readOff = catalog.tools.find((entry) => entry.name === 'file_read');
-      assert.equal(readOff?.available, false);
-      assert.equal(readOff?.reason, 'READ_ENABLED_OFF');
-
-      const gitOff = catalog.tools.find((entry) => entry.name === 'git_diff');
-      assert.equal(gitOff?.reason, 'GIT_ENABLED_OFF');
+      assert.deepEqual([...available].sort(), [...IMPLEMENTED_TOOL_NAMES].sort());
     } finally {
       closed.close();
     }
@@ -317,6 +307,15 @@ const ARGUMENTED_TOOLS: readonly (readonly [string, Record<string, unknown>])[] 
   ['text_search', { workspace_id: 'ws-any', query: 'x' }],
   ['git_status', { workspace_id: 'ws-any' }],
   ['git_diff', { workspace_id: 'ws-any', path: 'README.md' }],
+  ['file_create', {
+    workspace_id: 'ws-any', idempotency_key: 'idem-test-create', summary: 'create',
+    path: 'new.txt', content: 'text', newline: 'lf', bom: false,
+  }],
+  ['file_edit', {
+    workspace_id: 'ws-any', idempotency_key: 'idem-test-edit', summary: 'edit', path: 'a.txt',
+    base_sha256: 'a'.repeat(64), read_token: 'ticket',
+    edits: [{ start_line: 1, end_line_exclusive: 2, old_lines: ['old'], new_lines: ['new'] }],
+  }],
 ];
 
 describe('入参契约（验收 2：未知字段 / 无效枚举）', () => {
@@ -377,46 +376,29 @@ describe('入参契约（验收 2：未知字段 / 无效枚举）', () => {
     assert.equal(missingWorkspace.details?.['field'], 'workspace_id');
   });
 
-  it('需要票据的动作恰好三条，需要批准的恰好一条，且那一条不产生批准', () => {
+  it('需要票据的工具清单精确；change_apply 使用逐目录写授权', () => {
     // 前一条性质（除例外外全部不需要票据）使「读取类调用捎带写入」在结构上
     // 不成立：`resolveWorkspaceAccess` 传的 `presented` 恒为
     // `{generation:null, policy_version:null}`，一个 requires_ticket 的动作
     // 在那条路径上不可能通过判定。
     //
-    // 例外不是靠注释成立的：每一个的处理器都必须自己验签读取票据、
+    // 例外不是靠注释成立的：需要票据的工具必须先验签读取票据、
     // 从票据里取代次再交给判定。把例外收成一个具名的集合，是为了让
     // 「将来又多了一个」在这里当场失败 —— 多出来的那一个如果照抄默认路径，
     // 它会在运行时**每次都**被拒，而那看起来像是「功能没做好」，
     // 不像是一条策略约束。
     //
-    // LWB-032 起是三条：`change_prepare`（建立提案）、
-    // `change_revert_prepare`（建立逆向提案）、`change_apply`（要求应用）。
+    // file_create 使用无读取票据的创建策略；file_edit 与 change_prepare 共用票据策略。
     const ticketed = Object.entries(TOOL_POLICY_ACTIONS)
       .filter(([, action]) => action !== null && ACTION_SPECS[action].requires_ticket)
       .map(([tool]) => tool)
       .sort();
-    assert.deepEqual(ticketed, ['change_apply', 'change_prepare', 'change_revert_prepare']);
+    assert.deepEqual(ticketed, ['change_apply', 'change_prepare', 'change_revert_prepare', 'file_edit']);
 
-    // 需要批准的**恰好一个**：`change_apply`。它出现这件事容易被读成
-    // 「工具面现在能批准了」—— 恰恰相反。`requires_approval` 说的是
-    // 「这个动作**要求出示**一份有效的本地批准」，而那份批准只有一个来源：
-    // `approvals` 表里那条绑定摘要的记录（I06），由本地控制台写入。
-    // 工具面读它、出示它、并在缺失时得到 `APPROVAL_REQUIRED`；
-    // 它没有任何途径**产生**它。`ACTION_SPECS` 上方那段
-    // 「能力决定能不能发起，批准决定能不能落地」是这件事的完整说明。
-    const approving = Object.entries(TOOL_POLICY_ACTIONS)
-      .filter(([, action]) => action !== null && ACTION_SPECS[action].requires_approval)
-      .map(([tool]) => tool)
-      .sort();
-    assert.deepEqual(approving, ['change_apply']);
-
-    // 反向那一条仍然成立，而且它才是默认：**其余每一个**工具动作都不需要批准。
-    // 少了这一句，「有没有人顺手给某个读动作加上 requires_approval」
-    // 就只能由上面那句「恰好一个」间接地发现 —— 而它确实能发现，
-    // 但发现时给出的信息是「列表变了」，不是「读动作开始要批准了」。
-    for (const [tool, action] of Object.entries(TOOL_POLICY_ACTIONS)) {
-      if (action === null || action === 'change_apply') continue;
-      assert.equal(ACTION_SPECS[action].requires_approval, false, `工具 ${tool} 的动作需要批准`);
+    assert.equal(ACTION_SPECS.change_apply.capability, 'propose');
+    assert.equal(ACTION_SPECS.change_apply.flag, 'direct_write_enabled');
+    for (const action of Object.values(ACTION_SPECS)) {
+      assert.equal(action.requires_approval, false, '逐次人工批准不是策略层的权限位');
     }
   });
 
@@ -637,17 +619,16 @@ describe('结果契约（夹具仓库）', () => {
     }
   });
 
-  it('bridge_status 如实报出全关的能力开关与限制说明', async () => {
+  it('bridge_status 如实区分运行能力与未完成的外部验收状态', async () => {
     const closed = await makeToolHarness({ gates: GATES_OFF });
     try {
       const status = dataOf<BridgeStatusData>(await callTool(closed, 'bridge_status', {}));
-      assert.equal(status.capabilities.read_enabled, false);
-      assert.equal(status.capabilities.git_enabled, false);
-      assert.equal(status.capabilities.direct_write_enabled, false);
+      assert.equal(status.capabilities.read_enabled, true);
+      assert.equal(status.capabilities.git_enabled, true);
+      assert.equal(status.capabilities.direct_write_enabled, true);
       assert.equal(status.gates.g0_platform_verified, false);
-      // 限制说明必须与开关一致：全关时至少要有「读取关闭」与「G0 未过」两句。
-      assert.ok(status.limitations.some((line) => line.includes('关闭')));
-      assert.ok(status.limitations.some((line) => line.includes('G0')));
+      assert.ok(status.limitations.some((line) => line.includes('只作状态提示')));
+      assert.ok(status.limitations.some((line) => line.includes('显式授权的工作区')));
       // 暂停是**函数**，不是字段（LWB-034）：它必须每次现查状态库，
       // 因此这里断言的是「问它一下」，而不是读一个构造时的快照。
       assert.equal(closed.deps.status().paused(), false);
@@ -855,7 +836,7 @@ describe('结果契约（夹具仓库）', () => {
     assert.equal(error.code, 'POLICY_DENIED');
   });
 
-  it('门禁关闭时，读取工具在判定层被拒绝（清单里本来也不会挂出来）', async () => {
+  it('撤销目录 read grant 后，读取在判定层被拒绝', async () => {
     const closed = await makeToolHarness({
       root: TESTREPO_DIR,
       root_file_id: fileIdOf(TESTREPO_DIR),
@@ -863,10 +844,14 @@ describe('结果契约（夹具仓库）', () => {
       gates: GATES_OFF,
     });
     try {
+      const grant = closed.repos.grants.find(ADAPTER_CONNECTION, closed.workspace.id);
+      assert.ok(grant !== null);
+      closed.repos.grants.put({ ...grant, capabilities: grant.capabilities.filter((item) => item !== 'read') });
       const error = errorOf(
         await callTool(closed, 'file_read', { workspace_id: closed.workspace.id, path: 'README.md' }),
       ).error;
-      assert.equal(error.code, 'POLICY_DENIED');
+      assert.equal(error.code, 'NOT_AUTHORIZED');
+      assert.equal(error.details?.['policy_reason'], 'CAPABILITY_NOT_GRANTED');
     } finally {
       closed.close();
     }

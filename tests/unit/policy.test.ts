@@ -27,7 +27,6 @@ import {
   isPolicyDeniedError,
   requireAllowed,
   validateExemption,
-  type ApprovalView,
   type ConnectionAudience,
   type FileRule,
   type PolicyAction,
@@ -60,7 +59,6 @@ interface RequestOptions {
   readonly presented_generation?: number | null;
   readonly presented_policy_version?: number | null;
   readonly paused?: boolean;
-  readonly approval?: ApprovalView | null;
   readonly now?: number;
   readonly rules?: readonly FileRule[];
 }
@@ -68,7 +66,7 @@ interface RequestOptions {
 /** 一份**默认全部通过**的请求；每个用例只改动它要测的那一处。 */
 function request(options: RequestOptions = {}): PolicyRequest {
   const action = options.action ?? 'read';
-  const writes = action === 'change_prepare' || action === 'change_revert_prepare' || action === 'change_apply';
+  const writes = action === 'change_prepare' || action === 'file_create' || action === 'change_revert_prepare' || action === 'change_apply';
 
   return {
     connection: {
@@ -111,12 +109,6 @@ function request(options: RequestOptions = {}): PolicyRequest {
     action: {
       action,
       path: options.path ?? 'src/index.ts',
-      approval:
-        options.approval === undefined
-          ? writes
-            ? { state: 'ACTIVE', change_digest: 'sha-a', presented_digest: 'sha-a', expires_at: NOW + 60_000 }
-            : null
-          : options.approval,
     },
     now: options.now ?? NOW,
     ...(options.rules ? { rules: options.rules } : {}),
@@ -141,16 +133,16 @@ describe('策略：允许路径', () => {
     assert.deepEqual(decision.failures, []);
   });
 
-  it('五层检查全部执行（不因某层通过而跳过其余）', () => {
+  it('四项检查全部执行（不因某项通过而跳过其余）', () => {
     const decision = decide(request());
     assert.deepEqual(
       decision.checks.map((c) => c.check),
-      ['connection', 'workspace', 'generation', 'file_rules', 'approval'],
-      '五层检查必须逐层记录结论，顺序固定',
+      ['connection', 'workspace', 'generation', 'file_rules'],
+      '四项检查必须逐项记录结论，顺序固定',
     );
     assert.ok(
       decision.checks.every((c) => c.passed),
-      `允许时五层都应记为通过，实际：${JSON.stringify(decision.checks)}`,
+      `允许时四项都应记为通过，实际：${JSON.stringify(decision.checks)}`,
     );
   });
 
@@ -182,7 +174,7 @@ describe('策略：允许路径', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. 五层能力交集：每层单独失败
+// 2. 四项授权判定：每项单独失败
 // ---------------------------------------------------------------------------
 
 describe('策略：连接授权层', () => {
@@ -208,19 +200,13 @@ describe('策略：连接授权层', () => {
     }
   });
 
-  it('change_apply 要求的是 propose 而不是 apply（模型才够得着批准那一层）', () => {
-    // `apply` 在 CONTROL_ONLY_CAPABILITIES 里，模型面永远拿不到它。
-    // 若 change_apply 要求 apply，模型调用它只会得到 NOT_AUTHORIZED，
-    // 而工具契约要求的是「没有有效批准时返回 APPROVAL_REQUIRED」。
+  it('change_apply 由本机逐目录 propose grant 授权，不再要求逐次批准', () => {
     const modely = decide(
-      request({ action: 'change_apply', granted_capabilities: ['propose'], approval: null }),
+      request({ action: 'change_apply', granted_capabilities: ['propose'] }),
     );
-    assert.equal(
-      modely.primary?.reason,
-      'APPROVAL_MISSING',
-      `模型请求应用应停在"等本地批准"，实际：${modely.primary?.reason ?? '（放行了）'}`,
-    );
-    assert.equal(modely.primary?.error_code, 'APPROVAL_REQUIRED');
+    assert.equal(modely.allow, true, `逐目录写权限已授予时应放行：${modely.primary?.reason ?? ''}`);
+    const noGrant = decide(request({ action: 'change_apply', granted_capabilities: [] }));
+    assert.equal(noGrant.primary?.reason, 'CAPABILITY_NOT_GRANTED');
   });
 
   it('本地控制面持有 control 是允许的', () => {
@@ -272,6 +258,15 @@ describe('策略：工作区层', () => {
 });
 
 describe('策略：代次层', () => {
+  it('创建新文件不要求读取目标文件的票据', () => {
+    const decision = decide(request({ action: 'file_create', presented_generation: null }));
+    assert.equal(
+      decision.allow,
+      true,
+      `创建应绑定 daemon 当前代次而不伪造读取票据：${decision.primary?.reason ?? ''}`,
+    );
+  });
+
   it('代次不符 → WORKSPACE_GENERATION_CHANGED', () => {
     const decision = decide(request({ presented_generation: GEN - 1 }));
     assert.equal(decision.primary?.reason, 'GENERATION_CHANGED');
@@ -358,69 +353,18 @@ describe('策略：文件规则层', () => {
   });
 });
 
-describe('策略：批准层', () => {
-  it('缺批准 → APPROVAL_REQUIRED（模型不能自行批准）', () => {
-    const decision = decide(request({ action: 'change_apply', approval: null }));
-    assert.equal(decision.primary?.reason, 'APPROVAL_MISSING');
-    assert.equal(decision.primary?.error_code, 'APPROVAL_REQUIRED');
-  });
-
-  it('批准已过期（状态）→ APPROVAL_EXPIRED', () => {
-    const decision = decide(
-      request({
-        action: 'change_apply',
-        approval: { state: 'EXPIRED', change_digest: 'sha-a', presented_digest: 'sha-a', expires_at: NOW + 60_000 },
-      }),
-    );
-    assert.equal(decision.primary?.reason, 'APPROVAL_EXPIRED');
-  });
-
-  it('批准已撤销 → APPROVAL_EXPIRED（autoRetry 仍是 await_human）', () => {
-    const decision = decide(
-      request({
-        action: 'change_apply',
-        approval: { state: 'REVOKED', change_digest: 'sha-a', presented_digest: 'sha-a', expires_at: NOW + 60_000 },
-      }),
-    );
-    assert.equal(decision.primary?.reason, 'APPROVAL_REVOKED');
-    assert.equal(decision.primary?.error_code, 'APPROVAL_EXPIRED');
-  });
-
-  it('批准已消费 → CHANGE_STATE_INVALID（一个修改集只对应一次写入）', () => {
-    const decision = decide(
-      request({
-        action: 'change_apply',
-        approval: { state: 'CONSUMED', change_digest: 'sha-a', presented_digest: 'sha-a', expires_at: NOW + 60_000 },
-      }),
-    );
-    assert.equal(decision.primary?.reason, 'APPROVAL_CONSUMED');
-    assert.equal(decision.primary?.error_code, 'CHANGE_STATE_INVALID');
-  });
-
-  it('摘要不符 → APPROVAL_REQUIRED（批准的不是这一份内容）', () => {
-    const decision = decide(
-      request({
-        action: 'change_apply',
-        approval: { state: 'ACTIVE', change_digest: 'sha-a', presented_digest: 'sha-b', expires_at: NOW + 60_000 },
-      }),
-    );
-    assert.equal(decision.primary?.reason, 'APPROVAL_DIGEST_MISMATCH');
-    assert.equal(decision.primary?.error_code, 'APPROVAL_REQUIRED');
-  });
-
-  it('执行开始时有效期已过 → APPROVAL_EXPIRED', () => {
-    const decision = decide(
-      request({
-        action: 'change_apply',
-        now: NOW + 120_000,
-        approval: { state: 'ACTIVE', change_digest: 'sha-a', presented_digest: 'sha-a', expires_at: NOW + 60_000 },
-      }),
-    );
-    assert.equal(decision.primary?.reason, 'APPROVAL_EXPIRED');
+describe('策略：写权限来自工作区 grant', () => {
+  it('change_apply 只检查逐目录 grant；判定输入没有逐次人工批准字段', () => {
+    const requestWithGrant = request({ action: 'change_apply' });
+    const noGrant = decide(request({ action: 'change_apply', granted_capabilities: [] }));
+    assert.equal(decide(requestWithGrant).allow, true);
+    assert.equal(noGrant.allow, false);
+    assert.equal(noGrant.primary?.reason, 'CAPABILITY_NOT_GRANTED');
+    assert.deepEqual(Object.keys(requestWithGrant.action).sort(), ['action', 'path']);
   });
 
   it('读取类动作不要求批准', () => {
-    assert.equal(reasonOf(request({ action: 'read', approval: null })), 'ALLOWED');
+    assert.equal(reasonOf(request({ action: 'read' })), 'ALLOWED');
   });
 });
 
@@ -429,7 +373,7 @@ describe('策略：批准层', () => {
 // ---------------------------------------------------------------------------
 
 describe('策略：失败不短路', () => {
-  /** 同时违反全部五层。 */
+  /** 同时违反连接、工作区、代次与文件规则；逐次批准已不是一层策略。 */
   function everythingWrong(): PolicyRequest {
     return request({
       action: 'change_apply',
@@ -440,17 +384,16 @@ describe('策略：失败不短路', () => {
       capabilities: { direct_write_enabled: false },
       presented_generation: GEN - 3,
       presented_policy_version: POLICY - 2,
-      approval: null,
       paused: true,
     });
   }
 
-  it('五层同时失败时，五层都被记录', () => {
+  it('四层同时失败时，四层都被记录', () => {
     const decision = decide(everythingWrong());
     const failed = decision.checks.filter((c) => !c.passed).map((c) => c.check);
     assert.deepEqual(
       failed,
-      ['connection', 'workspace', 'generation', 'file_rules', 'approval'],
+      ['connection', 'workspace', 'generation', 'file_rules'],
       '任何一层被短路跳过，这里就会少一项',
     );
   });
@@ -458,8 +401,8 @@ describe('策略：失败不短路', () => {
   it('全部失败项都保留在 failures 里（审计需要知道全貌）', () => {
     const decision = decide(everythingWrong());
     const checks = new Set(decision.failures.map((f) => f.check));
-    assert.deepEqual([...checks].sort(), ['approval', 'connection', 'file_rules', 'generation', 'workspace']);
-    assert.ok(decision.failures.length >= 5, `失败项太少：${decision.failures.length}`);
+    assert.deepEqual([...checks].sort(), ['connection', 'file_rules', 'generation', 'workspace']);
+    assert.ok(decision.failures.length >= 4, `失败项太少：${decision.failures.length}`);
   });
 
   it('主因按固定优先级取，与失败项数量无关', () => {
@@ -482,7 +425,6 @@ describe('策略：失败不短路', () => {
     assert.equal(byCheck.get('workspace'), true);
     assert.equal(byCheck.get('generation'), true);
     assert.equal(byCheck.get('file_rules'), false);
-    assert.equal(byCheck.get('approval'), true, '非写入动作的批准层应记通过');
   });
 });
 
@@ -491,17 +433,8 @@ describe('策略：失败不短路', () => {
 // ---------------------------------------------------------------------------
 
 describe('策略：模型输入无法触及策略与资源根', () => {
-  it('批准视图里没有 `approved` 字段（那种字段不该存在）', () => {
-    const req = request({ action: 'change_apply' });
-    assert.ok(req.action.approval !== null);
-    assert.ok(
-      !Object.prototype.hasOwnProperty.call(req.action.approval, 'approved'),
-      '批准视图不允许出现 approved 之类的布尔授权证据',
-    );
-  });
-
   it('在请求里塞 approved:true / user_id 之类字段不会改变判定', () => {
-    const base = request({ action: 'change_apply', approval: null });
+    const base = request({ action: 'change_apply' });
     const tampered = {
       ...base,
       action: {
@@ -515,9 +448,10 @@ describe('策略：模型输入无法触及策略与资源根', () => {
       },
     } as unknown as PolicyRequest;
 
+    const baseline = decide(base);
     const decision = decide(tampered);
-    assert.equal(decision.allow, false, '多塞字段竟然放行了');
-    assert.equal(decision.primary?.reason, 'APPROVAL_MISSING');
+    assert.equal(decision.allow, baseline.allow, '请求字段不能扩大逐工作区 grant');
+    assert.equal(decision.primary?.reason, baseline.primary?.reason);
   });
 
   it('请求里没有绝对路径字段，也没有任何可扩大的根', () => {
@@ -525,7 +459,7 @@ describe('策略：模型输入无法触及策略与资源根', () => {
     const keys = Object.keys(req);
     assert.deepEqual(keys.sort(), ['action', 'connection', 'now', 'presented', 'workspace']);
     const actionKeys = Object.keys(req.action).sort();
-    assert.deepEqual(actionKeys, ['action', 'approval', 'path'], '动作视图只允许有这三个字段');
+    assert.deepEqual(actionKeys, ['action', 'path'], '策略动作只包含动作名与工作区相对路径');
   });
 
   it('策略参数（rules）只能从请求传入，工具参数里没有这条通道', () => {

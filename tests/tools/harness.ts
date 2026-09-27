@@ -77,23 +77,14 @@ export const TOOL_TEST_ENV: WorkspaceEnvironment = {
 export const DIRECTORY_ROOT = 'C:\\LWBTEST\\work\\proj';
 export const FILE_ROOT = 'C:\\LWBTEST\\work\\notes\\todo.md';
 
-/** 门禁：默认**全关**（与生产一致）。需要开的时候显式给。 */
+/** 外部验收状态：默认未签署；它不再关闭任何操作能力。 */
 export const GATES_OFF: PlatformGates = {
   g0_platform_verified: false,
   native_guard_verified: false,
   compatibility_section3_passed: false,
   g4_concurrency_fault_passed: false,
 };
-/**
- * 四格全开。
- *
- * **`g4_concurrency_fault_passed` 在这里为 true 不代表 G4 通过了** ——
- * 真实判定在 `docs/evidence/g4-write.md`，那里是「未通过」。这一份是
- * **装置**：`direct_write_enabled` 现在多一个与项，不给真的用例就会
- * 在「直写关着」上失败，而那是装置少配了一个字段，不是被测行为。
- * 换句话说：装置可以假装门禁全开，好去验**门禁全开之后**那些代码；
- * 而生产那一份（`BRIDGE_GATES`）仍然是一个全 false 的常量。
- */
+/** 所有验收事实设为 true 的状态页装置，仅用于测试展示/诊断。 */
 export const GATES_ON: PlatformGates = {
   g0_platform_verified: true,
   native_guard_verified: true,
@@ -241,17 +232,17 @@ export interface ToolHarnessOptions {
    */
   readonly environment?: WorkspaceEnvironment;
   /**
-   * 门禁事实。给一个函数时**每次求能力开关都会重新问它**。
-   *
-   * 与 `paused` 同一条理由：`change_apply` 的「门禁关了会怎样」这一格，
-   * 只有在**先开着门禁把修改集与批准准备好、再关门**时才是它要问的问题
-   * —— 门禁从开头就关着的话，连提案都建不出来（`proposal_enabled` 也是
-   * 关的），那一格测到的只是「提案建不出来」。
+   * 外部验收状态，仅供 bridge_status / diagnostics 展示。给函数时每次读取都会刷新；
+   * 它不决定能力开关，也不替代 per-workspace grants。
    */
   readonly gates?: PlatformGates | (() => PlatformGates);
   /** 每工作区的恢复置位。默认全 false。 */
   readonly recovery?: (workspace: WorkspaceRecord) => boolean;
   readonly limits?: ToolLimits;
+  /** 单调搜索时钟；生产/性能装置应传入随真实耗时推进的时钟。 */
+  readonly search_clock?: () => number;
+  /** 工具操作的时间来源；与 `search_clock` 同轴时可测实际墙钟预算。 */
+  readonly now?: () => number;
   /**
    * 每连接每小时出站字节上限（LWB-018）。省略即生产初值。
    *
@@ -315,6 +306,8 @@ export interface ToolHarnessOptions {
    * 埋在两步的时序里。
    */
   readonly blobs?: BlobStore;
+  /** Per-harness physical snapshot quota for storage-pressure regressions. */
+  readonly blob_store_max_bytes?: number;
   /**
    * 覆盖执行协调器（LWB-032）。
    *
@@ -597,7 +590,12 @@ export async function makeToolHarness(options: ToolHarnessOptions = {}): Promise
   };
 
   const objectsRoot = await mkdtemp(path.join(os.tmpdir(), 'lwb-tools-objects-'));
-  const blobs = options.blobs ?? new BlobStore({ objectsRoot, registry: repos.blobs });
+  const blobs = options.blobs ?? new BlobStore({
+    objectsRoot,
+    registry: repos.blobs,
+    ...(options.blob_store_max_bytes === undefined ? {} : { maxBytes: options.blob_store_max_bytes }),
+  });
+  const toolNow = options.now ?? (() => NOW);
 
   // 写盘的人是真 `createNativeApplier`，探活的人是 `createProcessProbe`
   // —— 两者都是装配根会用的那一个（`apps/daemon/src/runtime/assembly.ts`），
@@ -629,19 +627,19 @@ export async function makeToolHarness(options: ToolHarnessOptions = {}): Promise
     blobs,
     budgets: new EgressBudgetStore({
       limit_bytes_per_hour: options.egress_bytes_per_hour ?? 64 * 1024 * 1024,
-      now: () => NOW,
+      now: toolNow,
     }),
-    // 每次重新求门禁：`gates` 本身是构造时那一份快照，而能力开关是一个
-    // **当下**的读数（理由见 `ToolHarnessOptions.gates`）。
+    // 每次现读 verification status 与逐工作区 recovery 状态；verification status
+    // 只用于诊断，能力是否可调用由 grant 决定。
     capability_flags: (workspace) =>
-      capabilityFlagsWith(currentGates(), options.recovery ?? (() => false))(workspace),
-    now: () => NOW,
+      capabilityFlagsWith(options.recovery ?? (() => false))(workspace),
+    now: toolNow,
     ops,
     coordinator,
     ...(options.apply_options === undefined ? {} : { apply_options: options.apply_options }),
     authority: createReadTicketAuthority({ key: KEY }),
-    clock: () => NOW,
-    // 每次重新问一遍暂停与门禁：`facts` 本身是构造时那一份快照，
+    clock: options.search_clock ?? toolNow,
+    // 每次重新问一遍暂停与验收状态：`facts` 本身是构造时那一份快照，
     // 而这两个都是**当下**的读数（`guard.ts` 第 1 步、`bridge_status`）。
     status: () => ({ ...facts, gates: currentGates() }),
     ...(options.limits === undefined ? {} : { limits: options.limits }),

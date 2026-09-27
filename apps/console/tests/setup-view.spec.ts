@@ -208,82 +208,19 @@ describe('A 组 · 平台状态不会冒充在线（验收标准 3）', () => {
 });
 
 // ---------------------------------------------------------------------------
-// B 组 · 直写门禁（验收标准 2）
+// B 组 · 简单解释权限设置入口
 // ---------------------------------------------------------------------------
 
-describe('B 组 · 直写门禁在界面上逐格可读（验收标准 2）', () => {
-  it('B1 四个门禁格逐格列值，今天全是「未通过」', () => {
+describe('B 组 · Setup 页指向逐目录权限，不展示全局写入门禁', () => {
+  it('说明读取/修改权限在工作区页面按目录配置，平台验收只作诊断', () => {
     const wrapper = mountView({ session: SESSION, status: reading(status()) });
-    const rows = wrapper.findAll('[data-testid="gate-row"]');
-
-    assert.deepEqual(rows.map((row) => row.attributes('data-gate')), [
-      'g0_platform_verified',
-      'compatibility_section3_passed',
-      'native_guard_verified',
-      'g4_concurrency_fault_passed',
-    ]);
-    assert.deepEqual(rows.map((row) => row.text()), ['未通过', '未通过', '未通过', '未通过']);
-  });
-
-  it('B2 无读数渲染成「无读数」，不是「未通过」', () => {
-    // 判决点：一个 `?? false` 的实现会在这里给出四个「未通过」，
-    // 而那等于把「去查服务」说成了「去看证据」。
-    const wrapper = mountView({ session: SESSION, status: null });
-    const rows = wrapper.findAll('[data-testid="gate-row"]');
-    assert.deepEqual(rows.map((row) => row.text()), ['无读数', '无读数', '无读数', '无读数']);
-    assert.deepEqual(rows.map((row) => row.attributes('data-state')), [
-      'unknown',
-      'unknown',
-      'unknown',
-      'unknown',
-    ]);
-  });
-
-  it('B3 直写关着，理由逐条列出来（今天四条）', () => {
-    const wrapper = mountView({ session: SESSION, status: reading(status()) });
-
-    assert.equal(wrapper.find('[data-testid="write-gate-summary"]').attributes('data-direct-write'), 'false');
-    assert.match(wrapper.find('[data-testid="write-gate-summary"]').text(), /直写：关闭/);
-    const reasons = wrapper.findAll('[data-testid="write-gate-reason"]');
-    assert.equal(reasons.length, 4);
-    assert.match(reasons.map((row) => row.text()).join('\n'), /G0（真实网页接入验证）未通过/);
-    assert.match(reasons.map((row) => row.text()).join('\n'), /G4（竞争与故障专项测试）未通过/);
-  });
-
-  it('B3a 明确区分阶段验收门禁与目录授权/运行时开关', () => {
-    const wrapper = mountView({ session: SESSION, status: reading(status()) });
-    const guide = wrapper.find('[data-testid="gate-guide"]');
-    const text = guide.text();
-
-    assert.equal(guide.exists(), true);
-    assert.match(text, /G0.*真实 ChatGPT 网页/);
-    assert.match(text, /G2.*真实网页读取/);
-    assert.match(text, /G3.*本机批准前工作区字节不变/);
-    assert.match(wrapper.find('[data-testid="gate-guide-runtime-note"]').text(), /不会登记目录、授予工作区权限/);
-  });
-
-  it('B4 四格与开关全绿时界面说「已打开」—— 这句不是写死的', () => {
-    const wrapper = mountView({
-      session: SESSION,
-      status: reading(status({ gates: ALL_PASS, capability_flags: FLAGS_ON })),
-    });
-    assert.equal(wrapper.find('[data-testid="write-gate-summary"]').attributes('data-direct-write'), 'true');
-    assert.equal(wrapper.find('[data-testid="write-gate-reasons"]').exists(), false);
-  });
-
-  it('B5 能力开关逐格列值，且「无读数」与「关闭」分得开', () => {
-    const on = mountView({ session: SESSION, status: reading(status({ gates: ALL_PASS, capability_flags: FLAGS_ON })) });
-    assert.deepEqual(on.findAll('[data-testid="flag-row"]').map((row) => row.text()), [
-      '打开',
-      '打开',
-      '打开',
-      '打开',
-      '关闭',
-    ]);
-    assert.equal(on.findAll('[data-testid="flag-row"]')[3]?.attributes('data-flag'), 'direct_write_enabled');
-
-    const none = mountView({ session: SESSION, status: null });
-    assert.equal(none.findAll('[data-testid="flag-row"]').every((row) => row.text() === '无读数'), true);
+    const info = wrapper.find('[data-testid="workspace-permission-info"]');
+    assert.equal(info.exists(), true);
+    assert.match(info.text(), /平台连接状态只用于诊断/);
+    assert.match(info.text(), /工作区.*逐目录选择/);
+    assert.match(info.text(), /不再逐次等待本机批准/);
+    assert.equal(wrapper.find('[data-testid="gate-list"]').exists(), false);
+    assert.equal(wrapper.find('[data-testid="write-gate-summary"]').exists(), false);
   });
 
   it('B6 服务端声明的限制照实显示，没有时也不留白', () => {

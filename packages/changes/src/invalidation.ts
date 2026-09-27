@@ -3,7 +3,7 @@
  *
  * ## 三件事，三个不同的时刻
  *
- * 这个模块的六个导出分属三个时刻，混在一起会看不出它们为什么不能合并：
+ * 这个模块的导出分属三个时刻，混在一起会看不出它们为什么不能合并：
  *
  *  1. **决定之前**（`INVALIDATABLE_STATES` / `EXPIRABLE_STATES`）——
  *     哪几个状态还可能被「拦下来」。由转移表**推导**，不另抄一份清单。
@@ -42,17 +42,19 @@
  * 计数为零而字节仍被需要的组合是**可以存在**的，下面的
  * `WITHIN_RETENTION_WINDOW` 就是它。
  *
- * ## 本模块**不**删任何字节
+ * ## 删除仍由 BlobStore 执行，本模块提供权威保留判据
  *
- * 它产出的是**计划**（`SnapshotRetentionPlan`）与一个**判据**
- * （`snapshotGuard` 返回的 `protect`）。真正的删除在
- * `BlobStore.collectGarbage`，那里已经固定了两条顺序不变量（先删字节后改
- * 状态、删除前再核实一次引用计数）。本模块只在它旁边补上第三个问题：
- * 「这个对象此刻是不是还有人需要」。
+ * `snapshotGuard` 产出逐对象判据；`collectSnapshotGarbage` 只负责把该判据
+ * 接入 `BlobStore.collectGarbage`。真正的删除仍在 BlobStore，那里固定了
+ * 两条顺序不变量（先删字节后改状态、删除前再核实引用计数）。
+ *
+ * 编排层必须另外给出全局 `isSafeToCollect`。daemon 仅在单实例锁持有、启动
+ * 恢复已结束、网络监听尚未开放时使用它；不能把它当成逐对象保留规则。
  */
 
 import { BridgeError, CONTRACT_VERSION, LIMITS } from '@lwb/contracts';
 import type { ApprovalState, BridgeErrorCode, ChangeSetState, OperationState } from '@lwb/contracts';
+import type { BlobStore, GcReport } from '@lwb/blob-store';
 import type {
   ChangeItemRecord,
   ChangeSetRecord,
@@ -975,6 +977,20 @@ export function snapshotGuard(
       return PROTECTION_MESSAGES[entry.reason];
     },
   };
+}
+
+/** Reclaim expired zero-refcount snapshots using the authoritative retention guard. */
+export async function collectSnapshotGarbage(
+  repos: Repositories,
+  blobs: BlobStore,
+  input: { readonly now: string; readonly retention_ms?: number },
+  options: { readonly isSafeToCollect: () => boolean | Promise<boolean> },
+): Promise<GcReport> {
+  const guard = snapshotGuard(repos, input);
+  return await blobs.collectGarbage({
+    isSafeToCollect: options.isSafeToCollect,
+    protect: guard.protect,
+  });
 }
 
 // ---------------------------------------------------------------------------

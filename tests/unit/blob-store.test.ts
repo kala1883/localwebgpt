@@ -20,6 +20,7 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import {
+  BlobQuotaExceededError,
   BlobIntegrityError,
   BlobMissingError,
   BlobStore,
@@ -75,6 +76,18 @@ class FakeRegistry implements BlobRegistry {
       if (blob.sha256 === sha256 && blob.size === size) return blob;
     }
     return null;
+  }
+
+  releaseRef(id: string): void {
+    const blob = this.blobs.get(id);
+    assert.ok(blob);
+    assert.ok(blob.refcount > 0);
+    const refcount = blob.refcount - 1;
+    this.blobs.set(id, {
+      ...blob,
+      refcount,
+      retention_state: refcount === 0 ? 'pending_gc' : 'active',
+    });
   }
 
   listPendingGc(): readonly RegistryBlob[] {
@@ -137,6 +150,80 @@ describe('LWB-007 快照存储', () => {
     assert.equal(first.deduplicated, false);
     assert.equal(second.deduplicated, true);
     assert.equal(second.sha256, first.sha256);
+  });
+
+  it('整批快照在超额时预拒绝，不落任何对象或引用', async () => {
+    const quotaObjects = path.join(root, 'quota-objects');
+    const quotaRegistry = new FakeRegistry(quotaObjects);
+    const quotaStore = new BlobStore({
+      objectsRoot: quotaObjects,
+      registry: quotaRegistry,
+      maxBytes: 10,
+    });
+    const first = Buffer.from('123456', 'utf8');
+    const second = Buffer.from('abcdef', 'utf8');
+
+    await assert.rejects(
+      () => quotaStore.putAndRegisterBatch([{ bytes: first }, { bytes: second }]),
+      (cause: unknown) => {
+        assert.ok(cause instanceof BlobQuotaExceededError);
+        assert.equal(cause.used_bytes, 0);
+        assert.equal(cause.limit_bytes, 10);
+        assert.equal(cause.incoming_bytes, 12);
+        return true;
+      },
+    );
+    assert.equal(existsSync(quotaObjects), false, '配额拒绝必须发生在创建对象目录和临时文件之前');
+    assert.equal(quotaRegistry.blobs.size, 0, '配额拒绝不得登记部分快照引用');
+  });
+
+  it('按物理内容去重核算；GC 删除对象后容量可再次使用', async () => {
+    const quotaObjects = path.join(root, 'quota-gc-objects');
+    const quotaRegistry = new FakeRegistry(quotaObjects);
+    const quotaStore = new BlobStore({
+      objectsRoot: quotaObjects,
+      registry: quotaRegistry,
+      maxBytes: 6,
+    });
+    const original = Buffer.from('abcde', 'utf8');
+    const first = await quotaStore.putAndRegister(original);
+    const duplicate = await quotaStore.putAndRegister(original);
+    assert.equal(first.id, duplicate.id);
+    assert.equal(duplicate.put.deduplicated, true);
+
+    await assert.rejects(
+      () => quotaStore.putAndRegister(Buffer.from('xy', 'utf8')),
+      BlobQuotaExceededError,
+    );
+    quotaRegistry.releaseRef(first.id);
+    quotaRegistry.releaseRef(first.id);
+    const report = await quotaStore.collectGarbage({ isSafeToCollect: () => true });
+    assert.deepEqual(report.collected.map((item) => item.id), [first.id]);
+
+    const afterGc = await quotaStore.putAndRegister(Buffer.from('xy', 'utf8'));
+    assert.equal(afterGc.put.size, 2);
+  });
+
+  it('串行化并发批次，不允许合计越过配置硬上限', async () => {
+    const quotaObjects = path.join(root, 'quota-race-objects');
+    const quotaRegistry = new FakeRegistry(quotaObjects);
+    const quotaStore = new BlobStore({
+      objectsRoot: quotaObjects,
+      registry: quotaRegistry,
+      maxBytes: 6,
+    });
+    const results = await Promise.allSettled([
+      quotaStore.putAndRegisterBatch([{ bytes: Buffer.from('first', 'utf8') }]),
+      quotaStore.putAndRegisterBatch([{ bytes: Buffer.from('other', 'utf8') }]),
+    ]);
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    assert.ok(rejected && rejected.status === 'rejected' && rejected.reason instanceof BlobQuotaExceededError);
+    const firstDigest = sha256Of(Buffer.from('first', 'utf8'));
+    const secondDigest = sha256Of(Buffer.from('other', 'utf8'));
+    assert.equal(existsSync(objectPath(quotaObjects, firstDigest)), true);
+    assert.equal(existsSync(objectPath(quotaObjects, secondDigest)), false);
+    assert.equal([...quotaRegistry.blobs.values()].filter((blob) => blob.retention_state !== 'deleted').length, 1);
   });
 
   it('去重时若盘上已有的字节已被损坏，拒绝复用（不把损坏传播出去）', async () => {

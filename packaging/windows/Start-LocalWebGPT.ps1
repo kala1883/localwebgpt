@@ -30,8 +30,10 @@ $dotenvPath = Join-Path $runtimeRoot '.env'
 $dotenvValues = @{}
 $tunnelId = ''
 $apiKey = ''
+$snapshotQuota = ''
 $previousTunnelId = $env:CONTROL_PLANE_TUNNEL_ID
 $previousApiKey = $env:CONTROL_PLANE_API_KEY
+$previousSnapshotQuota = $env:LWB_SNAPSHOT_STORE_MAX_BYTES
 $exitCode = 1
 $locationPushed = $false
 try {
@@ -56,6 +58,8 @@ try {
       'control_plane_tunnel_id' { 'CONTROL_PLANE_TUNNEL_ID'; break }
       'runtime_api_key' { 'CONTROL_PLANE_API_KEY'; break }
       'control_plane_api_key' { 'CONTROL_PLANE_API_KEY'; break }
+      'snapshot_store_max_bytes' { 'LWB_SNAPSHOT_STORE_MAX_BYTES'; break }
+      'lwb_snapshot_store_max_bytes' { 'LWB_SNAPSHOT_STORE_MAX_BYTES'; break }
       default { $null }
     }
     if ($null -eq $targetName) { continue }
@@ -94,6 +98,12 @@ try {
   if ($tunnelId -notmatch '^tunnel_[A-Za-z0-9_-]{8,}$') {
     throw '.env tunnel_id format is invalid; copy the tunnel_id from OpenAI Platform.'
   }
+  if ($dotenvValues.ContainsKey('LWB_SNAPSHOT_STORE_MAX_BYTES')) {
+    $snapshotQuota = ([string]$dotenvValues['LWB_SNAPSHOT_STORE_MAX_BYTES']).Trim()
+    if ($snapshotQuota -notmatch '^[1-9][0-9]{0,9}$' -or [long]$snapshotQuota -gt 2147483648) {
+      throw 'snapshot_store_max_bytes must be a positive decimal byte count no greater than the 2 GiB hard ceiling; the value was not displayed.'
+    }
+  }
 
   if ($ValidateOnly) {
     Write-Host 'Project-root .env is valid; credential values were not displayed.'
@@ -104,6 +114,7 @@ try {
   $locationPushed = $true
   $env:CONTROL_PLANE_TUNNEL_ID = $tunnelId
   $env:CONTROL_PLANE_API_KEY = $apiKey
+  if ($snapshotQuota.Length -gt 0) { $env:LWB_SNAPSHOT_STORE_MAX_BYTES = $snapshotQuota }
 
   # The Node launcher starts the daemon, prints a one-time local console URL,
   # and waits for the operator's audited connection-enable action before it
@@ -113,8 +124,10 @@ try {
 } finally {
   $env:CONTROL_PLANE_TUNNEL_ID = $previousTunnelId
   $env:CONTROL_PLANE_API_KEY = $previousApiKey
+  $env:LWB_SNAPSHOT_STORE_MAX_BYTES = $previousSnapshotQuota
   $tunnelId = ''
   $apiKey = ''
+  $snapshotQuota = ''
   $rawLine = ''
   $line = ''
   $assignment = $null

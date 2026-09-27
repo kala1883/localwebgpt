@@ -38,15 +38,36 @@ function runAttached(
   executable: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      resolve({ code: 143, signal: 'SIGTERM' });
+      return;
+    }
     const child = spawn(executable, [...args], {
       cwd: REPO_ROOT,
       env,
       stdio: 'inherit',
     });
-    child.once('error', reject);
-    child.once('close', (code, signal) => resolve({ code: code ?? 1, signal }));
+    const onAbort = (): void => {
+      // Stop only this launcher-owned tunnel-client. On Windows Node maps
+      // SIGTERM to abrupt process termination; wait for close before daemon
+      // cleanup closes the adapter IPC pipe and persistent stores.
+      child.kill('SIGTERM');
+    };
+    const cleanup = (): void => signal?.removeEventListener('abort', onAbort);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    child.once('error', (error) => {
+      cleanup();
+      if (signal?.aborted) resolve({ code: 143, signal: 'SIGTERM' });
+      else reject(error);
+    });
+    child.once('close', (code, childSignal) => {
+      cleanup();
+      resolve({ code: code ?? 1, signal: childSignal });
+    });
   });
 }
 
@@ -90,11 +111,13 @@ async function main(): Promise<number> {
 
   let runtime: Awaited<ReturnType<typeof startDaemon>> | null = null;
   let signalSeen: NodeJS.Signals | null = null;
+  let stopRequested = false;
   const shutdown = new AbortController();
   const onInterrupt = (signal: NodeJS.Signals): void => {
     // Ctrl+C is broadcast to attached console processes on Windows. Keep this
     // process alive long enough for tunnel-client to stop its stdio child and
     // for the daemon's finally block below to close the local IPC/control APIs.
+    if (signalSeen !== null) return;
     signalSeen = signal;
     shutdown.abort();
   };
@@ -111,6 +134,12 @@ async function main(): Promise<number> {
 
     const activeRuntime = runtime;
     if (activeRuntime === null) throw new Error('daemon 启动后没有返回运行时句柄。');
+    void activeRuntime.stop_requested.then(() => {
+      stopRequested = true;
+      onInterrupt('SIGTERM');
+    });
+    const stopExitCode = (): number =>
+      stopRequested ? 0 : signalSeen === 'SIGINT' ? 130 : 143;
     const waitWithShutdown = async (milliseconds: number): Promise<void> => {
       try {
         await delay(milliseconds, undefined, { signal: shutdown.signal });
@@ -118,7 +147,7 @@ async function main(): Promise<number> {
         if (!shutdown.signal.aborted) throw error;
       }
     };
-    const connectionEnabled = await waitForConnectionEnable({
+    const waitForConnection = (): Promise<boolean> => waitForConnectionEnable({
       isEnabled: () => {
         const connection = activeRuntime.repos.connections.findById(ADAPTER_CONNECTION_ID);
         if (connection === null) throw new Error('本机模型连接未登记，拒绝启动 tunnel。');
@@ -128,7 +157,8 @@ async function main(): Promise<number> {
       shouldStop: () => signalSeen !== null,
       log: (message) => process.stdout.write(`${message}\n`),
     });
-    if (!connectionEnabled) return signalSeen === 'SIGINT' ? 130 : 143;
+    const connectionEnabled = await waitForConnection();
+    if (!connectionEnabled) return stopExitCode();
 
     const childEnv: NodeJS.ProcessEnv = { ...process.env };
     delete childEnv['LWB_IPC_SECRET_CONSOLE'];
@@ -137,7 +167,9 @@ async function main(): Promise<number> {
       tunnelClient,
       tunnelClientArguments('doctor', tunnelId),
       childEnv,
+      shutdown.signal,
     );
+    if (signalSeen !== null) return stopExitCode();
     if (doctor.code !== 0 || doctor.signal !== null) {
       reportFailure('tunnel-client doctor 未通过；隧道未启动。请按上面的诊断处理后重试。');
       return doctor.code || 1;
@@ -145,11 +177,13 @@ async function main(): Promise<number> {
 
     process.stdout.write('本地 daemon 与 MCP 适配器已就绪；正在以前台方式启动 Secure MCP Tunnel。\n');
     return await superviseTunnel({
-      run: () => runAttached(tunnelClient, tunnelClientArguments('run', tunnelId), childEnv),
-      doctor: () => runAttached(tunnelClient, tunnelClientArguments('doctor', tunnelId), childEnv),
+      run: () => runAttached(tunnelClient, tunnelClientArguments('run', tunnelId), childEnv, shutdown.signal),
+      doctor: () => runAttached(tunnelClient, tunnelClientArguments('doctor', tunnelId), childEnv, shutdown.signal),
+      beforeRun: waitForConnection,
+      beforeRestart: waitForConnection,
       wait: waitWithShutdown,
       shouldStop: () => signalSeen !== null,
-      stopExitCode: () => (signalSeen === 'SIGINT' ? 130 : 143),
+      stopExitCode,
       log: (message) => process.stdout.write(`${message}\n`),
     });
   } catch (error) {

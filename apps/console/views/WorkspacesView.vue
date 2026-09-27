@@ -58,7 +58,7 @@ const ACCESS_OPTIONS: readonly {
   { capability: 'read', label: '读取文件内容', tools: 'file_read、文件快照/错误详情' },
   { capability: 'search', label: '搜索文本', tools: 'text_search' },
   { capability: 'git_read', label: '读取 Git 状态与差异', tools: 'git_status、git_diff、git_log' },
-  { capability: 'propose', label: '准备修改提议', tools: 'change_prepare、change_revert_prepare、change_apply 请求' },
+  { capability: 'propose', label: '文件修改（直接写入）', tools: 'file_create、file_edit、change_prepare、change_apply' },
 ];
 
 const props = withDefaults(
@@ -75,8 +75,6 @@ const props = withDefaults(
     readonly connectionEnabled?: boolean | null;
     /** 能力开关的读数。`null` 表示没读到，**不当作关闭**（理由见 `readings.ts`）。 */
     readonly flags?: CapabilityFlags | null;
-    /** 门禁读数，用于算出「直写开着还是关着」放进风险说明里。 */
-    readonly gates?: Parameters<typeof writeGate>[0]['gates'];
     /** 当前机器那一行。由调用方用 `machineLine()` 算好传进来。 */
     readonly machineLine?: string | null;
     /** 有请求在途时按钮不可再点。 */
@@ -91,7 +89,6 @@ const props = withDefaults(
     workspaceAccess: () => [],
     connectionEnabled: null,
     flags: null,
-    gates: null,
     machineLine: null,
     busy: false,
     feedback: null,
@@ -137,12 +134,11 @@ const draft = ref<RegisterDraft>({
 
 const write = computed(() =>
   writeGate({
-    gates: props.gates,
     flags: props.flags,
   }),
 );
 
-const offers = computed(() => modeOffers(write.value, props.flags?.proposal_enabled ?? null));
+const offers = computed(() => modeOffers(write.value));
 
 const validation = computed(() => validateRegister(draft.value));
 
@@ -446,7 +442,7 @@ function cancelAccess(): void {
       </p>
       <p class="ws__dim" data-testid="capability-note">
         登记本身**不改动**那个目录里的任何文件，也不代表内容立刻会被读走 ——
-        {{ flags?.read_enabled === true ? '读取能力当前打开。' : '读取能力当前关闭（门禁未通过）。' }}
+        {{ flags?.read_enabled === true ? '获授读取工具后即可读取。' : '本机读取功能状态未知。' }}
       </p>
     </section>
 
@@ -498,7 +494,7 @@ function cancelAccess(): void {
             </button>
             <div v-if="accessDraft?.workspace_id === row.workspace_id" class="ws__access-editor" :data-testid="`access-editor-${row.workspace_id}`">
               <p class="ws__risk">
-                只对上面这个目录生效。勾选代表授予对应 MCP 能力；未勾选不授权。全局门禁仍会单独阻止未启用的能力，空选后保存会撤销该目录的全部 ChatGPT 访问。
+                只对上面这个目录生效。勾选“文件修改”代表允许 ChatGPT 在此目录直接创建/编辑文本文件，不再逐次等待批准；取消勾选并保存即可撤销。其他目录不受影响。
               </p>
               <label v-for="option in ACCESS_OPTIONS" :key="option.capability" class="ws__choice ws__access-option">
                 <input
@@ -511,7 +507,7 @@ function cancelAccess(): void {
                 <span><strong>{{ option.label }}</strong> <code>{{ option.tools }}</code></span>
               </label>
               <p v-if="row.mode === 'read_only'" class="ws__dim" data-testid="propose-mode-note">
-                此根登记为只读，不能授权修改提议；提议也不会直接改文件，实际应用仍需本机批准且受全局门禁约束。
+                此根登记为只读，不能授权文件修改。
               </p>
               <div class="ws__actions">
                 <button type="button" :disabled="!canAct(row)" :data-testid="`save-access-${row.workspace_id}`" @click="saveAccess">保存目录授权</button>

@@ -44,20 +44,38 @@ describe('ChatGPT conversation evaluation set', () => {
     }
   });
 
-  it('covers direct/indirect, follow-up, no-write, approval, timeout, boundary, refusal, and unsupported cases', () => {
+  it('covers direct/indirect, follow-up, no-write, direct writes, timeout, boundary, refusal, and unsupported cases', () => {
     const categories = new Set(suite.cases.map((testCase) => testCase.category));
     for (const required of [
-      'direct', 'indirect', 'follow_up', 'no_write', 'proposal', 'approval',
+      'direct', 'indirect', 'follow_up', 'no_write', 'direct_write',
       'timeout', 'boundary', 'refusal', 'untrusted_content', 'unsupported',
     ]) {
       assert.ok(categories.has(required), `missing category ${required}`);
     }
   });
 
-  it('never expects change_apply in the unapproved proposal case', () => {
-    const proposal = suite.cases.find((testCase) => testCase.id === 'prepare-but-do-not-apply');
-    assert.ok(proposal);
-    assert.ok(proposal.expected_tool_sequence.includes('change_prepare'));
-    assert.ok(proposal.must_not_call.includes('change_apply'));
+  it('expects a granted single-file creation to write directly in one tool call', () => {
+    const create = suite.cases.find((testCase) => testCase.id === 'create-file-within-workspace-grant');
+    assert.ok(create);
+    assert.equal(create.category, 'direct_write');
+    assert.deepEqual(create.expected_tool_sequence, ['file_create']);
+    assert.ok(create.must_not_call.includes('change_apply'));
+    assert.ok(create.assertions.some((assertion) => assertion.includes('state=APPLIED')));
+  });
+
+  it('expects a granted single-file edit to apply directly and validate its receipt', () => {
+    const edit = suite.cases.find((testCase) => testCase.id === 'edit-file-within-workspace-grant');
+    assert.ok(edit);
+    assert.equal(edit.category, 'direct_write');
+    assert.deepEqual(edit.expected_tool_sequence, ['file_edit']);
+    assert.ok(edit.must_not_call.includes('change_apply'));
+    assert.ok(edit.assertions.some((assertion) => assertion.includes('state=APPLIED')));
+  });
+
+  it('uses prepare/apply for multi-file writes without per-change approval', () => {
+    const multiFile = suite.cases.find((testCase) => testCase.id === 'multi-file-change-within-workspace-grant');
+    assert.ok(multiFile);
+    assert.deepEqual(multiFile.expected_tool_sequence, ['change_prepare', 'change_apply']);
+    assert.ok(multiFile.assertions.some((assertion) => assertion.includes('do not ask for another per-change console approval')));
   });
 });

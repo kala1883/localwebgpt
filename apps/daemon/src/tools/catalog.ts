@@ -3,10 +3,10 @@
  *
  * ## 为什么清单要由 daemon 决定，而不是适配器写死
  *
- * 适配器手上有全部 12 个工具的定义（`@lwb/contracts` 的 `TOOLS`），
+ * 适配器手上有全部 14 个工具的定义（`@lwb/contracts` 的 `TOOLS`），
  * 它完全可以自己挂出去。但「这个工具此刻可用吗」是**本机状态**：
- * 它取决于门禁、取决于这条连接被授权了什么。适配器不知道这些，
- * 猜一个就等于在工具面上宣称一个未经验证的能力。
+ * 它取决于连接启停、工作区 grant 与恢复状态。适配器不知道这些，
+ * 猜一个就等于在工具面上宣称一个未经授权的能力。
  *
  * 于是 `tools.catalog` 是一条 IPC 操作：适配器问 daemon「现在能挂哪些」，
  * 得到的名字集合与本地 `TOOLS` 取交集之后才出现在 `tools/list` 里。
@@ -15,7 +15,7 @@
  *
  * 三类，各自问的是能不能**真的做成那件事**：
  *
- *  - `bridge_status` / `workspace_list`：**连接级**，不读任何工作区内容。
+ *  - `bridge_status` / `workspace_list` / `change_list`：**连接级**，不读任何工作区内容。
  *    只要连接在册且启用就可用 —— 尤其是 `bridge_status`：它是回答
  *    「为什么我什么都做不了」的那一个，把它自己也关掉会得到一个
  *    说不上话的诊断工具。
@@ -24,9 +24,8 @@
  *    没有任何工作区可读时挂出一个读取工具，模型只会拿到一串
  *    `WORKSPACE_NOT_GRANTED`。
  *  - Git 两件：同上，换 `git_enabled`。
- *  - 提议两件（`change_prepare` / `change_get`）：`proposal_enabled` 与
- *    `read_enabled`，规则来源是它们在 `ACTION_SPECS` 里那一行的 `flag`。
- *    `change_list` 是连接级（它只读本连接自己的状态库行）。
+ *  - 修改准备与执行：依赖可用工作区与目录 grant；具体读取/写入权限仍在
+ *    `resolveWorkspaceAccess()` 中按该根逐次检查。
  *
  * 判据里**没有**「连接被授予了 read 能力」这一项：那是另一层
  * （`grants` 逐工作区），`decide()` 每次调用都会检查。清单说的是
@@ -38,11 +37,8 @@
  * 出现在 `tools/list` 里，而每一次调用都被判定拒绝在 `CAPABILITY_DISABLED`
  * 上 —— 一个「挂出来但不能用」的工具比一个不挂出来的工具更难排查。
  *
- * 生产装配下门禁全关（`gates.ts`），因此这个清单**恰好是三条**：
- * `bridge_status`、`workspace_list`、`change_list`。这不是降级，是事实：
- * 平台未验证之前，任何会读用户工作区的工具都不该出现在模型面前；
- * 而这三条分别回答「本机现在什么状态」「我能看到哪些工作区」
- * 「我提过的提案怎么样了」—— 都只读状态库，一个用户字节都不碰。
+ * 平台验收签署不再充当隐藏的全局开关。工具可用性来自本地配置的连接与
+ * 工作区 grant；每次调用还会重新验证具体动作、相对路径、根身份和恢复状态。
  */
 
 import { TOOL_NAMES, isControlPlaneName, isImplementedToolName, isToolName } from '@lwb/contracts';
@@ -79,25 +75,22 @@ const AVAILABILITY: Readonly<Record<ImplementedToolName, AvailabilityRule>> = {
   text_search: { kind: 'workspace_flag', flag: 'read_enabled' },
   git_status: { kind: 'workspace_flag', flag: 'git_enabled' },
   git_diff: { kind: 'workspace_flag', flag: 'git_enabled' },
-  // 提议：会经受控句柄重读目标文件的基线，因此与读取同类，只是换一个开关。
+  // 提案类：会经受控句柄重读目标文件的基线，因此与读取同类，只是换一个开关。
   change_prepare: { kind: 'workspace_flag', flag: 'proposal_enabled' },
-  // 它读的是快照库（受保护根之内，不是用户工作区），但判定的动作是
-  // `snapshot_read`，而那一行的 `flag` 就是 `read_enabled`。
-  // 清单与判定**必须是同一个答案**：清单说可用、判定说开关关着，
-  // 每一条调用都会拿到 `CAPABILITY_DISABLED`，而模型会以为是自己的用法有问题。
+  file_create: { kind: 'workspace_flag', flag: 'proposal_enabled' },
+  file_edit: { kind: 'workspace_flag', flag: 'proposal_enabled' },
+  // 它读的是快照库（受保护根之内，不是用户工作区），但仍需要该工作区的
+  // read grant；flag 只表示 daemon 支持该操作。
   change_get: { kind: 'workspace_flag', flag: 'read_enabled' },
   // 不读任何工作区内容，只读本连接自己的状态库行 —— 与 `bridge_status`
-  // 同类，因此是连接级。尤其：它必须在读取面关闭时**仍然可用**，
-  // 否则「我刚提交的提案怎么样了」这条追问在门禁未过时问不出来，
-  // 而那正是最需要它的时刻。
+  // 同类，因此是连接级。
   change_list: { kind: 'connection' },
   // 写入（LWB-032）。开关是 `direct_write_enabled`，与
   // `ACTION_SPECS.change_apply.flag` 是同一个 —— 这两处**必须**一致：
   // 不一致时工具会挂出来而每次调用都被判成 `CAPABILITY_DISABLED`，
   // 而模型读到的是一句「你的用法有问题」。
   //
-  // 生产装配下它是 `false`（`gates.ts` 全关），因此今天的答案是
-  // `DIRECT_WRITE_ENABLED_OFF`：模型看不到应用工具。这是事实，不是降级。
+  // 实际写权限仍在 `resolveWorkspaceAccess()` 里按该根的 propose grant 检查。
   change_apply: { kind: 'workspace_flag', flag: 'direct_write_enabled' },
   // 撤销**提议**：与 `change_prepare` 同一档（`proposal_enabled`），
   // 理由写在 `handlers.ts` 的 `TOOL_POLICY_ACTIONS` 那一行。
@@ -117,7 +110,7 @@ export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): read
 
   return TOOL_NAMES.map<CatalogEntry>((name) => {
     if (!isImplementedToolName(name)) {
-      // LWB-032 之后 `TOOL_NAMES` 的 12 个工具**全部**有实现，因此这条
+      // LWB-032 之后 `TOOL_NAMES` 的 14 个工具**全部**有实现，因此这条
       // 分支今天到不了。留着它是因为它守的是一件会再发生的事：`TOOL_NAMES`
       // 是契约里那份「工具全集」，将来加第十三个名字时，它会先以
       // `NOT_IMPLEMENTED` 出现在清单里 —— 如实列成不可用比让它凭空消失

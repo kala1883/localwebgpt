@@ -19,6 +19,7 @@
     "test": "node scripts/run-tests.mjs",
     "test:unit": "node scripts/run-tests.mjs tests/unit",
     "test:windows": "node scripts/run-tests.mjs tests/windows",
+    "test:performance:lwb-044": "node scripts/evidence/run-lwb-044.mjs",
     "test:security": "node scripts/run-tests.mjs tests/security",
     "test:console": "npm --workspace @lwb/console run test",
     "check:imports": "node scripts/check-fsguard-imports.mjs",
@@ -30,8 +31,10 @@
     "daemon": "node --import tsx apps/daemon/src/main.ts",
     "prechatgpt:local": "node scripts/build-console-clean-env.mjs",
     "chatgpt:local": "node --import tsx apps/daemon/src/lifecycle/chatgpt-local.ts",
+    "release:evidence": "node scripts/release/generate-evidence.mjs",
     "preacceptance:lwb037-export": "npm --workspace @lwb/console run build",
     "acceptance:lwb037-export": "node --import tsx scripts/acceptance/lwb037-export.ts",
+    "acceptance:lwb043": "node --import tsx --test tests/windows/lwb043-user-journey.test.ts",
     "mcp-adapter": "node --import tsx apps/mcp-adapter/src/main.ts",
     "console:dev": "npm run daemon"
   },

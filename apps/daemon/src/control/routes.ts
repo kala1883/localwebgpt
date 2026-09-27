@@ -194,7 +194,7 @@ export function registerOperationRoutes(
           pid: process.pid,
           request_id: context.request_id,
         };
-        return definition.handler(context.body, requestContext);
+        return registry.invoke(definition, context.body, requestContext);
       },
     });
   }

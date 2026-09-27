@@ -15,8 +15,7 @@
      只有在这一行可读时才成立：读者必须能看见这份结论出自什么时候。
   3. **四条腿** —— daemon / 适配器 / 隧道 / 账号验收，每格都带一句
      「这份读数**不能**证明什么」。
-  4. **直写门禁** —— 四个门禁格与能力开关逐格列值，并给出关着的理由。
-     这一区是验收标准 2 在界面上的样子。
+  4. **工作区授权说明** —— 告诉用户工具权限按目录在「工作区」页设置。
   5. **紧急停用** —— 按下去之后**五件事**逐条说出来，以及上一次按键的结果。
   6. **脱敏诊断** —— 可复制的文本，附带「已隐去」台账与终检结论。
   7. **本地启动帮助** —— 只在有处境时出现。
@@ -31,7 +30,6 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { CapabilityFlags } from '@lwb/contracts';
 import type { SessionPresence } from '../src/changes/approval.ts';
 import {
   applicableHelp,
@@ -44,7 +42,6 @@ import {
   redactedDiagnostic,
   writeGate,
   type ConnectionRow,
-  type Gates,
   type PauseOutcomeReading,
   type PauseStatusReading,
   type Reading,
@@ -129,11 +126,8 @@ const daemonFreshness = computed(() =>
   freshnessOf(props.status, props.now, props.staleAfterMs),
 );
 
-const gate = computed(() =>
-  writeGate({
-    gates: props.status?.value.gates ?? null,
-    flags: props.status?.value.capability_flags ?? null,
-  }),
+const writeStatus = computed(() =>
+  writeGate({ flags: props.status?.value.capability_flags ?? null }),
 );
 
 const pause = computed(() =>
@@ -158,7 +152,7 @@ const diagnostic = computed(() =>
     workspaces: props.workspaces,
     pause: props.pause,
     platform: verdict.value,
-    write_gate: gate.value,
+    write_gate: writeStatus.value,
     last_error: props.lastError,
   }),
 );
@@ -175,54 +169,6 @@ const allHelp = computed(() => localStartHelp());
 
 /** 重新验证要一个会话来读 `/api/status`（没有会话时它答 401）。 */
 const canReverify = computed(() => props.session !== null && !props.busy);
-
-// ---------------------------------------------------------------------------
-// 逐格列值
-// ---------------------------------------------------------------------------
-
-/** 三态。**`无读数` 必须能与 `未通过` 分开**，理由见 `readings.ts` 的文件头。 */
-function triState(value: boolean | null): { readonly key: 'yes' | 'no' | 'unknown'; readonly label: string } {
-  if (value === null) return { key: 'unknown', label: '无读数' };
-  return value ? { key: 'yes', label: '通过' } : { key: 'no', label: '未通过' };
-}
-
-function flagState(value: boolean | null): { readonly key: 'yes' | 'no' | 'unknown'; readonly label: string } {
-  if (value === null) return { key: 'unknown', label: '无读数' };
-  return value ? { key: 'yes', label: '打开' } : { key: 'no', label: '关闭' };
-}
-
-const GATE_LABELS: Readonly<Record<keyof Gates, string>> = {
-  g0_platform_verified: 'G0 · 真实网页账号验收',
-  compatibility_section3_passed: '平台兼容性（§3）',
-  native_guard_verified: '原生句柄护栏',
-  g4_concurrency_fault_passed: 'G4 · 竞争与故障专项',
-};
-
-const FLAG_LABELS: Readonly<Record<keyof CapabilityFlags, string>> = {
-  read_enabled: '读取',
-  git_enabled: '只读 Git',
-  proposal_enabled: '提议（修改集）',
-  direct_write_enabled: '直写（不经批准直接改文件）',
-  recovery_required: '需要恢复协调',
-};
-
-function gateRows(): readonly { readonly key: string; readonly label: string; readonly state: ReturnType<typeof triState> }[] {
-  const gates = props.status?.value.gates ?? null;
-  return (Object.keys(GATE_LABELS) as readonly (keyof Gates)[]).map((key) => ({
-    key,
-    label: GATE_LABELS[key],
-    state: triState(gates === null ? null : gates[key]),
-  }));
-}
-
-function flagRows(): readonly { readonly key: string; readonly label: string; readonly state: ReturnType<typeof flagState> }[] {
-  const flags = props.status?.value.capability_flags ?? null;
-  return (Object.keys(FLAG_LABELS) as readonly (keyof CapabilityFlags)[]).map((key) => ({
-    key,
-    label: FLAG_LABELS[key],
-    state: flagState(flags === null ? null : flags[key]),
-  }));
-}
 
 function onReverify(): void {
   if (!canReverify.value) return;
@@ -317,50 +263,13 @@ function onCopy(): void {
       </ul>
     </section>
 
-    <!-- 分区 4：直写门禁（验收标准 2）。 -->
-    <section class="setup__gate" aria-label="直写门禁">
-      <h3>直写门禁</h3>
-      <p
-        class="setup__gate-summary"
-        :data-direct-write="gate.direct_write ? 'true' : 'false'"
-        data-testid="write-gate-summary"
-      >
-        {{ gate.summary }}
-      </p>
-      <ul v-if="gate.reasons.length > 0" class="setup__gate-reasons" data-testid="write-gate-reasons">
-        <li v-for="(reason, index) in gate.reasons" :key="index" data-testid="write-gate-reason">{{ reason }}</li>
-      </ul>
-      <p class="setup__dim" data-testid="write-gate-note">
-        控制台把门禁与能力开关**自己也与一遍**：只有两边都开着，这里才说「已打开」。
-        任何一侧说了假话，结果都只会更保守。
-      </p>
-      <details class="setup__gate-guide" data-testid="gate-guide">
-        <summary>G0、G2、G3 分别在验什么？</summary>
-        <ul>
-          <li><strong>G0 · 平台接入：</strong>真实 ChatGPT 网页经 Tunnel 发现并调用测试工具，同时核对连接身份与平台兼容性。</li>
-          <li><strong>G2 · 只读：</strong>真实网页读取测试工作区，并核对本机审计能追踪哪些内容实际出站；本地模拟不能代替网页读取。</li>
-          <li><strong>G3 · 提议与审批：</strong>验证提议/审批流程，尤其是本机批准前工作区字节不变、拒绝操作不写入；计划要求的网页验收也要完成。</li>
-        </ul>
-        <p class="setup__dim" data-testid="gate-guide-runtime-note">
-          G2/G3 是阶段验收结论，不是可点击的权限开关。启动服务或启用 ChatGPT 连接不会登记目录、授予工作区权限或让门禁自动通过；运行时能力开关及直写的额外条件见下方读数。
-        </p>
-      </details>
-
-      <dl class="setup__grid" data-testid="gate-list">
-        <template v-for="row in gateRows()" :key="row.key">
-          <dt>{{ row.label }}</dt>
-          <dd :data-gate="row.key" :data-state="row.state.key" data-testid="gate-row">{{ row.state.label }}</dd>
-        </template>
-      </dl>
-
-      <dl class="setup__grid" data-testid="flag-list">
-        <template v-for="row in flagRows()" :key="row.key">
-          <dt>{{ row.label }}</dt>
-          <dd :data-flag="row.key" :data-state="row.state.key" data-testid="flag-row">{{ row.state.label }}</dd>
-        </template>
-      </dl>
+    <!-- 分区 4：清楚告诉用户读写权限在哪里设置。 -->
+    <section class="setup__gate" aria-label="工作区权限" data-testid="workspace-permission-info">
+      <h3>工作区权限</h3>
+      <p>平台连接状态只用于诊断，不会自动授予文件权限。请到「工作区」页登记具体目录，并逐目录选择读取、Git 或文件修改权限。</p>
+      <p>授予“文件修改”后，ChatGPT 可在该目录直接创建/编辑文本文件，不再逐次等待本机批准；路径校验、冲突检测、快照、审计和受保护执行器仍然生效。</p>
       <p class="setup__dim" data-testid="limitations">
-        服务端声明的限制：{{ status?.value.limitations.length ? status.value.limitations.join('；') : '（没有给出）' }}
+        服务端状态：{{ status?.value.limitations.length ? status.value.limitations.join('；') : '（没有给出）' }}
       </p>
     </section>
 

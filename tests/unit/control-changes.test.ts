@@ -753,10 +753,10 @@ describe('LWB-036 C 组：回报字段', () => {
     assert.equal(detail.change.digest, change.digest);
     assert.equal(detail.change.state, 'PENDING_APPROVAL');
     assert.equal(detail.change.files[0]?.path, change.path);
-    assert.equal(detail.change.approval_required, true);
+    assert.equal(detail.change.approval_required, false);
 
     // 只比一次「它有话可说」是不够的：`changeSetViewOf` 那句写死的
-    // 「等待本地操作者批准」在 PENDING_APPROVAL 下与 `nextActionFor` 的
+    // 「调用 change_apply」在 PENDING_APPROVAL 下与 `nextActionFor` 的
     // 回答并不冲突，因此任何只测这一个状态的断言都分不出两者。
     const pending = detail.change.next_action;
     repos.changes.transition(change.change_id, ['PENDING_APPROVAL'], 'REJECTED');

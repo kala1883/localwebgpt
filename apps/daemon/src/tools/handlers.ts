@@ -42,9 +42,11 @@ import type {
   BridgeStatusData,
   CapabilityFlags,
   ChangeApplyData,
+  ChangeApplyInput,
   ChangeGetData,
   ChangeItem,
   ChangeListData,
+  ChangePrepareInput,
   ChangePrepareData,
   ChangeRevertPrepareData,
   Envelope,
@@ -53,6 +55,8 @@ import type {
   GitDiffData,
   GitStatusData,
   ImplementedToolName,
+  FileCreateInput,
+  FileEditInput,
   TextSearchData,
   ToolName,
   WorkspaceListData,
@@ -68,11 +72,8 @@ import {
 } from '@lwb/changes';
 import type { ChangeQueryLimits, PrepareLimits } from '@lwb/changes';
 import {
-  APPLY_ENTRY_STATES,
-  EXECUTION_STATES,
-  effectiveApprovalState,
-  evaluateApplyGate,
-  gateRefusalToError,
+  approveAndQueue,
+  reloadChangeSet,
 } from '@lwb/approvals';
 import { applyChange, canBeginWrite, DEFAULT_APPLY_WAIT_MS } from '@lwb/executor';
 import type {
@@ -320,16 +321,14 @@ function displayableAlias(alias: string): string {
 /**
  * 连接级能力开关。
  *
- * 四项与工作区无关（门禁决定，见 `gates.ts`），因此直接取自门禁；
- * `recovery_required` 是**逐工作区**的事实，在连接级上的诚实说法是
+ * 全局字段表示 daemon 支持的操作；`recovery_required` 是**逐工作区**的事实，连接级上的诚实说法是
  * 「至少有一个授权工作区正等待人工恢复」，所以取的是**或**。
  * 取与会让模型在读到一个待恢复的工作区之前先得到一个「一切正常」的世界图景。
  *
- * 这四项的输入与 `access.ts` 拿到的 `capability_flags` 是**同一个**
- * `gates` 值，因此两处不可能对四项中的任何一项给出不同答案。
+ * 全局能力描述一致；该连接的恢复状态则由自己的授权工作区现算。
  */
 function connectionFlags(connection: ConnectionRecord, deps: ToolHandlerDeps): CapabilityFlags {
-  const base = capabilityFlagsFrom(deps.status().gates);
+    const base = capabilityFlagsFrom();
   const recovery = usableWorkspaces(deps.repos, connection.id).some(
     (workspace) => deps.capability_flags(workspace).recovery_required,
   );
@@ -369,6 +368,8 @@ export const TOOL_POLICY_ACTIONS = {
   git_status: 'git_status',
   git_diff: 'git_diff',
   change_prepare: 'change_prepare',
+  file_create: 'file_create',
+  file_edit: 'change_prepare',
   // 读的是**快照库与状态库**，不是用户工作区。`snapshot_read` 这个面
   // 因此与 `file_read` 分开：它的出站义务是 `block` 而不是 `redact`
   // —— 一份差异被局部脱敏之后行号会对不上，而那正是差异的全部意义。
@@ -376,10 +377,7 @@ export const TOOL_POLICY_ACTIONS = {
   // 只读状态库，且只读**本连接自己**的行（SQL 里的 `owner_connection_id`）。
   // 没有动作 = 不做工作区判定，与 `bridge_status` 同类。
   change_list: null,
-  // 写入（LWB-032）。`ACTION_SPECS.change_apply` 是 `requires_approval: true`
-  // —— 判定层因此会**再判一次**批准，而它拿到的那份 `ApprovalView` 是
-  // `evaluateApplyGate` 当场算出来的（见 `access.ts` 的 `approval`）。
-  // 两层判同一个事实，结论必然一致：门禁先跑，不一致的话请求根本走不到这里。
+  // `propose` 是本地控制台配置的逐目录读写授权；具体写入仍由受保护执行器完成。
   change_apply: 'change_apply',
   // 撤销**提议**：与 `change_prepare` 同类（会读基线、会建记录），
   // 因此它的开关是 `proposal_enabled`，而不是 `direct_write_enabled` ——
@@ -420,9 +418,7 @@ async function bridgeStatus(input: unknown, context: RequestContext, deps: ToolH
         unrevoked_change_sets: pause.unrevoked_change_sets.length,
         recovery_operations: pause.recovery_operations.length,
       },
-      // 限制说明**由开关与门禁推导**，不是一列手写文案：手写的那一份会与
-      // 真实开关脱节，而脱节的方向通常是「清单里还写着能读、开关已经关了」。
-      // 暂停那几句同理，因此它们也走同一条推导（第三个参数）。
+      // 限制说明从能力支持、验收状态与暂停读数推导；具体目录权限由 grant 决定。
       limitations: limitationsOf(flags, gates, pause),
     };
   });
@@ -730,17 +726,15 @@ function assertProposalPathsAllowed(paths: readonly string[], rules: readonly Fi
     if (verdict.kind !== 'hard_deny') continue;
     throw new BridgeError(
       'POLICY_DENIED',
-      `提案点名的路径命中硬拒绝规则 ${verdict.rule_id}；不会读取基线、不会建立修改集，也不会在批准后写入。`,
+      `提案点名的路径命中硬拒绝规则 ${verdict.rule_id}；不会读取基线、不会建立修改集，也不会在授权目录内写入。`,
       { reason: 'HARD_DENY_IN_PROPOSAL', hard_deny_rule: verdict.rule_id, blocked_at: 'prepare' },
     );
   }
 }
 
 /**
- * `change_prepare`：建立一份不可变修改集。**不写用户工作区**。
- *
- * 它只读磁盘（基线）与写状态库/快照库；写入是 `change_apply` 的事，
- * 而那个工具本阶段**没有实现**（见 `IMPLEMENTED_TOOL_NAMES`）。
+ * `change_prepare`：建立一份不可变多文件修改集。**不写用户工作区**；
+ * 具备该根的文件修改 grant 后，再调用 `change_apply` 应用。
  */
 async function changePrepare(
   input: unknown,
@@ -749,65 +743,142 @@ async function changePrepare(
 ): Promise<Envelope<ChangePrepareData>> {
   return await asEnvelope(context, async () => {
     const parsed = parseInput('change_prepare', input);
-    const now = deps.now();
+    return await prepareChangeRequest(parsed, TOOL_POLICY_ACTIONS.change_prepare, context, deps);
+  });
+}
 
-    // 票据先验签：`presented` 只许来自已验签的票据，而判定需要它。
-    const presented = presentedOf(parsed.items, now, deps.authority);
-
-    const access = await resolveWorkspaceAccess(
+async function fileCreate(
+  input: unknown,
+  context: RequestContext,
+  deps: ToolHandlerDeps,
+): Promise<Envelope<ChangeApplyData>> {
+  return await asEnvelope(context, async () => {
+    const parsed = parseInput('file_create', input) as FileCreateInput;
+    const prepared = await prepareChangeRequest(
       {
         workspace_id: parsed.workspace_id,
-        action: TOOL_POLICY_ACTIONS.change_prepare,
-        // `decide()` 只判一条路径，而本次调用指向**多个**文件。给根（`''`）
-        // 是对这件事的诚实说法：「本次调用没有单一的目标路径」。
-        // 逐路径的硬拒绝在下面，用的是判定当场交出来的那张规则表
-        // （`access.decision.rules`）—— 因此两处不可能不是同一版策略。
-        path: '',
-        // `policy_version` 恒为 `null`：读取票据里**没有**这个字段
-        // （`ReadTicketFacts` 只有 `generation`），因此填一个当下的值
-        // 只会是一次假装成核对的同义反复。真实的依据是规则表本身 ——
-        // 判定当场把 `decision.rules` 交出来，而下面逐路径判硬拒绝用的
-        // 就是它；`prepareChange` 落库的也是当下的 `policy_version`。
-        presented: {
-          generation: presented?.generation ?? createOnlyGeneration(parsed.workspace_id, deps),
-          policy_version: null,
-        },
+        idempotency_key: parsed.idempotency_key,
+        summary: parsed.summary,
+        items: [
+          {
+            op: 'create_text',
+            path: parsed.path,
+            content: parsed.content,
+            newline: parsed.newline,
+            bom: parsed.bom,
+          },
+        ],
       },
+      TOOL_POLICY_ACTIONS.file_create,
       context,
       deps,
     );
-
-    assertProposalPathsAllowed(
-      [
-        ...parsed.items.map((item) => item.path),
-        ...(presented?.tickets ?? []).map((ticket) => ticket.canonical_path),
-      ],
-      access.decision.rules,
-    );
-
-    return await prepareChange(
-      {
-        // 身份来自**通道**（连接记录），不是工具参数：`ChangePrepareInput`
-        // 里没有 `principal_id` 这样的字段，而 schema 是 strictObject，
-        // 多给一个键就会被拒绝（ADR-003 §4）。
-        principal_id: access.connection.principal_id,
-        connection_id: access.connection.id,
-        workspace_id: access.workspace.id,
-        generation: access.scope.generation,
-        policy_version: access.workspace.policy_version,
-        scope: access.scope,
-        now,
-        input: parsed,
-      },
-      {
-        ops: deps.ops,
-        authority: deps.authority,
-        blobs: deps.blobs,
-        repos: deps.repos,
-        ...(deps.limits?.prepare === undefined ? {} : { limits: deps.limits.prepare }),
-      },
+    return await applyChangeRequest(
+      { change_id: prepared.change_id, idempotency_key: parsed.idempotency_key },
+      context,
+      deps,
     );
   });
+}
+
+async function fileEdit(
+  input: unknown,
+  context: RequestContext,
+  deps: ToolHandlerDeps,
+): Promise<Envelope<ChangeApplyData>> {
+  return await asEnvelope(context, async () => {
+    const parsed = parseInput('file_edit', input) as FileEditInput;
+    const prepared = await prepareChangeRequest(
+      {
+        workspace_id: parsed.workspace_id,
+        idempotency_key: parsed.idempotency_key,
+        summary: parsed.summary,
+        items: [
+          {
+            op: 'edit_text',
+            path: parsed.path,
+            base_sha256: parsed.base_sha256,
+            read_token: parsed.read_token,
+            edits: parsed.edits,
+          },
+        ],
+      },
+      TOOL_POLICY_ACTIONS.file_edit,
+      context,
+      deps,
+    );
+    return await applyChangeRequest(
+      { change_id: prepared.change_id, idempotency_key: parsed.idempotency_key },
+      context,
+      deps,
+    );
+  });
+}
+
+async function prepareChangeRequest(
+  parsed: ChangePrepareInput,
+  action: PolicyAction,
+  context: RequestContext,
+  deps: ToolHandlerDeps,
+): Promise<ChangePrepareData> {
+  const now = deps.now();
+
+  // 票据先验签：`presented` 只许来自已验签的票据，而判定需要它。
+  const presented = presentedOf(parsed.items, now, deps.authority);
+
+  const access = await resolveWorkspaceAccess(
+    {
+      workspace_id: parsed.workspace_id,
+      action,
+      // `decide()` 只判一条路径，而本次调用指向**多个**文件。给根（`''`）
+      // 是对这件事的诚实说法：「本次调用没有单一的目标路径」。
+      // 逐路径的硬拒绝在下面，用的是判定当场交出来的那张规则表
+      // （`access.decision.rules`）—— 因此两处不可能不是同一版策略。
+      path: '',
+      // `policy_version` 恒为 `null`：读取票据里**没有**这个字段
+      // （`ReadTicketFacts` 只有 `generation`），因此填一个当下的值
+      // 只会是一次假装成核对的同义反复。真实的依据是规则表本身 ——
+      // 判定当场把 `decision.rules` 交出来，而下面逐路径判硬拒绝用的
+      // 就是它；`prepareChange` 落库的也是当下的 `policy_version`。
+      presented: {
+        generation: presented?.generation ?? createOnlyGeneration(parsed.workspace_id, deps),
+        policy_version: null,
+      },
+    },
+    context,
+    deps,
+  );
+
+  assertProposalPathsAllowed(
+    [
+      ...parsed.items.map((item) => item.path),
+      ...(presented?.tickets ?? []).map((ticket) => ticket.canonical_path),
+    ],
+    access.decision.rules,
+  );
+
+  return await prepareChange(
+    {
+      // 身份来自**通道**（连接记录），不是工具参数：`ChangePrepareInput`
+      // 里没有 `principal_id` 这样的字段，而 schema 是 strictObject，
+      // 多给一个键就会被拒绝（ADR-003 §4）。
+      principal_id: access.connection.principal_id,
+      connection_id: access.connection.id,
+      workspace_id: access.workspace.id,
+      generation: access.scope.generation,
+      policy_version: access.workspace.policy_version,
+      scope: access.scope,
+      now,
+      input: parsed,
+    },
+    {
+      ops: deps.ops,
+      authority: deps.authority,
+      blobs: deps.blobs,
+      repos: deps.repos,
+      ...(deps.limits?.prepare === undefined ? {} : { limits: deps.limits.prepare }),
+    },
+  );
 }
 
 /**
@@ -890,34 +961,9 @@ async function changeList(
 }
 
 /**
- * `change_apply`：把一个**已获本地批准**的修改集应用掉。
- *
- * ## 它自己**不**判「能不能写」
- *
- * 能不能写由三层依次回答，本函数一层都不重写：
- *
- * | 层 | 它回答 | 拒绝时的错误码 |
- * | --- | --- | --- |
- * | `evaluateApplyGate` | 有没有一份**绑定此刻内容**的有效批准 | `APPROVAL_REQUIRED` 等 |
- * | `decide()` | 这条连接、这个工作区、这个开关此刻允不允许该动作 | `CAPABILITY_DISABLED` 等 |
- * | `claimForExecution` | 现在这一刻真的能占住这块地吗（再判一次批准） | `WORKSPACE_BUSY` 等 |
- *
- * 第一层是**只读的**，因此它可以跑在第二层之前而不烧掉批准（见
- * `@lwb/approvals` 的文件头）。它在这里跑有两件事非它不可：
- *
- *  1. 它是 `ApprovalView` 的**唯一**合法来源 —— 判定层的 `requires_approval`
- *     要的那份视图只能来自一个「重新加载、重算摘要、现读工作区」的判定，
- *     不能由本函数从请求参数里拼；
- *  2. 它给出 `allowed_from` 的答案：调用方真正能应用的是 `APPROVED`
- *     （批准了但还没排队）与执行中的三格。
- *
- * ## 为什么 `allowed_from` 是这两个集合的**并集**
- *
- * `@lwb/approvals` 导出两个常量而不是一个，因为两处调用的合法来源不同：
- * 排队前只许 `APPROVED`，执行前只许执行中三格。而 `change_apply` 是
- * **两个时刻的同一个动作** —— 它既是「批准了、现在应用」的入口，
- * 也是「已经在执行了，再问一次结果」的入口。写成一个手抄的四元列表
- * 会让「哪几个状态」有第二个答案；取两个常量的并集则不会。
+ * `change_apply`：`propose` 逐目录授权即为持续的本地写入授权。
+ * 这里重算落库摘要，并在同一事务内生成一次性执行批准与唯一操作，随后交给
+ * 既有 Win32 受保护执行器。没有再要求用户对每个修改重复确认。
  */
 async function changeApply(
   input: unknown,
@@ -926,38 +972,28 @@ async function changeApply(
 ): Promise<Envelope<ChangeApplyData>> {
   return await asEnvelope(context, async () => {
     const parsed = parseInput('change_apply', input);
+    return await applyChangeRequest(parsed, context, deps);
+  });
+}
 
+async function applyChangeRequest(
+  parsed: ChangeApplyInput,
+  context: RequestContext,
+  deps: ToolHandlerDeps,
+): Promise<ChangeApplyData> {
     // 归属先于一切：不是本连接的修改集，与不存在回答相同（`ownedChangeOf`）。
     const owned = ownedChangeOf(parsed, context.connection_id, deps.repos);
 
     // 这次调用**不可能**产生写入（见 `canBeginWrite`）⇒ 它只能是一个问题：
     // 「刚才那次写到哪了」。这一分支**必须**排在上面那道写入门禁之前，
     // 理由见 `replayApplied`。
-    if (!canBeginWrite(deps.repos, owned.change_id)) {
+    if (deps.repos.operations.findByChangeId(owned.change_id) !== null ||
+        !canBeginWrite(deps.repos, owned.change_id)) {
       return await replayApplied(owned, context, deps);
     }
 
+    const loaded = reloadChangeSet(deps.repos, owned.change_id);
     const nowIso = new Date(deps.now()).toISOString();
-    const verdict = evaluateApplyGate({
-      repos: deps.repos,
-      change_id: owned.change_id,
-      // 两个合法来源集合的并集。**顺序不影响判定**：`allowed_from` 是一个
-      // 集合，`refuseTransition` 检查的是「来源里每一个都能走到目标」。
-      allowed_from: [...APPLY_ENTRY_STATES, ...EXECUTION_STATES],
-      now: nowIso,
-    });
-    if (verdict.kind === 'refused') throw gateRefusalToError(verdict);
-
-    // 批准的有效期是**字符串比较**（`effectiveApprovalState`）而判定层要的是
-    // epoch 毫秒。转换失败时 `NaN <= now` 恒为假 —— 也就是**fail-open**。
-    // 一条门禁刚说「有效」却给不出一个可解析到期的记录，只能是记录本身坏了；
-    // 拒绝比放行诚实。
-    const expiresAtMs = Date.parse(verdict.approval.expires_at);
-    if (!Number.isFinite(expiresAtMs)) {
-      throw new BridgeError('INTERNAL_ERROR', '批准的到期时刻无法解析；拒绝执行。', {
-        reason: 'APPROVAL_EXPIRY_UNPARSABLE',
-      });
-    }
 
     const access = await resolveWorkspaceAccess(
       {
@@ -975,78 +1011,60 @@ async function changeApply(
         // 同义反复。它买的只有一件事：**这句话写在代码里**，
         // 而不是靠「门禁先跑过了」这个行序隐含。
         presented: {
-          generation: verdict.change.root_generation,
-          policy_version: verdict.change.policy_version,
-        },
-        approval: {
-          // 用门禁自己的投影函数，而不是手写 `'ACTIVE'`：门禁说「就绪」时
-          // 它必然算出 ACTIVE，而这个写法让「两个地方对同一个事实的说法」
-          // 在代码上就是同一个函数。
-          state: effectiveApprovalState(verdict.approval, nowIso),
-          change_digest: verdict.approval.digest,
-          presented_digest: verdict.digest,
-          expires_at: expiresAtMs,
+          generation: loaded.change.root_generation,
+          policy_version: loaded.change.policy_version,
         },
       },
       context,
       deps,
     );
 
+    let queued: ReturnType<typeof approveAndQueue>;
+    try {
+      queued = approveAndQueue({
+        repos: deps.repos,
+        change_id: owned.change_id,
+        digest: loaded.digest,
+        actor: `workspace-grant:${access.grant.id}`,
+        now: nowIso,
+        idempotency_key: parsed.idempotency_key,
+      });
+    } catch (error) {
+      // Two concurrent apply calls can both pass the initial read. The unique
+      // operation remains the arbiter; the loser returns that operation's receipt.
+      if (deps.repos.operations.findByChangeId(owned.change_id) !== null ||
+          !canBeginWrite(deps.repos, owned.change_id)) {
+        return await replayApplied(owned, context, deps);
+      }
+      throw error;
+    }
+
     return await applyChange(
       // 连接身份来自**通道**（这里的 `access.connection` 是解析链条的产物），
       // 不是工具参数 —— `ChangeApplyInput` 里没有 `connection_id`。
-      { change_id: owned.change_id, connection_id: access.connection.id },
+      { change_id: queued.change.id, connection_id: access.connection.id },
       applyServiceDeps(deps),
     );
-  });
 }
 
 /**
- * 「那次写到哪了」——本次调用**不产生任何写入**（LWB-032 步骤 3 的那一半）。
- *
- * ## 为什么它必须排在写入门禁**之前**
- *
- * 门禁回答的是「能不能开始一次写入」。这条修改集已经不可认领了
- * （`canBeginWrite` 为假），而 `operations` 表上的 `UNIQUE(change_id)`
- * 决定了**永远不会**有第二个操作 —— 也就是说本次调用无论如何都写不了
- * 任何东西。让它进门禁，得到的是 `APPROVAL_CONSUMED`（那条批准正是被它
- * 自己的那次执行用掉的），而那句话对调用方是**错的**：它问的不是
- * 「我还能不能写」，而是「刚才写完了没有」。
- *
- * 而工具说明已经承诺了后者：
- *
- * > 重复调用本身是安全的：无论换不换幂等键，返回的都是该修改集唯一那条操作，
- * > 不会产生第二次写入。
- *
- * 在本次修复之前那句话**不成立**：重复调用会撞上门禁的 `APPROVAL_CONSUMED`
- * （`CHANGE_STATE_INVALID`），而按设计本该由应用服务第二步接住 ——
- * 门禁排得太前，那条路永远到不了。验收标准要的「重复点击和重复工具调用
- * 不产生第二次写」当时成立（写确实只有一次），但步骤 3 要的**返回值**
- * 不成立，且模型读到的是一个关于批准的错误码。
- *
- * ## 它仍然过判定，只是换了**面**
- *
- * 回执是内容出站（`change_receipt` 在 `EGRESS_SURFACES` 里），因此不能因为
- * 「反正没写」就跳过判定 —— 关掉读取能力之后模型还能从这条路径上拿到路径与
- * 哈希，就是一个绕开开关的口子。这里用的动作是 `change_get` 的**那一个**
- * （`snapshot_read`）：同一个对象、同一个面、同一个开关、同样不需要批准。
- * 刻意**不**新造一个面：本条路径返回的东西与 `change_get` 的 `operation`
- * 字段是同一个对象，两个面只会让它们将来有机会给出不同的判定。
- *
- * ## 执行中的那一格不走协调器
- *
- * 操作在 `VALIDATING` / `APPLYING` 时批准已经消费，本次调用同样只回答
- * 「还在执行」（`in_progress: true`），并且**不去碰协调器**：那条执行正由
- * 别人（后台推进或控制台）持有租约，再提交一次认领只会得到
- * `OPERATION_NOT_QUEUED` —— 一句把「还在跑」说成「不能重复认领」的话。
+ * 已有操作时复用唯一 operation 并返回其回执，不创建第二次写入。
+ * 回执仍要求该连接持有本工作区的文件修改 grant。
  */
 async function replayApplied(
   owned: { readonly change_id: string; readonly workspace_id: string },
   context: RequestContext,
   deps: ToolHandlerDeps,
 ): Promise<ChangeApplyData> {
+  const workspace = deps.repos.workspaces.findById(owned.workspace_id);
+  if (workspace === null) throw new BridgeError('WORKSPACE_NOT_GRANTED', '该工作区已不可用。');
   const access = await resolveWorkspaceAccess(
-    { workspace_id: owned.workspace_id, action: TOOL_POLICY_ACTIONS.change_get, path: '' },
+    {
+      workspace_id: owned.workspace_id,
+      action: TOOL_POLICY_ACTIONS.change_apply,
+      path: '',
+      presented: { generation: workspace.generation, policy_version: workspace.policy_version },
+    },
     context,
     deps,
   );
@@ -1138,13 +1156,12 @@ export type ToolHandler = (
 ) => Promise<Envelope<unknown>>;
 
 /**
- * **全部十二个**工具。**与 `IMPLEMENTED_TOOL_NAMES` 逐字对应**，
+ * **全部十四个**工具。**与 `IMPLEMENTED_TOOL_NAMES` 逐字对应**，
  * 而后者是输出 schema 那张表的键 —— 少一个处理器或漏一个 schema
  * 都会在下面的 `TOOL_HANDLERS` 上编译失败。
  *
  * LWB-032 把最后两个补上之后，`TOOL_NAMES` 与本表**一一对应**。
- * 这不是「全都可用了」：可用性由 `catalog.ts` 按能力开关逐条裁定，
- * 而生产装配下四个开关全关，因此模型看到的仍然只有那三条只读状态库的工具。
+ * 实际可用性由 `catalog.ts` 按连接、工作区授权和恢复状态逐条裁定。
  * 表里的每一行只回答「本机有没有代码能接住这次调用」。
  */
 export const TOOL_HANDLERS = {
@@ -1156,6 +1173,8 @@ export const TOOL_HANDLERS = {
   git_status: gitStatusTool,
   git_diff: gitDiffTool,
   change_prepare: changePrepare,
+  file_create: fileCreate,
+  file_edit: fileEdit,
   change_get: changeGet,
   change_list: changeList,
   change_apply: changeApply,
