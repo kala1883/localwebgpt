@@ -49,6 +49,7 @@ describe('ChatGPT conversation evaluation set', () => {
     for (const required of [
       'direct', 'indirect', 'follow_up', 'no_write', 'direct_write',
       'timeout', 'boundary', 'refusal', 'untrusted_content', 'unsupported',
+      'direct_command',
     ]) {
       assert.ok(categories.has(required), `missing category ${required}`);
     }
@@ -77,5 +78,16 @@ describe('ChatGPT conversation evaluation set', () => {
     assert.ok(multiFile);
     assert.deepEqual(multiFile.expected_tool_sequence, ['change_prepare', 'change_apply']);
     assert.ok(multiFile.assertions.some((assertion) => assertion.includes('do not ask for another per-change console approval')));
+  });
+
+  it('requires an explicit command task and a separate command_exec workspace grant', () => {
+    const granted = suite.cases.find((testCase) => testCase.id === 'explicit-command-with-command-grant');
+    const denied = suite.cases.find((testCase) => testCase.id === 'command-grant-required-for-shell');
+    const timeout = suite.cases.find((testCase) => testCase.id === 'command-timeout-is-not-safe-to-replay');
+    assert.ok(granted && denied && timeout);
+    assert.deepEqual(granted.expected_tool_sequence, ['command_exec']);
+    assert.ok(denied.must_not_call.includes('command_exec'));
+    assert.ok(timeout.must_not_call.includes('command_exec'));
+    assert.ok(granted.assertions.some((assertion) => assertion.includes('Do not claim the workspace root is a sandbox')));
   });
 });
