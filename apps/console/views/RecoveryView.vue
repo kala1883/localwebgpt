@@ -97,17 +97,18 @@ interface SaveFileHandle {
   createWritable(options: { readonly keepExistingData: false; readonly mode: 'exclusive' }): Promise<SaveWritable>;
 }
 
-interface SavePickerOptions {
-  readonly suggestedName: string;
-  readonly excludeAcceptAllOption: true;
-  readonly types: readonly [{
-    readonly description: string;
-    readonly accept: Readonly<Record<string, readonly string[]>>;
-  }];
+interface SaveDirectoryHandle {
+  readonly name: string;
+  getFileHandle(name: string, options?: { readonly create?: boolean }): Promise<SaveFileHandle>;
 }
 
-type SavePickerWindow = Window & {
-  showSaveFilePicker?: (options: SavePickerOptions) => Promise<SaveFileHandle>;
+interface DirectoryPickerOptions {
+  readonly id: string;
+  readonly mode: 'readwrite';
+}
+
+type DirectoryPickerWindow = Window & {
+  showDirectoryPicker?: (options: DirectoryPickerOptions) => Promise<SaveDirectoryHandle>;
 };
 
 function errorName(error: unknown): string | null {
@@ -115,39 +116,60 @@ function errorName(error: unknown): string | null {
   return typeof error.name === 'string' ? error.name : null;
 }
 
-async function requireNewDestination(handle: SaveFileHandle): Promise<void> {
-  try {
-    await handle.getFile();
-  } catch (error) {
-    if (errorName(error) === 'NotFoundError') return;
-    throw error;
+async function chooseDestinationDirectory(): Promise<SaveDirectoryHandle> {
+  const pickerWindow = window as DirectoryPickerWindow;
+  if (typeof pickerWindow.showDirectoryPicker !== 'function') {
+    throw new Error('当前浏览器不支持安全的文件夹选择器。请使用最新版 Chrome 或 Edge。');
   }
-  throw new Error('所选目标已经存在。为保护原文件，本次导出已取消；请选择一个新文件名。');
+  // 选择目录不会打开或截断其中的任何文件；权限和文件句柄留在本机浏览器。
+  return pickerWindow.showDirectoryPicker({ id: 'lwb-recovery-export', mode: 'readwrite' });
 }
 
-async function chooseNewDestination(suggestedName: string): Promise<SaveFileHandle> {
-  const pickerWindow = window as SavePickerWindow;
-  if (typeof pickerWindow.showSaveFilePicker !== 'function') {
-    throw new Error('当前浏览器不支持受保护的保存选择器。请使用最新版 Chrome 或 Edge。');
+function uniqueSnapshotFileName(suggestedName: string): string {
+  const suffix = globalThis.crypto.randomUUID();
+  const extension = '.snapshot';
+  const stem = suggestedName.endsWith(extension)
+    ? suggestedName.slice(0, -extension.length)
+    : suggestedName;
+  return `${stem}-${suffix}${extension}`;
+}
+
+async function createNewDestination(
+  directory: SaveDirectoryHandle,
+  suggestedName: string,
+): Promise<SaveFileHandle> {
+  // A new unpredictable name avoids presenting an existing file to a save picker.
+  // Check for collisions without opening the existing file, then create only after
+  // the protected snapshot bytes have been fetched and verified.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const fileName = uniqueSnapshotFileName(suggestedName);
+    try {
+      await directory.getFileHandle(fileName);
+      continue;
+    } catch (error) {
+      if (errorName(error) !== 'NotFoundError') throw error;
+    }
+
+    const handle = await directory.getFileHandle(fileName, { create: true });
+    if ((await handle.getFile()).size === 0) return handle;
   }
-  // 这个调用必须先于网络请求，并直接来自按钮点击，以保留浏览器的用户手势授权。
-  const handle = await pickerWindow.showSaveFilePicker({
-    suggestedName,
-    excludeAcceptAllOption: true,
-    types: [{ description: 'LWB 恢复快照', accept: { 'application/octet-stream': ['.snapshot'] } }],
-  });
-  await requireNewDestination(handle);
-  return handle;
+  throw new Error('无法在所选目录中保留一个新的快照文件名；没有写入快照。');
 }
 
 async function writeSnapshotToDestination(
   handle: SaveFileHandle,
   file: Awaited<ReturnType<typeof fetchRecoverySnapshot>>,
 ): Promise<void> {
+  if ((await handle.getFile()).size !== 0) {
+    throw new Error('新快照文件在写入前已发生变化；为保护现有内容，本次导出已取消。');
+  }
   const writable = await handle.createWritable({ keepExistingData: false, mode: 'exclusive' });
   try {
-    // 再查一次：快照读取期间若目标已被其他程序创建，保持不覆盖。
-    await requireNewDestination(handle);
+    // The selected directory contains an unpredictable, newly created filename;
+    // also fail closed if another writer changed it before our first write.
+    if ((await handle.getFile()).size !== 0) {
+      throw new Error('新快照文件在写入前已发生变化；为保护现有内容，本次导出已取消。');
+    }
     await writable.write(file.bytes);
     await writable.close();
   } catch (error) {
@@ -166,20 +188,24 @@ async function exportSnapshot(itemId: string, snapshot: 'original' | 'proposed')
     return;
   }
   exporting.value = true;
-  exportMessage.value = '请选择一个新文件名；已有文件会被保留。';
+  exportMessage.value = '请选择一个保存文件夹；导出会生成带随机后缀的新文件名，不会让文件选择器打开已有文件。';
   try {
     const selectedItem = props.record.items.find((item) => item.item_id === itemId);
     if (selectedItem === undefined) throw new Error('恢复记录里找不到所选文件。');
-    // 先弹原生选择器。若先请求服务端，await 会消耗浏览器的短时用户手势授权。
-    const handle = await chooseNewDestination(suggestedRecoverySnapshotName(selectedItem.path, snapshot));
+    // The directory picker must be opened directly from the click, before API awaits.
+    const directory = await chooseDestinationDirectory();
     const file = await fetchRecoverySnapshot({
       client: props.exportClient,
       operation_id: operationId,
       item_id: itemId,
       snapshot,
     });
+    const handle = await createNewDestination(
+      directory,
+      suggestedRecoverySnapshotName(selectedItem.path, snapshot),
+    );
     await writeSnapshotToDestination(handle, file);
-    exportMessage.value = `已保存 ${handle.name}（${file.size} 字节；SHA-256 ${file.sha256}）。`;
+    exportMessage.value = `已保存到 ${directory.name}/${handle.name}（${file.size} 字节；SHA-256 ${file.sha256}）。`;
     emit('export-complete', {
       operation_id: operationId,
       item_id: itemId,
@@ -191,7 +217,7 @@ async function exportSnapshot(itemId: string, snapshot: 'original' | 'proposed')
   } catch (error) {
     exportMessage.value = errorName(error) === 'AbortError'
       ? '已取消导出，没有读取或写出快照。'
-      : error instanceof Error ? error.message : '导出失败；原快照和目标文件均保留。';
+      : error instanceof Error ? error.message : '导出失败；受保护快照未修改，若已创建输出文件，可能是空文件。';
   } finally {
     exporting.value = false;
     // 每次导出都重新确认，防止一次确认无意授权后续多个文件。
@@ -298,7 +324,7 @@ function repair(): void {
         </div>
         <label class="recovery__confirm" data-testid="export-confirm">
           <input v-model="exportConfirmed" type="checkbox" />
-          我确认将受保护快照写到我选择的新文件；若目标已存在，导出会取消
+          我确认将受保护快照写入我选择的文件夹；每次都会生成带随机后缀的新文件名
         </label>
         <p v-if="exportMessage" role="status" aria-live="polite" data-testid="export-status">{{ exportMessage }}</p>
       </section>

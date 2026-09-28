@@ -5,10 +5,11 @@
  * NTFS workspace, and seeds one RECOVERY_REQUIRED edit whose current bytes are
  * deliberately a third version. It keeps the daemon alive until Ctrl+C so the
  * user can open the printed one-time URL and exercise the real control API and
- * browser save picker. No repository workspace or default LWB home is touched.
+ * browser directory picker. No repository workspace or default LWB home is touched.
  */
 
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -40,7 +41,11 @@ async function main(): Promise<void> {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'lwb037-export-'));
   const workspaceRoot = path.join(temporaryRoot, 'workspace');
   const storeRoot = path.join(temporaryRoot, 'protected-home');
-  await Promise.all([mkdir(workspaceRoot), mkdir(storeRoot)]);
+  const exportRoot = path.join(temporaryRoot, 'export-output');
+  await Promise.all([mkdir(workspaceRoot), mkdir(storeRoot), mkdir(exportRoot)]);
+  const exportCanaryName = 'preserve-existing.snapshot';
+  const exportCanaryBytes = Buffer.from('LWB-037 pre-existing export canary\n', 'utf8');
+  await writeFile(path.join(exportRoot, exportCanaryName), exportCanaryBytes, { flag: 'wx' });
 
   let runtime: Awaited<ReturnType<typeof startDaemon>> | null = null;
   try {
@@ -148,9 +153,39 @@ async function main(): Promise<void> {
     process.stdout.write('\nLWB-037 一次性快照导出验收环境已就绪。\n');
     process.stdout.write(`临时操作：${created.operation.id}\n`);
     process.stdout.write(`临时工作区：${workspaceRoot}\n`);
+    process.stdout.write(`浏览器导出目录：${exportRoot}\n`);
     process.stdout.write('请打开上方 daemon 启动摘要中的完整控制台地址；令牌只在本机终端出现，勿复制到聊天或截图。\n');
-    process.stdout.write('页面打开后进入“恢复与冲突”，应看到 THIRD_CONTENT；导出后按 UI 显示的 SHA-256 核对文件。按 Ctrl+C 会关闭 daemon 并删除整个临时验收目录。\n\n');
+    process.stdout.write('页面打开后进入“恢复与冲突”，应看到 THIRD_CONTENT；分别导出原版本与提议版本，并在文件夹选择器中选择“浏览器导出目录”。页面会在目录中创建带随机后缀的新 .snapshot 文件，不会打开文件级保存选择器。\n');
+    process.stdout.write('导出后按 UI 显示的 SHA-256/字节数核对；确认预置的 preserve-existing.snapshot 内容未变。然后按 Ctrl+C，夹具会核对两个快照和 canary，再关闭 daemon 并删除整个临时验收目录。\n\n');
     await signalPromise;
+
+    const exportedSnapshots: { readonly version: 'original' | 'proposed'; readonly size: number; readonly sha256: string }[] = [];
+    let canaryUnchanged = false;
+    for (const entry of await readdir(exportRoot, { withFileTypes: true })) {
+      if (!entry.isFile()) throw new Error(`导出目录出现非普通文件：${entry.name}`);
+      const bytes = await readFile(path.join(exportRoot, entry.name));
+      if (entry.name === exportCanaryName) {
+        canaryUnchanged = bytes.equals(exportCanaryBytes);
+        continue;
+      }
+      if (!entry.name.endsWith('.snapshot')) throw new Error(`导出目录出现意外文件：${entry.name}`);
+      const version = bytes.equals(original) ? 'original' : bytes.equals(proposed) ? 'proposed' : null;
+      if (version === null) throw new Error(`导出的快照字节不匹配：${entry.name}`);
+      exportedSnapshots.push({
+        version,
+        size: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      });
+    }
+    if (!canaryUnchanged) throw new Error('预置的 existing-file canary 缺失或内容改变。');
+    if (
+      exportedSnapshots.length !== 2 ||
+      exportedSnapshots.filter(({ version }) => version === 'original').length !== 1 ||
+      exportedSnapshots.filter(({ version }) => version === 'proposed').length !== 1
+    ) {
+      throw new Error('必须各导出一个原版本和提议版本快照。');
+    }
+    process.stdout.write(`LWB037_EXPORT_RESULT=${JSON.stringify({ snapshots: exportedSnapshots, existing_canary_unchanged: true })}\n`);
   } finally {
     try {
       await runtime?.shutdown();

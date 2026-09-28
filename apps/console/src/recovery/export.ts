@@ -1,9 +1,9 @@
 /**
  * 从受保护快照库读取并校验单个恢复快照，供本地保存界面使用。
  *
- * 目标路径从不发给 daemon：操作者在浏览器原生保存选择器里选目标，
- * HTTP 请求只绑定 operation/item/version/confirmed 四项。响应在交给
- * 文件写入 API 前再核对长度与 SHA-256。
+ * 目标目录和生成的随机文件名只留在浏览器：HTTP 请求只绑定
+ * operation/item/version/confirmed 四项。响应在交给文件写入 API 前再
+ * 核对长度与 SHA-256。
  */
 
 import { LIMITS } from '@lwb/contracts/limits';
@@ -16,7 +16,8 @@ export function suggestedRecoverySnapshotName(
   snapshot: 'original' | 'proposed',
 ): string {
   const pathLeaf = relativePath.split('/').at(-1) ?? 'snapshot';
-  const safeLeaf = pathLeaf.replace(/[^\p{L}\p{N}._-]/gu, '_').replace(/[. ]+$/g, '') || 'snapshot';
+  const normalizedLeaf = pathLeaf.replace(/[^\p{L}\p{N}._-]/gu, '_').replace(/[. ]+$/g, '') || 'snapshot';
+  const safeLeaf = Array.from(normalizedLeaf).slice(0, 96).join('');
   return `recovery-${safeLeaf}-${snapshot}.snapshot`;
 }
 

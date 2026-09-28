@@ -6,7 +6,8 @@ import type { RecoveryExportClient, RecoveryRecord } from '../src/recovery/index
 
 const SESSION = { authenticated: true } as const;
 const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
-const originalPickerDescriptor = Object.getOwnPropertyDescriptor(window, 'showSaveFilePicker');
+const originalDirectoryPickerDescriptor = Object.getOwnPropertyDescriptor(window, 'showDirectoryPicker');
+const originalSaveFilePickerDescriptor = Object.getOwnPropertyDescriptor(window, 'showSaveFilePicker');
 
 function recordOf(): RecoveryRecord {
   return {
@@ -31,7 +32,7 @@ function recordOf(): RecoveryRecord {
 }
 
 function notFound(): DOMException {
-  return new DOMException('The selected destination does not exist.', 'NotFoundError');
+  return new DOMException('The requested entry does not exist.', 'NotFoundError');
 }
 
 function responseFor(
@@ -52,38 +53,80 @@ function responseFor(
   };
 }
 
+function nameFor(snapshot: 'original' | 'proposed', uuid: string): string {
+  return `recovery-app.ts-${snapshot}-${uuid}.snapshot`;
+}
+
 function harness(options: {
   readonly response?: Record<string, unknown>;
   readonly pickerError?: unknown;
-  readonly targetExistsAt?: number;
+  readonly existingFiles?: Readonly<Record<string, Uint8Array>>;
+  readonly uuidSequence?: readonly string[];
+  readonly fileAppearingDuringCreate?: string;
 } = {}) {
-  vi.stubGlobal('crypto', webcrypto);
+  const uuidQueue = [...(options.uuidSequence ?? [
+    '00000000-0000-4000-8000-000000000001',
+    '00000000-0000-4000-8000-000000000002',
+    '00000000-0000-4000-8000-000000000003',
+  ])];
+  const randomUUID = vi.fn(() => uuidQueue.shift() ?? '00000000-0000-4000-8000-000000000099');
+  vi.stubGlobal('crypto', { subtle: webcrypto.subtle, randomUUID });
+
   const bytes = Uint8Array.from([0, 1, 127, 128, 255]);
   const sequence: string[] = [];
-  let destinationChecks = 0;
-  const getFile = vi.fn(async () => {
-    sequence.push('destination-check');
-    destinationChecks += 1;
-    if (options.targetExistsAt === destinationChecks) return { size: 12 };
-    throw notFound();
+  const files = new Map<string, ReturnType<typeof makeFileHandle>>();
+
+  function makeFileHandle(name: string, initialBytes: Uint8Array) {
+    let currentBytes = Uint8Array.from(initialBytes);
+    const writable = {
+      write: vi.fn(async (data: Uint8Array) => {
+        sequence.push(`write:${name}`);
+        currentBytes = Uint8Array.from(data);
+      }),
+      close: vi.fn(async () => { sequence.push(`close:${name}`); }),
+      abort: vi.fn(async () => { sequence.push(`abort:${name}`); }),
+    };
+    const handle = {
+      name,
+      getFile: vi.fn(async () => ({ size: currentBytes.byteLength })),
+      createWritable: vi.fn(async (creationOptions: unknown) => {
+        sequence.push(`create-writable:${name}`);
+        return writable;
+      }),
+    };
+    return { handle, writable, getBytes: () => Uint8Array.from(currentBytes) };
+  }
+
+  for (const [name, initialBytes] of Object.entries(options.existingFiles ?? {})) {
+    files.set(name, makeFileHandle(name, initialBytes));
+  }
+
+  const getFileHandle = vi.fn(async (name: string, pickerOptions?: { readonly create?: boolean }) => {
+    sequence.push(`${pickerOptions?.create === true ? 'create' : 'lookup'}:${name}`);
+    const existing = files.get(name);
+    if (existing) return existing.handle;
+    if (pickerOptions?.create !== true) throw notFound();
+    if (options.fileAppearingDuringCreate === name) {
+      const raced = makeFileHandle(name, Uint8Array.from([9, 8, 7]));
+      files.set(name, raced);
+      return raced.handle;
+    }
+    const created = makeFileHandle(name, new Uint8Array());
+    files.set(name, created);
+    return created.handle;
   });
-  const writable = {
-    write: vi.fn(async (_data: Uint8Array) => { sequence.push('write'); }),
-    close: vi.fn(async () => { sequence.push('close'); }),
-    abort: vi.fn(async () => { sequence.push('abort'); }),
-  };
-  const handle = {
-    name: 'chosen-recovery.snapshot',
-    getFile,
-    createWritable: vi.fn(async (creationOptions: unknown) => {
-      sequence.push('create-writable');
-      return writable;
-    }),
-  };
-  const showSaveFilePicker = vi.fn(async () => {
-    sequence.push('picker');
+  const directory = { name: 'chosen-folder', getFileHandle };
+  const showDirectoryPicker = vi.fn(async () => {
+    sequence.push('directory-picker');
     if (options.pickerError !== undefined) throw options.pickerError;
-    return handle;
+    return directory;
+  });
+  Object.defineProperty(window, 'showDirectoryPicker', {
+    configurable: true,
+    value: showDirectoryPicker,
+  });
+  const showSaveFilePicker = vi.fn(async () => {
+    throw new Error('Recovery export must not use the destructive file-level save picker.');
   });
   Object.defineProperty(window, 'showSaveFilePicker', {
     configurable: true,
@@ -102,7 +145,10 @@ function harness(options: {
   const wrapper = mount(RecoveryView, {
     props: { record: recordOf(), session: SESSION, exportClient: client },
   });
-  return { wrapper, bytes, showSaveFilePicker, handle, getFile, writable, authorizeMutation, call, sequence };
+  return {
+    wrapper, bytes, directory, files, getFileHandle, showDirectoryPicker, showSaveFilePicker,
+    authorizeMutation, call, sequence, randomUUID,
+  };
 }
 
 async function exportSnapshot(
@@ -117,60 +163,102 @@ async function exportSnapshot(
 afterEach(() => {
   if (originalCryptoDescriptor) Object.defineProperty(globalThis, 'crypto', originalCryptoDescriptor);
   else Reflect.deleteProperty(globalThis, 'crypto');
-  if (originalPickerDescriptor) Object.defineProperty(window, 'showSaveFilePicker', originalPickerDescriptor);
+  if (originalDirectoryPickerDescriptor) Object.defineProperty(window, 'showDirectoryPicker', originalDirectoryPickerDescriptor);
+  else Reflect.deleteProperty(window, 'showDirectoryPicker');
+  if (originalSaveFilePickerDescriptor) Object.defineProperty(window, 'showSaveFilePicker', originalSaveFilePickerDescriptor);
   else Reflect.deleteProperty(window, 'showSaveFilePicker');
   vi.restoreAllMocks();
 });
 
 describe('LWB-037 recovery snapshot export', () => {
-  it('opens the save picker first, verifies response bytes, writes only to the selected new file, and reports a receipt', async () => {
+  it('asks for a directory before API access and writes verified bytes to a generated new filename', async () => {
     const setup = harness();
     await exportSnapshot(setup.wrapper, 'original');
     await vi.waitFor(() => {
-      assert.match(setup.wrapper.find('[data-testid="export-status"]').text(), /已保存 chosen-recovery\.snapshot/);
+      assert.match(setup.wrapper.find('[data-testid="export-status"]').text(), /已保存到 chosen-folder\/recovery-app\.ts-original-/);
     });
 
-    assert.deepEqual(setup.sequence.slice(0, 2), ['picker', 'destination-check']);
-    assert.ok(setup.sequence.indexOf('picker') < setup.sequence.indexOf('authorize'));
-    assert.deepEqual(setup.showSaveFilePicker.mock.calls[0]?.[0], {
-      suggestedName: 'recovery-app.ts-original.snapshot',
-      excludeAcceptAllOption: true,
-      types: [{ description: 'LWB 恢复快照', accept: { 'application/octet-stream': ['.snapshot'] } }],
+    assert.deepEqual(setup.showDirectoryPicker.mock.calls[0]?.[0], {
+      id: 'lwb-recovery-export', mode: 'readwrite',
     });
-    assert.equal(setup.getFile.mock.calls.length, 2);
-    assert.deepEqual(setup.handle.createWritable.mock.calls[0]?.[0], { keepExistingData: false, mode: 'exclusive' });
-    assert.deepEqual(Buffer.from(setup.writable.write.mock.calls[0]?.[0] ?? []), Buffer.from(setup.bytes));
-    assert.equal(setup.writable.close.mock.calls.length, 1);
-    assert.equal(setup.writable.abort.mock.calls.length, 0);
+    assert.equal(setup.showSaveFilePicker.mock.calls.length, 0);
+    assert.ok(setup.sequence.indexOf('directory-picker') < setup.sequence.indexOf('authorize'));
+    assert.ok(setup.sequence.indexOf('fetch-snapshot') < setup.sequence.findIndex((entry) => entry.startsWith('create:')));
+    assert.equal(setup.files.size, 1);
+
+    const [fileName, file] = [...setup.files.entries()][0] ?? [];
+    assert.ok(fileName?.match(/^recovery-app\.ts-original-[0-9a-f-]{36}\.snapshot$/));
+    assert.deepEqual(file?.getBytes(), setup.bytes);
+    assert.deepEqual(file?.handle.createWritable.mock.calls[0]?.[0], { keepExistingData: false, mode: 'exclusive' });
+    assert.equal(file?.writable.close.mock.calls.length, 1);
+    assert.equal(file?.writable.abort.mock.calls.length, 0);
 
     const requestBody = setup.authorizeMutation.mock.calls[0]?.[2];
     assert.deepEqual(requestBody, {
       operation_id: 'op_1', item_id: 'item_1', snapshot: 'original', confirmed: true,
     });
-    assert.equal(JSON.stringify(requestBody).includes('chosen-recovery.snapshot'), false);
+    assert.equal(JSON.stringify(requestBody).includes('chosen-folder'), false);
     assert.equal(JSON.stringify(requestBody).includes('src/app.ts'), false);
     assert.deepEqual(setup.wrapper.emitted('export-complete')?.[0]?.[0], {
       operation_id: 'op_1',
       item_id: 'item_1',
       snapshot: 'original',
-      file_name: 'chosen-recovery.snapshot',
+      file_name: fileName,
       sha256: createHash('sha256').update(Buffer.from(setup.bytes)).digest('hex'),
       size: setup.bytes.byteLength,
     });
   });
 
-  it('refuses an existing destination before requesting protected snapshot bytes', async () => {
-    const setup = harness({ targetExistsAt: 1 });
+  it('detects a same-name collision without opening or changing the existing file, then uses a fresh name', async () => {
+    const collision = nameFor('original', '00000000-0000-4000-8000-000000000001');
+    const originalBytes = Uint8Array.from([44, 55, 66]);
+    const setup = harness({
+      existingFiles: { [collision]: originalBytes },
+      uuidSequence: [
+        '00000000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000002',
+      ],
+    });
+    const existing = setup.files.get(collision);
+    assert.ok(existing);
     await exportSnapshot(setup.wrapper, 'original');
+    await vi.waitFor(() => {
+      assert.match(setup.wrapper.find('[data-testid="export-status"]').text(), /已保存到 chosen-folder\/recovery-app\.ts-original-/);
+    });
 
-    assert.equal(setup.authorizeMutation.mock.calls.length, 0);
-    assert.equal(setup.call.mock.calls.length, 0);
-    assert.equal(setup.handle.createWritable.mock.calls.length, 0);
-    assert.match(setup.wrapper.find('[data-testid="export-status"]').text(), /目标已经存在/);
-    assert.equal(setup.wrapper.emitted('export-complete'), undefined);
+    assert.deepEqual(existing.getBytes(), originalBytes);
+    assert.equal(existing.handle.getFile.mock.calls.length, 0);
+    assert.equal(existing.handle.createWritable.mock.calls.length, 0);
+    assert.equal(existing.writable.write.mock.calls.length, 0);
+    assert.equal(setup.files.size, 2);
+    const created = setup.files.get(nameFor('original', '00000000-0000-4000-8000-000000000002'));
+    assert.deepEqual(created?.getBytes(), setup.bytes);
+    assert.equal(setup.wrapper.emitted('export-complete')?.[0]?.[0].file_name, created?.handle.name);
   });
 
-  it('does not write if the server response digest does not match its bytes', async () => {
+  it('does not write to a candidate that becomes non-empty between lookup and creation', async () => {
+    const racedName = nameFor('original', '00000000-0000-4000-8000-000000000001');
+    const setup = harness({
+      fileAppearingDuringCreate: racedName,
+      uuidSequence: [
+        '00000000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000002',
+      ],
+    });
+    await exportSnapshot(setup.wrapper, 'original');
+    await vi.waitFor(() => {
+      assert.match(setup.wrapper.find('[data-testid="export-status"]').text(), /已保存到 chosen-folder\/recovery-app\.ts-original-/);
+    });
+
+    const raced = setup.files.get(racedName);
+    assert.deepEqual(raced?.getBytes(), Uint8Array.from([9, 8, 7]));
+    assert.equal(raced?.writable.write.mock.calls.length, 0);
+    assert.equal(raced?.handle.createWritable.mock.calls.length, 0);
+    const created = setup.files.get(nameFor('original', '00000000-0000-4000-8000-000000000002'));
+    assert.deepEqual(created?.getBytes(), setup.bytes);
+  });
+
+  it('does not create an output file if the server response digest does not match its bytes', async () => {
     const bytes = Uint8Array.from([0, 1, 127, 128, 255]);
     const setup = harness({ response: responseFor(bytes, { sha256: '0'.repeat(64) }) });
     await exportSnapshot(setup.wrapper, 'original');
@@ -179,26 +267,12 @@ describe('LWB-037 recovery snapshot export', () => {
     });
 
     assert.equal(setup.call.mock.calls.length, 1);
-    assert.equal(setup.handle.createWritable.mock.calls.length, 0);
-    assert.equal(setup.writable.write.mock.calls.length, 0);
+    assert.equal(setup.getFileHandle.mock.calls.length, 0);
+    assert.equal(setup.files.size, 0);
     assert.equal(setup.wrapper.emitted('export-complete'), undefined);
   });
 
-  it('aborts the writable stream if the target appears during export', async () => {
-    const setup = harness({ targetExistsAt: 2 });
-    await exportSnapshot(setup.wrapper, 'original');
-    await vi.waitFor(() => {
-      assert.match(setup.wrapper.find('[data-testid="export-status"]').text(), /目标已经存在/);
-    });
-
-    assert.equal(setup.handle.createWritable.mock.calls.length, 1);
-    assert.equal(setup.writable.write.mock.calls.length, 0);
-    assert.equal(setup.writable.close.mock.calls.length, 0);
-    assert.equal(setup.writable.abort.mock.calls.length, 1);
-    assert.equal(setup.wrapper.emitted('export-complete'), undefined);
-  });
-
-  it('does not request snapshot bytes when the operator cancels the native picker', async () => {
+  it('does not request snapshot bytes when the operator cancels directory selection', async () => {
     const setup = harness({ pickerError: new DOMException('User cancelled.', 'AbortError') });
     await exportSnapshot(setup.wrapper, 'original');
 
@@ -207,26 +281,28 @@ describe('LWB-037 recovery snapshot export', () => {
     assert.match(setup.wrapper.find('[data-testid="export-status"]').text(), /已取消导出/);
   });
 
-  it('binds proposed-version export to its own one-time authorization subject', async () => {
+  it('binds proposed-version export to its own one-time authorization subject and filename', async () => {
     const bytes = Uint8Array.from([3, 4, 5, 250]);
+    const uuid = '00000000-0000-4000-8000-000000000001';
     const setup = harness({
       response: responseFor(bytes, {
         snapshot: 'proposed',
         file_name: 'recovery-app.ts-proposed.snapshot',
       }),
+      uuidSequence: [uuid],
     });
     await exportSnapshot(setup.wrapper, 'proposed');
     await vi.waitFor(() => {
-      assert.match(setup.wrapper.find('[data-testid="export-status"]').text(), /已保存 chosen-recovery\.snapshot/);
+      assert.match(setup.wrapper.find('[data-testid="export-status"]').text(), /已保存到 chosen-folder\/recovery-app\.ts-proposed-/);
     });
 
-    assert.equal(setup.showSaveFilePicker.mock.calls[0]?.[0].suggestedName, 'recovery-app.ts-proposed.snapshot');
     assert.deepEqual(setup.authorizeMutation.mock.calls[0], [
       '/api/recovery/export_snapshot',
       'recovery-export:op_1:item_1:proposed',
       { operation_id: 'op_1', item_id: 'item_1', snapshot: 'proposed', confirmed: true },
     ]);
-    assert.deepEqual(Buffer.from(setup.writable.write.mock.calls[0]?.[0] ?? []), Buffer.from(bytes));
+    const created = setup.files.get(nameFor('proposed', uuid));
+    assert.deepEqual(created?.getBytes(), bytes);
     assert.equal(setup.wrapper.emitted('export-complete')?.[0]?.[0].snapshot, 'proposed');
   });
 });
