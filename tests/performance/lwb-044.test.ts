@@ -16,10 +16,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { approveChange } from '@lwb/approvals';
 import type {
   ChangeApplyData,
-  ChangePrepareData,
   FileReadData,
   GitStatusData,
   TextSearchData,
@@ -232,7 +230,7 @@ describeWindows('LWB-044 bounded Windows performance run', () => {
     if (otherRoot) await rm(otherRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   });
 
-  it('measures real read/search/git/apply paths and asserts bounded skip/output behavior', async () => {
+  it('measures real read/search/git/direct-write paths and asserts bounded skip/output behavior', async () => {
     const workspaceId = harness.workspace.id;
     const readPath = 'README.md';
     const read = async (): Promise<FileReadData> =>
@@ -345,37 +343,28 @@ describeWindows('LWB-044 bounded Windows performance run', () => {
     const helperReconnectMs = performance.now() - reconnectStarted;
 
     const started = performance.now();
-    const proposal = dataOf<ChangePrepareData>(
+    const applied = dataOf<ChangeApplyData>(
       await callTool(harness, 'file_edit', {
         workspace_id: workspaceId,
-        idempotency_key: 'lwb044-approved-write-benchmark',
-        summary: 'LWB-044 isolated temporary fixture benchmark',
+        idempotency_key: 'lwb044-direct-write-benchmark',
+        summary: 'LWB-044 isolated direct-write fixture benchmark',
         path: readPath,
         base_sha256: firstTouch.value.sha256,
         read_token: firstTouch.value.read_token,
         edits: [{ start_line: 1, end_line_exclusive: 2, old_lines: [`baseline ${SEARCH_NEEDLE}`], new_lines: [`updated ${SEARCH_NEEDLE}`] }],
       }),
-      'file_edit',
+      'file_edit direct write',
     );
-    assert.equal(proposal.state, 'PENDING_APPROVAL');
-    assert.equal((await readFile(path.join(root, readPath), 'utf8')).startsWith('baseline '), true);
-    approveChange({
-      repos: harness.repos,
-      change_id: proposal.change_id,
-      digest: proposal.digest,
-      actor: 'console:lwb-044-local-approval',
-      now: new Date(harness.now()).toISOString(),
-    });
-    const applied = dataOf<ChangeApplyData>(
-      await callTool(harness, 'change_apply', {
-        change_id: proposal.change_id,
-        idempotency_key: 'lwb044-approved-write-apply',
-      }),
-      'change_apply',
+    const afterDiskBytes = await readFile(path.join(root, readPath));
+    assert.equal(applied.state, 'APPLIED');
+    assert.equal(afterDiskBytes.toString('utf8').startsWith('updated '), true);
+    const writeReadback = dataOf<FileReadData>(
+      await callTool(harness, 'file_read', { workspace_id: workspaceId, path: readPath }),
+      'file_read after direct write',
     );
     const applyMs = performance.now() - started;
-    assert.equal(applied.state, 'APPLIED');
-    assert.equal((await readFile(path.join(root, readPath), 'utf8')).startsWith('updated '), true);
+    assert.equal(writeReadback.sha256, applied.files[0]?.after_sha256);
+    assert.ok(writeReadback.content.startsWith('updated '));
     const rssAfter = process.memoryUsage().rss;
     const handleCountAfter = processHandleCount();
 
@@ -401,7 +390,7 @@ describeWindows('LWB-044 bounded Windows performance run', () => {
         git_status: summarize(gitSamples),
         five_second_idle_read_ms: Number(afterIdle.ms.toFixed(2)),
         helper_exit_to_reconnect_ms: Number(helperReconnectMs.toFixed(2)),
-        proposal_local_approval_and_apply_ms: Number(applyMs.toFixed(2)),
+        direct_edit_and_mcp_readback_ms: Number(applyMs.toFixed(2)),
       },
       bounds: {
         search_denied_file_count_last_run: finalSearch.scope.denied_files,

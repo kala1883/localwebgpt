@@ -1,9 +1,9 @@
 # LWB-044 performance and bounded-runtime evidence
 
 Status: **PARTIAL**. The opt-in Windows benchmark exercises real tool handlers,
-the PowerShell/Win32 filesystem guard, an isolated NTFS Git repository, local
-approval, and the approved apply path. This evidence does not open production
-gates or grant access to a user's workspace.
+the PowerShell/Win32 filesystem guard, an isolated NTFS Git repository, and the
+current workspace-grant direct-write path. It edits a disposable file and reads
+it back through MCP. This evidence does not grant access to a user's workspace.
 
 ## Reproduction
 
@@ -15,8 +15,10 @@ npm run test:performance:lwb-044
 The default test suite skips this benchmark; the dedicated npm script explicitly
 sets the opt-in flag for its child test process.
 
-Observed exit code: `0`; **1/1 benchmark test passed**. The test uses only three
-`lwb044-*` temporary roots and removes them in teardown.
+Latest observed exit code: `0`; **1/1 benchmark test passed** with five measured
+iterations per repeated operation. The test uses only three `lwb044-*`
+temporary roots and removes them in teardown. It terminates only the helper
+child process started by its own test worker.
 
 ## Machine and fixture
 
@@ -34,26 +36,28 @@ Observed exit code: `0`; **1/1 benchmark test passed**. The test uses only three
 
 | Operation | P50 | P95 | Notes |
 | --- | ---: | ---: | --- |
-| File read, first touch | — | — | 193.89 ms; not a true cold-cache measurement |
-| File read, warm (`n=5`) | 24.17 ms | 45.99 ms | Same bytes/hash on every read |
-| Workspace search (`n=5`) | 3,018.85 ms | 3,071.35 ms | 3/5 calls returned a bounded partial result at the 3-second search budget |
-| Search of 256 KiB long line (`n=5`) | 100.66 ms | 112.42 ms | One file/262,145 bytes scanned; bounded response |
-| Git status (`n=5`) | 4,146.26 ms | 4,509.46 ms | `truncated=false`; serialized response 6,383 bytes |
-| Proposal + local approval + apply | — | — | 240.08 ms; final file independently read back |
-| Read after 5 seconds idle | — | — | 39.43 ms |
-| Helper exit → next-call restart | — | — | 1,107.56 ms; first call failed closed, next independent call succeeded |
+| File read, first touch | — | — | 203.24 ms; not a true cold-cache measurement |
+| File read, warm (`n=5`) | 27.50 ms | 47.93 ms | Same bytes/hash on every read |
+| Workspace search (`n=5`) | 1,352.32 ms | 1,599.20 ms | All five calls completed within the 3-second budget |
+| Search of 256 KiB long line (`n=5`) | 37.57 ms | 41.89 ms | One file/262,145 bytes scanned; bounded response |
+| Git status (`n=5`) | 1,350.57 ms | 1,569.95 ms | `truncated=false`; serialized response 6,383 bytes |
+| Direct `file_edit` + MCP readback | — | — | 214.60 ms; `APPLIED` receipt hash matched the subsequent MCP readback |
+| Read after 5 seconds idle | — | — | 9.98 ms |
+| Helper exit → next-call restart | — | — | 1,608.72 ms; first call failed closed, next independent call succeeded |
 
 Search saw all 1,004 hard-denied names on the last iteration but never sent any
-of those paths to the guarded file-read API. The final search scanned 82
-ordinary text files, returned a 657-byte JSON payload, and did not claim an
-incomplete search was complete. Across the repeated run, partial-result status
-was explicit on all three budget-limited calls. Git status remained bounded at
-6,383 serialized bytes.
+of those paths to the guarded file-read API. Each search scanned 82 ordinary
+text files, returned a 657-byte JSON payload, and reported a complete scope.
+Git status remained bounded at 6,383 serialized bytes.
 
-Node RSS increased by 16,355,328 bytes over this short run; Windows process
-handle count was 259 before and after (delta `0`). These are before/after
+Node RSS increased by 26,079,232 bytes over this short run; Windows process
+handle count was 264 before and after (delta `0`). These are before/after
 observations, not a leak-free long-duration proof. Search has no persistent
 content index/cache; OS filesystem caching remains outside this measurement.
+
+The write timing now measures the current policy: the harness has a workspace
+grant, `file_edit` returns `APPLIED` in one call, and a following MCP `file_read`
+checks the write receipt hash. No per-call local approval step is included.
 
 ## Recovery behavior
 
