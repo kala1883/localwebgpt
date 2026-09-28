@@ -39,7 +39,7 @@ rollback orchestration; those areas remain open.
 | `command_exec` may keep running after the caller disconnects; there is no hard runtime deadline or request-disconnect cancellation. | The user explicitly chose to retain no hard timeout. This remains a documented behavior, not a security control: the process may continue under the daemon user's full OS permissions. |
 | A local `SHA256SUMS.txt` could be replaced together with the archive, then bless and execute a substituted `tunnel-client.exe`. | **Open on committed `main`**: the legacy `packaging/windows/build-runtime.ps1` uses the sidecar as its trust anchor. The current uncommitted `deployment/windows/build-runtime.ps1` has a version-pinned hash, but that migration is not committed and its negative tamper test remains outstanding. |
 | Uninstaller path-based reparse-point checks can race recursive deletion if another process swaps a directory for a junction. | **Open** in both the committed legacy path and the uncommitted replacement. Handle-relative deletion or another race-proof strategy plus an external-canary swap test is required. |
-| Command output screening missed POSIX paths inside `file:///...` URLs. | Fixed in `3dfc893`; the real PowerShell command test now withholds the file-URL form. |
+| Command/error output screening missed POSIX paths inside `file:///...` URLs. | Command output fixed in `3dfc893`; the shared `isSafeForModel` filter now also replaces file-URL paths in BridgeError messages/details. Real PowerShell and `daemon-tools` regressions pass. |
 
 ## Coverage map
 
