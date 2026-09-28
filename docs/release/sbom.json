@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "local-workspace-bridge@0.1.0",
-  "documentNamespace": "http://spdx.org/spdxdocs/local-workspace-bridge-0.1.0-7f9534c6-b2a1-4331-b413-d9de7741c39a",
+  "documentNamespace": "http://spdx.org/spdxdocs/local-workspace-bridge-0.1.0-44ac5f22-4ac7-482c-8317-2bf0720aafdc",
   "creationInfo": {
-    "created": "2026-09-28T02:51:45.665Z",
+    "created": "2026-09-28T05:23:51.430Z",
     "creators": [
       "Tool: npm/cli-10.9.3"
     ]
@@ -6560,7 +6560,7 @@
       "SPDXID": "SPDXRef-Package-lwb.approvals-0.1.0",
       "versionInfo": "0.1.0",
       "packageFileName": "node_modules/@lwb/approvals",
-      "description": "本地批准：由落库事实重载修改集并重算摘要、批准/拒绝决定、执行前的批准门禁（不消费）。",
+      "description": "修改集执行授权记录：重载并核对摘要、支持本地复核与 workspace-grant 授权路径、执行前完整性门禁。",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "homepage": "NOASSERTION",

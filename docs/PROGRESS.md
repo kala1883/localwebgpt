@@ -2061,6 +2061,12 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - `file_edit` 必须使用 `file_read` 签发的读取票据，因此工具清单仅在同一 workspace 同时获授 `read` 与 `propose` 时暴露它；创建、删除和授权修改集执行仅依赖 `propose`。控制台和中英文 README 已说明此差异。
 - 验证：根/Console 类型检查通过；Console **161/161**、工具目录单测 **37/37**、MCP adapter E2E **10/10**、真实 NTFS grant 写入 **13/13**、授权/查询/恢复相关单测 **76/76** 通过。真实 ChatGPT 网页端验收仍未执行。
 
+## 2026-09-28：为当前 `main` 重建 Windows runtime 证据（LWB-045 PARTIAL）
+
+- 从干净提交 `267fc2981c07b1ddb110db62147b74b6f887a1dd` 构建 runtime 到 `%TEMP%\LocalWebGPT-runtime-267fc29`。检查包含锁定依赖安装、根与 Console 类型检查、216 文件 FsGuard、production Console bundle、better-sqlite3 native smoke、官方 tunnel-client v0.0.15 checksum、cloudflared/tunnel-client/SQLite 哈希，以及 303 包 SPDX 与 9,911 文件 payload fingerprint；`.env` 未打包。
+- 新 `sbom.json` 与 `build-record.md` 已同步到仓库并由 release-evidence **3/3 PASS**、secret scan 验证。Node `v22.20.0` 对 `abbrev@5.0.0` / `nopt@10.0.1` 有 engine-range warning；构建退出码仍为 0。临时 runtime 与当前 source commit 精确绑定，路径固定，不要移动。
+- LWB-045 仍为 PARTIAL：尚无签名安装器、独立供应链审查或实际安装/升级验收。ChatGPT 网页端工具发现与读写/回读仍 NOT_RUN；旧 daemon 需在原启动终端退出后，才能让当前 `main` 版本接管本地隧道端口。
+
 ## 2026-09-28：停止命令修复与完整回归
 
 - 修正 `Stop-LocalWebGPT.ps1` 在 Windows 命名管道上使用不受支持的 `ReadTimeout` 的问题，改为带 3 秒总期限的异步读取，并严格要求 `STOPPING` 回执；没有回执时不尝试终止任何进程。
