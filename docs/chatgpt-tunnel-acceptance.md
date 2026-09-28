@@ -44,6 +44,18 @@ Remove-Item Env:CONTROL_PLANE_API_KEY, Env:CONTROL_PLANE_TUNNEL_ID -ErrorAction 
 
 先在本机控制台完成连接确认，并等待上一阶段的 `tunnel-client` doctor 通过、隧道处于运行状态。然后在 ChatGPT 开启 Developer mode，进入 Plugins，点加号新建开发者模式应用；Connection 选择 **Tunnel**，选中刚创建的隧道（或输入其 `tunnel_id`）。本项目没有 OAuth 授权服务器，因此 Authentication 选 **No authentication / None**；Tunnel runtime key 只给本地 `tunnel-client`，不要填进 OAuth 设置。创建后核对发现的工具。新开对话，从工具菜单添加该应用，再发起工具调用。若隧道列表为空，先检查它是否关联到目标 ChatGPT 工作区以及创建者是否有 Tunnels Read + Use。
 
+### 工具未出现或更新后仍显示旧清单
+
+ChatGPT 的 **Allow all actions** 只控制客户端是否允许调用已经发现的工具，不会把工具注册到 MCP 清单。工具列表由服务器 `tools/list` 返回，再按连接×工作区的 grant 过滤：`command_exec` 必须对至少一个已启用、可写的**目录工作区**单独授予“命令执行（高风险）”；`proposal_enabled`、`direct_write_enabled` 或“文件修改”授权都不能替代它。`file_create` / `file_delete` 需要该目录的 `propose` grant；`file_edit` 还需要同一目录的 `read` grant。
+
+新增工具、修改工具描述/schema，或变更授权后，请按此顺序重新发现：
+
+1. 必要时重启当前版本的 LocalWebGPT MCP server；若刚更新程序代码，必须重启才能加载新实现。
+2. 在 ChatGPT Plugins 中打开该 MCP 连接，点 **Refresh** 并确认工具元数据已更新。
+3. 新建会话，从工具菜单重新添加连接，再检查工具列表。
+
+这是 Developer mode MCP 连接的官方刷新流程；服务重启后仍需手动 Refresh 和新建会话。[OpenAI 连接与测试指南](https://developers.openai.com/plugins/deploy/connect-chatgpt#refresh-metadata)。本项目 adapter 会在本机日志记录 `tools/list：挂出 … 个工具（…）`：若本机日志含 `command_exec` 而 ChatGPT 列表没有，问题在连接刷新；若日志也没有，检查当前服务版本，以及目标目录是否已保存独立 grant。若 `change_prepare` / `change_apply` 已出现但 `file_create` / `file_delete` 缺失，通常说明客户端拿到的仍是旧工具元数据，因为这几项在当前版本依赖同一个 `propose` grant。
+
 传输连通只证明 ChatGPT 能到达 MCP 服务，不等于有工作区读写权限。在本地控制台为专用测试目录授予读取和“文件修改”工具后，验证“读取 → 单文件创建/编辑 → 回读”。获授目录中的写操作不再逐次等待批准，但仍检查路径、冲突、快照、审计和受保护执行器。模型拿到的具体工具结果会发送到 ChatGPT；工作区本身不会被整体上传。
 
 ## B. 本机恢复快照导出（与 ChatGPT 无关）
