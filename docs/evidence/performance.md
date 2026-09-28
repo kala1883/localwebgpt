@@ -15,8 +15,8 @@ npm run test:performance:lwb-044
 The default test suite skips this benchmark; the dedicated npm script explicitly
 sets the opt-in flag for its child test process.
 
-Latest observed exit code: `0`; **1/1 benchmark test passed** with five measured
-iterations per repeated operation. The test uses only three `lwb044-*`
+Latest observed run: **2026-09-29**, exit code `0`; **1/1 benchmark test passed**
+with five measured iterations per repeated operation. The test uses only three `lwb044-*`
 temporary roots and removes them in teardown. It terminates only the helper
 child process started by its own test worker.
 
@@ -36,22 +36,22 @@ child process started by its own test worker.
 
 | Operation | P50 | P95 | Notes |
 | --- | ---: | ---: | --- |
-| File read, first touch | — | — | 203.24 ms; not a true cold-cache measurement |
-| File read, warm (`n=5`) | 27.50 ms | 47.93 ms | Same bytes/hash on every read |
-| Workspace search (`n=5`) | 1,352.32 ms | 1,599.20 ms | All five calls completed within the 3-second budget |
-| Search of 256 KiB long line (`n=5`) | 37.57 ms | 41.89 ms | One file/262,145 bytes scanned; bounded response |
-| Git status (`n=5`) | 1,350.57 ms | 1,569.95 ms | `truncated=false`; serialized response 6,383 bytes |
-| Direct `file_edit` + MCP readback | — | — | 214.60 ms; `APPLIED` receipt hash matched the subsequent MCP readback |
-| Read after 5 seconds idle | — | — | 9.98 ms |
-| Helper exit → next-call restart | — | — | 1,608.72 ms; first call failed closed, next independent call succeeded |
+| File read, first touch | — | — | 215.27 ms; not a true cold-cache measurement |
+| File read, warm (`n=5`) | 19.12 ms | 23.74 ms | Same bytes/hash on every read |
+| Workspace search (`n=5`) | 1,334.72 ms | 1,642.04 ms | All five calls completed within the 3-second budget |
+| Search of 256 KiB long line (`n=5`) | 31.74 ms | 40.27 ms | One file/262,145 bytes scanned; bounded response |
+| Git status (`n=5`) | 1,304.20 ms | 1,572.07 ms | `truncated=false`; serialized response 6,383 bytes |
+| Direct `file_edit` + MCP readback | — | — | 187.43 ms; `APPLIED` receipt hash matched the subsequent MCP readback |
+| Read after 5 seconds idle | — | — | 22.98 ms |
+| Helper exit → next-call restart | — | — | 1,658.84 ms; first call failed closed, next independent call succeeded |
 
 Search saw all 1,004 hard-denied names on the last iteration but never sent any
 of those paths to the guarded file-read API. Each search scanned 82 ordinary
 text files, returned a 657-byte JSON payload, and reported a complete scope.
 Git status remained bounded at 6,383 serialized bytes.
 
-Node RSS increased by 26,079,232 bytes over this short run; Windows process
-handle count was 264 before and after (delta `0`). These are before/after
+Node RSS increased by 52,318,208 bytes over this short run; Windows process
+handle count was 251 before and after (delta `0`). These are before/after
 observations, not a leak-free long-duration proof. Search has no persistent
 content index/cache; OS filesystem caching remains outside this measurement.
 
