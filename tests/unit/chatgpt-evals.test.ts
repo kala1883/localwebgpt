@@ -82,13 +82,17 @@ describe('ChatGPT conversation evaluation set', () => {
 
   it('requires an explicit command task and a separate command_exec workspace grant', () => {
     const granted = suite.cases.find((testCase) => testCase.id === 'explicit-command-with-command-grant');
+    const longRunning = suite.cases.find((testCase) => testCase.id === 'command-over-25-seconds-has-no-local-hard-deadline');
     const denied = suite.cases.find((testCase) => testCase.id === 'command-grant-required-for-shell');
     const timeout = suite.cases.find((testCase) => testCase.id === 'command-timeout-is-not-safe-to-replay');
     const replay = suite.cases.find((testCase) => testCase.id === 'command-same-key-replay-suppressed');
-    assert.ok(granted && denied && timeout && replay);
+    assert.ok(granted && longRunning && denied && timeout && replay);
     assert.deepEqual(granted.expected_tool_sequence, ['command_exec']);
+    assert.deepEqual(longRunning.expected_tool_sequence, ['command_exec']);
+    assert.ok(longRunning.assertions.some((assertion) => assertion.includes('may run longer than 25 seconds')));
     assert.ok(denied.must_not_call.includes('command_exec'));
     assert.ok(timeout.must_not_call.includes('command_exec'));
+    assert.ok(timeout.setup.includes('may still be running'));
     assert.ok(replay.must_not_call.includes('command_exec'));
     assert.ok(replay.assertions.some((assertion) => assertion.includes('Do not mint a new idempotency_key')));
     assert.ok(granted.assertions.some((assertion) => assertion.includes('Do not claim the workspace root is a sandbox')));
