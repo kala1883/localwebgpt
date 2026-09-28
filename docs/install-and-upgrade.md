@@ -41,7 +41,7 @@ snapshot_store_max_bytes=536870912
 
 ## 升级与卸载限制
 
-升级前的数据库保护已接入启动链，但 LWB-040 仍未完成：升级器、自动恢复备份和签名安装器尚未交付/验收。V1 暂无自动卸载器；以下是保留本地状态的手工卸载流程。
+升级前的数据库保护已接入启动链，但 LWB-040 仍未完成：V1 尚无自动升级切换器、签名安装器或真实安装/升级验收。runtime 目录现提供带工作区重叠检查的卸载脚本；卸载会保留受保护状态库与所有工作区。
 
 当本机已有较旧 schema 的状态库时，daemon 在单实例锁与受保护目录检查之后、打开迁移连接之前，会：
 
@@ -51,11 +51,29 @@ snapshot_store_max_bytes=536870912
 
 如果备份无法创建或验证，daemon 会在迁移前停止，原状态库不变；如果迁移后续失败，预迁移快照仍会保留。不要在服务运行时手工覆盖状态库。
 
-### 手工卸载（V1）
+### 卸载 runtime（V1）
 
 1. 先在控制台的恢复页检查是否有待处理/无法判定的恢复记录。若有，先保留 runtime 和本地状态目录，不要继续删除。
-2. 在另一个 PowerShell 窗口，从**当初 `-OutputDirectory` 指定的 runtime 根目录**运行 `.Stop-LocalWebGPT.ps1`；等待启动窗口完全返回提示符。不要强杀进程。
-3. 只删除那个精确的 runtime 输出目录；不要删除它的父目录，不要删除 `%LOCALAPPDATA%\LocalWorkspaceBridge`，也不要删除任何已授权工作区。安装时应把 runtime 放在与工作区无重叠的独立目录（推荐 `%LOCALAPPDATA%\Programs\LocalWebGPT`）。如果不能确认路径没有与工作区重叠，就先不要删除。
-4. runtime 目录中的 `.env` 随 runtime 一起移除（其中的 tunnel runtime key 不会写进日志）。受保护本地状态默认**保留**：数据库、快照、恢复记录、审计和本机凭证仍在 `%LOCALAPPDATA%\LocalWorkspaceBridge`；若启动时使用自定义 `LWB_HOME`，保留该目录。V1 不提供自动清除状态/快照的卸载选项，因为待恢复操作可能依赖这些唯一字节。
+2. 在另一个 PowerShell 窗口，从 runtime 根目录运行 `.\Stop-LocalWebGPT.ps1`，等待启动窗口完全返回提示符。不要强杀进程。
+3. 停止后，从 runtime 根目录启动一个**独立 PowerShell 进程**运行：
 
-这套流程不触碰已授权工作区，但仍需人工确认 runtime 路径无重叠；自动卸载器与长时升级/卸载验收仍未完成。构建器要求 runtime 使用仓库外的新目录，旧运行目录与受保护状态分开。
+   ```powershell
+   $uninstaller = Join-Path $PWD 'Uninstall-LocalWebGPT.ps1'
+   pwsh.exe -NoProfile -File $uninstaller -ConfirmTargetRuntimeStopped
+   ```
+
+   脚本会在删除前再询问确认；`-WhatIf` 可预览而不删除。它会把精确 runtime 根目录的清理交给一个隐藏 helper，等待卸载 PowerShell 进程退出后才删目录；命令返回后请确认 runtime 目录已消失。默认检查 `%LOCALAPPDATA%\LocalWorkspaceBridge\db\bridge.sqlite`；若 daemon 使用了自定义 `LWB_HOME`，必须将 `-StateRoot` 指向**实际**状态根，例如 `-StateRoot 'D:\LocalWorkspaceBridge'`。
+
+4. 若所选 runtime 与状态目录或任一登记工作区有路径重叠、工作区记录无法读取、目标像源代码仓库，或目标 runtime 自己的 tunnel-client 仍在运行，脚本会拒绝删除。路径重叠时先在控制台确认并处理对应 workspace grant；不要改用递归删除强行绕过。删除只作用于这个精确 runtime 目录；内含 reparse point 时只删 link 本身，不跟随到目标目录。
+
+runtime 内 `.env` 会随目录一起删除，但值不会写进输出。受保护状态默认**保留**：数据库、快照、恢复记录、审计和本机凭证仍在 `%LOCALAPPDATA%\LocalWorkspaceBridge`；使用自定义 `LWB_HOME` 时，该目录同样保留。脚本不会清除或移动授权工作区内容。
+
+卸载脚本的 Windows 临时夹具测试：
+
+```powershell
+node --import tsx --test tests/windows/uninstall-runtime.test.ts
+```
+
+该测试验证精确 runtime 删除、工作区和状态库保留、目标与登记工作区重叠时拒绝，以及 `.env` 值不进入输出；不会触碰真实安装或状态目录。LWB-040 仍 PARTIAL：真实安装路径卸载、自动升级切换和签名安装包尚未验收。
+
+构建器要求 runtime 使用仓库外的新目录，旧运行目录与受保护状态分开；不要把 runtime 安装在任何授权工作区内部。

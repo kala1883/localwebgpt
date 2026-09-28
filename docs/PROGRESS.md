@@ -2016,7 +2016,8 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 ## 2026-09-28 本轮继续：LWB-040 手工卸载与状态保留语义（PARTIAL）
 
 - `docs/install-and-upgrade.md` 新增 V1 手工卸载步骤：先检查恢复页、通过 SID 定向命令停止并等待启动窗口返回，再只移除精确 runtime 输出目录；明确不得删除工作区或 `%LOCALAPPDATA%\LocalWorkspaceBridge`（数据库、快照、恢复记录和凭证默认保留）。
-- V1 尚无自动卸载器，也没有在自定义或与授权工作区重叠的安装路径上验证移除；卸载器、长时升级恢复与签名安装器仍未完成，LWB-040 继续 PARTIAL。
+- 新增 `packaging/windows/Uninstall-LocalWebGPT.ps1` 并纳入 runtime 构建：验证受保护状态库中的登记根，拒绝与授权工作区/状态根重叠的目标；只删除精确 runtime，遇到 reparse point 只删除链接本身。由于 Windows 会锁住正在运行的卸载脚本目录，实际清理交给隐藏 helper，在独立 PowerShell 进程退出后执行；测试覆盖目标 runtime 删除、工作区与状态库保留、授权根重叠拒绝、WhatIf 与 `.env` 值不进入输出 **3/3 PASS**。
+- 本轮完整 `npm run check` **PASS**：根测试 **1815 PASS / 15 SKIP / 0 FAIL**，Console **162/162 PASS**；根/Console 类型检查、FsGuard（218 文件）和工作树 secrets scan 通过。LWB-040 仍 PARTIAL：未对真实安装包做卸载/升级验收，自动升级切换、签名安装包和更长时升级恢复仍未完成。
 
 ## 2026-09-28 本轮继续：按工作区授权直接创建/编辑，移除全局审批门禁（实现完成，外部验收未完成）
 

@@ -102,6 +102,24 @@ describe('local Secure MCP Tunnel launch contract', () => {
     assert.match(runtimeBuilder, /Stop-LocalWebGPT\.ps1/);
   });
 
+  it('ships an explicit guarded runtime uninstaller with the Windows package', () => {
+    const uninstallScript = readFileSync(
+      new URL('../../packaging/windows/Uninstall-LocalWebGPT.ps1', import.meta.url),
+      'utf8',
+    );
+    const runtimeBuilder = readFileSync(
+      new URL('../../packaging/windows/build-runtime.ps1', import.meta.url),
+      'utf8',
+    );
+
+    assert.match(uninstallScript, /ConfirmTargetRuntimeStopped/);
+    assert.match(uninstallScript, /canonical_root/);
+    assert.match(uninstallScript, /Test-PathsOverlap/);
+    assert.match(uninstallScript, /Remove-TreeWithoutFollowingLinks/);
+    assert.match(uninstallScript, /SupportsShouldProcess/);
+    assert.match(runtimeBuilder, /Uninstall-LocalWebGPT\.ps1/);
+  });
+
   it('records an SPDX SBOM and hashes the packaged Windows binaries', () => {
     const runtimeBuilder = readFileSync(
       new URL('../../packaging/windows/build-runtime.ps1', import.meta.url),
