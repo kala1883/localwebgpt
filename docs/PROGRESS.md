@@ -2041,8 +2041,9 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 新增 `file_delete` 的单次直接执行契约：调用方只给已授权 workspace 与相对路径，不必先调用 `file_read`，也不需要逐次本机批准。Daemon 在同一次调用中读取完整基线并先写入受保护快照；快照上限 16 MiB；之后由 NTFS 护栏按同一对象身份/哈希执行句柄删除，并核验路径消失。
 - 删除适用于文本、二进制及不可解码普通文件；多硬链接、秘密/凭据硬拒绝路径、授权根外路径仍拒绝。二进制删除的 `change_get` 只显示 metadata-only 删除差异，不返回文件正文。执行失败时既有执行器从快照恢复；若恢复路径被新对象占用则不覆盖。
 - Console 变更详情已加入删除类型与文件数统计；中英文 README 和 ADR 同步为单次直接操作与测试步骤。Windows 真 NTFS handler 用例直接删除文本文件和含 NUL 的二进制文件（没有先 `file_read`），验证状态、空文件目标哈希、路径缺失及二进制差异不泄露正文；两条场景均通过。
+- 对已删除 UTF-8 文本的用户撤销也已接通：`change_revert_prepare` 从受保护快照逐字节验证重建结果后生成新的 `create_text` 逆提案；真实 NTFS 用例验证 BOM/CRLF 文本经 `change_apply` 精确恢复。二进制、超过 2 MiB 或混合换行的删除快照不会生成近似逆提案。
 - 崩溃恢复也已接通：删除落盘后、删除日志写入前退出，重启会把“路径不存在”核验为目标状态；混合态下经本地恢复授权会用快照 `CREATE_NEW` 还原已删文件并回读核对，恢复对象会有新的 NTFS file id。两个流程均有真 NTFS 故障边界测试。
-- 当前树完整检查：`npm run check` 根测试 **1793 PASS / 0 FAIL / 13 SKIP**，Console **160/160 PASS**；根与 Console 类型检查、FsGuard 扫描（216 个文件）及 secret scan 全通过。
+- 当前树完整检查：`npm run check` 根测试 **1794 PASS / 0 FAIL / 13 SKIP**，Console **160/160 PASS**；根与 Console 类型检查、FsGuard 扫描（216 个文件）及 secret scan 全通过。
 - LWB-045 构建证据：从干净主分支提交 `c0f4716` 成功构建 Windows x64 runtime 到 `%TEMP%\LocalWebGPT-runtime-c0f4716`；构建包含锁定依赖安装、Console production build、FsGuard 导入扫描、SQLite native smoke、tunnel-client/cloudflared/SQLite 哈希核对，以及 303 包 SPDX 与 payload fingerprint。`.env` 未打包。两项 npm 子依赖报告 Node engine warning（需较新的 22.x 补丁版本），但完整构建以退出码 0 完成；正式发布仍需版本升级评估。
 - `docs/release/sbom.json` 与 `build-record.md` 已更新为该 packaged-runtime 证据；定向 release-evidence **3/3 PASS**，工作树 secret scan 通过。LWB-045 仍 PARTIAL：没有签名安装器、独立供应链审查或实际安装/升级验收。
-- 仍未完成：真实 ChatGPT 网页端工具发现/读写/删除验收、非实现者安全签署与完整 V1 发布。用户发起的 `change_revert_prepare` 尚不自动还原已删除文件（失败批次及崩溃后的本地恢复已覆盖）；V1.1/V2 任务继续保留在原计划状态。这些不计为已通过。
+- 仍未完成：真实 ChatGPT 网页端工具发现/读写/删除验收、非实现者安全签署与完整 V1 发布。删除二进制、混合换行及超 2 MiB 文本暂不自动逆向重建；`change_revert_prepare` 对源修改集新建文件仍输出明确的本地删除动作；V1.1/V2 任务继续保留在原计划状态。这些不计为已通过。

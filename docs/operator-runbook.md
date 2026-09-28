@@ -93,8 +93,9 @@ Invoke-WebRequest http://127.0.0.1:8080/readyz
 4. “在此工作区创建 `acceptance-note.txt`，内容只有 `saved by workspace grant`，现在直接保存。”预期：`file_create` 返回 `state=APPLIED` 和回执。之后再要求读取该文件，并与磁盘字节核对。
 5. 对测试文本文件先读取，再要求把某行的唯一标记改掉。预期：`file_edit` 使用该次读取的 `read_token` 和 SHA-256，返回 `APPLIED`；再次 `file_read` 并核对摘要。
 6. 在同一临时目录新建一个 disposable 文本文件，直接请求 `file_delete`（不要先 `file_read`）。预期：返回 `APPLIED`，并确认路径不存在；二进制测试应仅查看 metadata-only 删除差异。
-7. 若要测多文件，明确要求修改两个测试文件。预期：`change_prepare` 后对同一 `change_id` 调 `change_apply`；成功必须有 `APPLIED` 回执。不要在真实仓库首次试写/删除。
-8. 撤销测试目录的“文件修改”授权，再请求一次写入或删除；预期拒绝且文件字节不变。
+7. 对刚删除的文本测试文件调用 `change_revert_prepare`，检查它生成 `create_text` 逆提案，再用 `change_apply` 恢复。自动逆提案仅支持可逐字节重建的 UTF-8 文本（非混合换行，且小于 2 MiB）；二进制、超大或混合换行快照会明确拒绝近似恢复。
+8. 若要测多文件，明确要求修改两个测试文件。预期：`change_prepare` 后对同一 `change_id` 调 `change_apply`；成功必须有 `APPLIED` 回执。不要在真实仓库首次试写/删除。
+9. 撤销测试目录的“文件修改”授权，再请求一次写入或删除；预期拒绝且文件字节不变。
 
 只有实际看到正确工具序列、`APPLIED` 回执、回读哈希一致和未授权拒绝，才能记录该项网页验收 PASS。代码/单元测试通过不等于 ChatGPT 网页已验收。
 

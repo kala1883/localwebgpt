@@ -5,7 +5,7 @@
  *
  * 方案 §8.5 原文：「撤销是新修改集，不是把旧记录删除。」
  * 本文件因此只做一件事 —— 把一条**已经应用**的修改集翻成一份**新的提案**，
- * 那份提案与任何别的提案走同一条路：`prepareChange` → 本地批准 → 执行器。
+ * 那份提案与任何别的提案走同一条路：`prepareChange` → `change_apply` → 执行器。
  * 它自己**不写盘**、**不签发批准**、**不碰旧记录的任何一个字节**。
  * 三条验收标准的后两条因此是结构性的，不是承诺：
  *
@@ -25,8 +25,9 @@
  * | 盘上现在是什么 | 结局 | 凭什么 |
  * | --- | --- | --- |
  * | 正是我们写下的那一份 | `REVERTIBLE` | 身份 = 基线身份，内容 = 回执里**观测到**的那一份 |
+ * | 删除后路径仍为空，且文本快照可逐字节重建 | `REVERTIBLE` | 生成新的 `create_text` 提案恢复基线 |
  * | 已经等于基线 | `ALREADY_ORIGINAL` | 没什么可撤的，也不生成条目 |
- * | 新建的文件还在 | `LOCAL_DELETE_REQUIRED` | 见下「删除是 V1 不做的事」 |
+ * | 新建的文件还在 | `LOCAL_DELETE_REQUIRED` | 由操作者明确决定是否另调 `file_delete` |
  * | 其余（含身份对不上） | `CONFLICT` | 不覆盖，交给本地操作者 |
  *
  * 「正是我们写下的那一份」用的是 `operation_item_results.after_sha256`，
@@ -35,18 +36,19 @@
  * 会把一次没有落盘（或落到别处）的执行显示成「盘上就是目标那一份」，
  * 于是一次撤销会去覆盖一个我们从没写过的内容。
  *
- * ## 删除是 V1 不做的事
+ * ## 删除与恢复
  *
- * 撤销一个新建文件在语义上就是删除它。方案 §2.1 把「创建父目录、重命名、
- * 删除」列为 V1 **不执行**的能力，任务书步骤 3 因此写得很直白：
- * 「默认不自动删除，V1 输出本地恢复方案」。本文件的做法是把这件事变成
- * 一条**给操作者的方案**（`LocalRecoveryAction`），而不是一个被悄悄跳过的
- * 条目 —— 一份「三个文件里撤了两个、第三个没提」的回执，比一条明确的
- * 「这个要你自己删」更糟。
+ * 撤销一个新建文件在语义上就是删除它。虽然工具面现在有直接 `file_delete`，
+ * 本撤销流程仍将这一步呈现为一条**给操作者的方案**（`LocalRecoveryAction`）：
+ * 新建没有删除前基线，操作者可以选择保留它；本流程不替操作者推断删除意图。
  *
  * 而且这条方案**不声称归属**：新建没有基线身份可锚，方案里写的是
  * 「内容与创建时回读到的哈希一致」这个**事实**，不是「这个文件是我们的」。
  * 方案 §8.3：「不能猜测所有同名内容都属于插件。」
+ *
+ * 反方向（撤销一条已应用的 `delete_file`）则从已验证基线快照生成一个新的
+ * `create_text` 提案。只有 UTF-8、可由 V1 换行/BOM 规则逐字节重建、且不超过
+ * 文本恢复上限时才会生成；二进制、混合换行或过大的快照明确拒绝近似恢复。
  *
  * ## 「上次应用之后是什么」从哪里来 —— 执行日志，不是别的地方
  *
@@ -138,7 +140,7 @@ import type { ChangeItemRecord, ChangeSetRecord } from '@lwb/persistence';
 import { isWinfsError, type WinfsOps } from '@lwb/winfs';
 
 import { shortCodeOf } from './digest.ts';
-import { validateChangeItems, type ValidatedChangeItem } from './edit-contract.ts';
+import { validateChangeItems, type ValidatedChangeItem, type ValidatedCreateText } from './edit-contract.ts';
 import {
   EXECUTION_JOURNAL_STAGES,
   EXECUTION_JOURNAL_STAGES as STAGE,
@@ -154,7 +156,7 @@ import {
 } from './invalidation.ts';
 import { prepareChange, type PrepareChangeArgs, type PrepareChangeDeps } from './prepare.ts';
 import { ownedChangeOf } from './query.ts';
-import { replaceWholeText } from './text-engine.ts';
+import { createTextFile, replaceWholeText } from './text-engine.ts';
 
 /**
  * 幂等与审计里记录的**工具名**。
@@ -389,10 +391,12 @@ export async function planRevert(
   const localActions: LocalRecoveryAction[] = [];
 
   for (const item of items) {
-    const disposition = dispositionOf(events, item.id, item.target_sha256);
+    const disposition = dispositionOf(events, item.id, item.target_sha256, item.op);
     const planned =
       item.op === 'create_text'
         ? await planCreatedItem(item, args, deps, disposition)
+        : item.op === 'delete_file'
+          ? await planDeletedItem(item, args, deps, disposition)
         : await planRewriteItem(item, args, deps, disposition);
 
     plans.push(planned.plan);
@@ -611,6 +615,7 @@ export const REVERT_JOURNAL_STAGES = EXECUTION_JOURNAL_STAGES;
  */
 type ItemDisposition =
   | { readonly kind: 'written'; readonly file_id: string; readonly sha256: string }
+  | { readonly kind: 'deleted' }
   | { readonly kind: 'back_at_baseline' }
   | { readonly kind: 'skipped' }
   | { readonly kind: 'unaccounted'; readonly reason: RevertConflictReason; readonly detail: string };
@@ -636,6 +641,7 @@ function dispositionOf(
   events: readonly JournalRow[],
   itemId: string,
   targetSha256: string,
+  op: ChangeOp,
 ): ItemDisposition {
   const last = lastEventOf(events, itemId);
 
@@ -674,6 +680,20 @@ function dispositionOf(
       }
       return { kind: 'written', file_id: fileId, sha256: observed };
     }
+    case STAGE.deleted:
+      if (
+        op !== 'delete_file' ||
+        last.observed_file_id !== null ||
+        last.target_sha256 !== targetSha256 ||
+        last.observed_sha256 !== targetSha256
+      ) {
+        return {
+          kind: 'unaccounted',
+          reason: 'RECEIPT_INCOMPLETE',
+          detail: '删除日志与修改项不匹配，或缺少“路径不存在”的目标哈希核验。',
+        };
+      }
+      return { kind: 'deleted' };
     case STAGE.restored:
     case STAGE.untouched:
       // 两种都**可证明**磁盘上没有本次执行的字节：前者收回了，后者没写过。
@@ -774,12 +794,14 @@ async function planRewriteItem(
     );
   }
 
-  if (disposition.kind === 'unaccounted' || disposition.kind === 'skipped') {
+  if (disposition.kind === 'unaccounted' || disposition.kind === 'skipped' || disposition.kind === 'deleted') {
     return conflicted(
-      disposition.kind === 'skipped' ? 'EXECUTION_SKIPPED' : disposition.reason,
+      disposition.kind === 'skipped' ? 'EXECUTION_SKIPPED' : 'RECEIPT_INCOMPLETE',
       disposition.kind === 'skipped'
         ? `${item.canonical_path} 在本次执行时**已经是**批准的那一份内容，执行器跳过了它 —— 它现在这个样子不是本次修改造成的，因此本流程没有资格去还原它。`
-        : `${item.canonical_path}：${disposition.detail}`,
+        : disposition.kind === 'deleted'
+          ? `${item.canonical_path} 的日志记录了删除，但修改项不是 delete_file；拒绝按改写撤销。`
+          : `${item.canonical_path}：${disposition.detail}`,
     );
   }
   if (disposition.kind === 'back_at_baseline') {
@@ -946,6 +968,168 @@ async function planRewriteItem(
 }
 
 // ---------------------------------------------------------------------------
+// 删除条目（delete_file）：从快照生成受保护的新建提案
+// ---------------------------------------------------------------------------
+
+async function planDeletedItem(
+  item: ChangeItemRecord,
+  args: RevertPrepareArgs,
+  deps: RevertPrepareDeps,
+  disposition: ItemDisposition,
+): Promise<PlannedEntry> {
+  const base = {
+    item_id: item.id,
+    seq: item.seq,
+    op: item.op,
+    path: item.canonical_path,
+  } as const;
+  const conflicted = (reason: RevertConflictReason, detail: string, observed: string | null = null): PlannedEntry => ({
+    plan: {
+      ...base,
+      observed_path: null,
+      verdict: 'CONFLICT',
+      reason,
+      expected_sha256: item.target_sha256,
+      observed_sha256: observed,
+      detail,
+    },
+    proposal: null,
+    local_action: null,
+  });
+
+  if (item.base_sha256 === null || item.old_blob_id === null) {
+    return conflicted('RECEIPT_INCOMPLETE', `${item.canonical_path} 缺少删除前的完整快照，无法生成恢复提案。`);
+  }
+  if (disposition.kind === 'back_at_baseline') {
+    return {
+      plan: {
+        ...base,
+        observed_path: null,
+        verdict: 'ALREADY_ORIGINAL',
+        reason: null,
+        expected_sha256: item.base_sha256,
+        observed_sha256: item.base_sha256,
+        detail: `${item.canonical_path} 已有与删除前基线完全相同的内容，无需恢复。`,
+      },
+      proposal: null,
+      local_action: null,
+    };
+  }
+  if (disposition.kind !== 'deleted') {
+    if (disposition.kind === 'skipped') {
+      return conflicted(
+        'EXECUTION_SKIPPED',
+        `${item.canonical_path} 的删除在执行时被跳过；该状态不是本次删除造成的，不生成恢复提案。`,
+      );
+    }
+    return conflicted(
+      disposition.kind === 'unaccounted' ? disposition.reason : 'RECEIPT_INCOMPLETE',
+      disposition.kind === 'unaccounted'
+        ? `${item.canonical_path}：${disposition.detail}`
+        : `${item.canonical_path} 的执行日志不是已核验删除回执，拒绝猜测。`,
+    );
+  }
+
+  const observation = await observePath(deps.ops, args.scope, item.canonical_path);
+  if (observation.kind === 'unavailable') {
+    return conflicted(observation.reason, observation.detail);
+  }
+  if (observation.kind === 'present') {
+    if (observation.sha256 === item.base_sha256) {
+      return {
+        plan: {
+          ...base,
+          observed_path: observation.canonical_path,
+          verdict: 'ALREADY_ORIGINAL',
+          reason: null,
+          expected_sha256: item.base_sha256,
+          observed_sha256: observation.sha256,
+          detail: `${item.canonical_path} 已有与删除前基线相同的完整字节，无需再创建。`,
+        },
+        proposal: null,
+        local_action: null,
+      };
+    }
+    return conflicted(
+      observation.file_id === item.base_file_id ? 'THIRD_CONTENT' : 'REPLACED_OBJECT',
+      `${item.canonical_path} 的路径现在已被占用（${observation.sha256}），而删除前基线为 ${item.base_sha256}；为避免覆盖新内容，不生成恢复提案。`,
+      observation.sha256,
+    );
+  }
+
+  const baseline = await readBaselineBlob(item.old_blob_id, item.base_sha256, deps);
+  if (baseline === null) {
+    return conflicted('RECEIPT_INCOMPLETE', `${item.canonical_path} 的删除前快照无法读取或哈希校验失败。`);
+  }
+  if (baseline.length > LIMITS.MAX_EDITABLE_FILE_BYTES) {
+    return conflicted(
+      'INVERSE_NOT_REPRODUCIBLE',
+      `${item.canonical_path} 的基线有 ${baseline.length} 字节，超过文本恢复上限 ${LIMITS.MAX_EDITABLE_FILE_BYTES}；快照保留，但此工具不生成近似恢复。`,
+    );
+  }
+  const inspection = inspectBytes(baseline);
+  if (inspection.kind !== 'text') {
+    return conflicted(
+      'BASELINE_NOT_TEXT',
+      `${item.canonical_path} 的删除前快照不是可解码 UTF-8 文本（${inspection.reason}）；快照仍保留，但本工具不伪造二进制恢复。`,
+    );
+  }
+  if (inspection.newline === 'mixed') {
+    return conflicted(
+      'INVERSE_NOT_REPRODUCIBLE',
+      `${item.canonical_path} 的删除前文本混用换行风格；create_text 无法逐字节还原，已拒绝生成近似提案。`,
+    );
+  }
+
+  const candidate: ChangeItem = {
+    op: 'create_text',
+    path: item.canonical_path,
+    content: contentOfDecoded(inspection),
+    newline: inspection.newline === 'crlf' ? 'crlf' : 'lf',
+    bom: inspection.bom,
+  };
+  const validated = validateChangeItems([candidate], {
+    connection_id: args.connection_id,
+    workspace_id: args.workspace_id,
+    generation: args.generation,
+    now: args.now,
+    authority: deps.authority,
+    max_editable_file_bytes: LIMITS.MAX_EDITABLE_FILE_BYTES,
+  }).items[0];
+  if (validated === undefined || validated.op !== 'create_text') {
+    return conflicted('INVERSE_NOT_REPRODUCIBLE', `${item.canonical_path} 的恢复内容未通过 create_text 契约校验。`);
+  }
+
+  let restoredSha256: string;
+  try {
+    const restored = createTextFile({ item: validated as ValidatedCreateText, max_editable_file_bytes: LIMITS.MAX_EDITABLE_FILE_BYTES });
+    restoredSha256 = restored.after_sha256;
+  } catch {
+    return conflicted('INVERSE_NOT_REPRODUCIBLE', `${item.canonical_path} 的快照无法由 create_text 逐字节重建。`);
+  }
+  if (restoredSha256 !== item.base_sha256) {
+    return conflicted(
+      'INVERSE_NOT_REPRODUCIBLE',
+      `${item.canonical_path} 的恢复产物哈希 ${restoredSha256} 与删除前基线 ${item.base_sha256} 不同；拒绝生成近似提案。`,
+    );
+  }
+
+  return {
+    plan: {
+      ...base,
+      observed_path: null,
+      verdict: 'REVERTIBLE',
+      reason: null,
+      expected_sha256: item.target_sha256,
+      observed_sha256: null,
+      detail: `${item.canonical_path} 的删除回执与空路径状态已核验，且快照可以逐字节重建；生成 CREATE_NEW 恢复提案。`,
+    },
+    proposal: candidate,
+    local_action: null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 新建条目（create_text）
 // ---------------------------------------------------------------------------
 
@@ -967,6 +1151,10 @@ async function planCreatedItem(
     proposal: null,
     local_action: null,
   });
+
+  if (disposition.kind === 'deleted') {
+    return conflicted('RECEIPT_INCOMPLETE', `${item.canonical_path} 的删除终态与新建项不匹配；拒绝推断删除归属。`);
+  }
 
   // 先看**日志**：这个新建到底发生了没有。没有发生的话，盘上无论有什么
   // 都不是我们建的 —— 哪怕它就在那个路径上。

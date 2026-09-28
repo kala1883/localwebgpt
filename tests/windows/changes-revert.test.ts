@@ -107,6 +107,11 @@ interface CreateSpec {
   readonly bom: boolean;
 }
 
+interface DeleteSpec {
+  readonly path: string;
+  readonly before: Buffer;
+}
+
 const lf = (text: string): Buffer => Buffer.from(text, 'utf8');
 const bomCrlf = (text: string): Buffer =>
   Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text.split('\n').join('\r\n'), 'utf8')]);
@@ -168,7 +173,7 @@ describeWindows('LWB-031 真 NTFS：安全撤销提议', () => {
 
   async function rig(
     seed: string,
-    spec: { readonly edits?: readonly EditSpec[]; readonly creates?: readonly CreateSpec[]; readonly git?: boolean },
+    spec: { readonly edits?: readonly EditSpec[]; readonly creates?: readonly CreateSpec[]; readonly deletes?: readonly DeleteSpec[]; readonly git?: boolean },
   ): Promise<Rig> {
     if (opened !== undefined) closeDatabase(opened.db);
     const dir = path.join(sandbox, seed);
@@ -178,6 +183,11 @@ describeWindows('LWB-031 真 NTFS：安全撤销提议', () => {
       const target = path.join(dir, ...edit.path.split('/'));
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, edit.before);
+    }
+    for (const deletion of spec.deletes ?? []) {
+      const target = path.join(dir, ...deletion.path.split('/'));
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, deletion.before);
     }
 
     if (spec.git === true) {
@@ -310,6 +320,9 @@ describeWindows('LWB-031 真 NTFS：安全撤销提议', () => {
     }
     for (const create of spec.creates ?? []) {
       items.push({ op: 'create_text', path: create.path, content: create.content, newline: create.newline, bom: create.bom });
+    }
+    for (const deletion of spec.deletes ?? []) {
+      items.push({ op: 'delete_file', path: deletion.path });
     }
     assert.ok(items.length > 0, '夹具至少要有内容');
 
@@ -882,6 +895,31 @@ describeWindows('LWB-031 真 NTFS：安全撤销提议', () => {
     assert.equal(plan.items[0]!.verdict, 'ALREADY_ORIGINAL');
     assert.deepEqual(plan.local_actions, []);
     await expectRevertError(r, r.prepareRevert('e4-key'), 'CHANGE_STATE_INVALID', 'NOTHING_TO_REVERT');
+  });
+
+  it('E5：撤销文本文件删除会从快照生成精确的 CREATE_NEW 恢复提案', async () => {
+    const original = bomCrlf('甲\n乙\n');
+    const r = await rig('e5-delete', {
+      deletes: [{ path: '已删除.txt', before: original }],
+    });
+    await assert.rejects(readFile(r.abs('已删除.txt')), { code: 'ENOENT' });
+
+    const plan = await r.planRevert();
+    assert.equal(plan.items[0]?.verdict, 'REVERTIBLE');
+    assert.equal(plan.items[0]?.op, 'delete_file');
+    assert.equal(plan.proposal[0]?.op, 'create_text');
+    assert.deepEqual(plan.local_actions, []);
+
+    const prepared = await r.prepareRevert('e5-delete-key');
+    assert.ok(prepared.change !== null);
+    assert.equal(prepared.change.files[0]?.op, 'create_text');
+    assert.equal(prepared.change.files[0]?.bom, true);
+    assert.equal(prepared.change.files[0]?.newline, 'crlf');
+    assert.equal(prepared.change.workspace_modified, false, '逆提案准备不直接写文件');
+    await assert.rejects(readFile(r.abs('已删除.txt')), { code: 'ENOENT' });
+
+    await r.runRevertProposal(prepared);
+    assert.deepEqual(await r.onDisk('已删除.txt'), original, '执行恢复提案后字节与删除前快照逐字节相同');
   });
 
   // -------------------------------------------------------------------------
