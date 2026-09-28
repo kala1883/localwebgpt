@@ -999,7 +999,13 @@ describe('错误载荷', () => {
     const fileUrl = '读取失败：file:///home/mj/private.txt';
     const fileUrlPayload = toModelPayload(new BridgeError('NOT_FOUND', fileUrl));
     assert.equal(fileUrlPayload.message, BRIDGE_ERRORS.NOT_FOUND.summary);
-    assert.equal(isSafeForModel(fileUrl), false);
+    for (const localFileUrl of [
+      fileUrl,
+      'file://localhost/home/mj/private.txt',
+      'FILE:/home/mj/private.txt',
+    ]) {
+      assert.equal(isSafeForModel(localFileUrl), false, localFileUrl);
+    }
 
     const fileUrlDetail = toModelPayload(new BridgeError('NOT_FOUND', '工作区内没有这个路径。', {
       path: 'file:///home/mj/private.txt',
