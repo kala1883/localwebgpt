@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 
-import type { ChangeApplyInput, ChangeGetInput, ChangeListInput, ChangePrepareInput, ChangeRevertPrepareInput, FileCreateInput, FileEditInput } from './change.ts';
+import type { ChangeApplyInput, ChangeGetInput, ChangeListInput, ChangePrepareInput, ChangeRevertPrepareInput, FileCreateInput, FileDeleteInput, FileEditInput } from './change.ts';
 import type { GitDiffInput, GitStatusInput } from './git.ts';
 import { LIMITS } from './limits.ts';
 import type { FileListInput } from './list.ts';
@@ -29,6 +29,7 @@ export const TOOL_NAMES = [
   'change_prepare',
   'file_create',
   'file_edit',
+  'file_delete',
   'change_get',
   'change_list',
   'change_apply',
@@ -160,6 +161,10 @@ const changeItem = z.discriminatedUnion('op', [
       .string()
       .describe('整文件替换内容。仅允许用于已完整读取的小文件；截断或脱敏结果不得使用。'),
   }),
+  z.strictObject({
+    op: z.literal('delete_file'),
+    path: relativePath,
+  }),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -256,6 +261,13 @@ const fileEditInput = z.strictObject({
   edits: z.array(lineEdit).min(1).max(LIMITS.MAX_EDITS_PER_FILE).describe('互不重叠的精确行区间补丁。'),
 });
 
+const fileDeleteInput = z.strictObject({
+  workspace_id: workspaceId,
+  idempotency_key: idempotencyKey,
+  summary: proposalSummary,
+  path: relativePath,
+});
+
 const changeGetInput = z.strictObject({
   change_id: z.string().min(1).max(128).optional(),
   operation_id: z.string().min(1).max(128).optional(),
@@ -290,6 +302,7 @@ export const TOOL_INPUT_SCHEMAS = {
   change_prepare: changePrepareInput,
   file_create: fileCreateInput,
   file_edit: fileEditInput,
+  file_delete: fileDeleteInput,
   change_get: changeGetInput,
   change_list: changeListInput,
   change_apply: changeApplyInput,
@@ -318,6 +331,7 @@ interface ToolInputContracts {
   readonly change_prepare: ChangePrepareInput;
   readonly file_create: FileCreateInput;
   readonly file_edit: FileEditInput;
+  readonly file_delete: FileDeleteInput;
   readonly change_get: ChangeGetInput;
   readonly change_list: ChangeListInput;
   readonly change_apply: ChangeApplyInput;
@@ -368,6 +382,7 @@ export const INPUT_CONTRACT_WITNESS: AllInputChecks = {
   change_prepare: true,
   file_create: true,
   file_edit: true,
+  file_delete: true,
   change_get: true,
   change_list: true,
   change_apply: true,
@@ -478,6 +493,16 @@ export const TOOLS: readonly ToolDefinition[] = [
       '基于最新 file_read 的完整读取票据、哈希与精确行区间，直接编辑一个已授权文本文件。' +
       '冲突时不覆盖；修改经受保护执行器完成并返回逐文件回执，无需逐次本机批准。',
     inputSchema: TOOL_INPUT_SCHEMAS.file_edit,
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+  },
+  {
+    name: 'file_delete',
+    title: '删除文件',
+    description:
+      '在获授“文件修改”的工作区中删除一个普通文件。调用只需提供工作区与相对路径；' +
+      'daemon 会在本次调用中读取并保存可恢复快照（单文件上限 16 MiB），再由受保护执行器核对同一文件身份并删除；无需先单独调用 file_read，也无需逐次本机批准。' +
+      '硬拒绝的秘密/凭证路径不可删除。只有返回 state=APPLIED 且该文件回执 state=VERIFIED 才可声称已删除。',
+    inputSchema: TOOL_INPUT_SCHEMAS.file_delete,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
   {

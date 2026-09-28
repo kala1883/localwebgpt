@@ -72,7 +72,7 @@ const props = withDefaults(
     /** 文件在工作区里的规范相对路径。 */
     readonly path: string;
     /** 操作种类，用来解释为什么某一侧没有内容。 */
-    readonly op: 'edit_text' | 'create_text' | 'replace_text';
+    readonly op: 'edit_text' | 'create_text' | 'replace_text' | 'delete_file';
     /** 修改前正文。新建文件为 `null`。 */
     readonly beforeText: string | null;
     /** 修改后正文。 */
@@ -162,7 +162,7 @@ const shown = computed<{ readonly kind: 'text'; readonly text: string } | { read
     return { kind: 'text', text: props.beforeText };
   }
   if (props.afterText === null) {
-    return { kind: 'absent', why: '新文尚未载入。' };
+    return { kind: 'absent', why: props.op === 'delete_file' ? '文件已删除，没有新文。' : '新文尚未载入。' };
   }
   return { kind: 'text', text: props.afterText };
 });

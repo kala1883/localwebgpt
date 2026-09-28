@@ -310,15 +310,16 @@ async function expectProtocolError(
  *    （`workspace_modified` 是字面量 `false`），但会**创建持久化记录** ——
  *    一条修改集、一批快照字节，而且那条记录会出现在操作者的待批准页面上
  *    等人处理。把「不改文件」当成「只读」会让模型认为可以为试探反复提交提案。
- *  - `change_apply`：真的改用户文件。它是这张表里唯一一个「破坏性」的工具
- *    （契约里另外标了 `destructiveHint`）。
+ *  - `change_apply` / `file_delete`：会改写或删除用户文件，均受目录 grant
+ *    限定，且契约标了 `destructiveHint`。
  */
 const NOT_READ_ONLY: Readonly<Partial<Record<ToolName, string>>> = {
   change_prepare: '不改文件，但会建立修改集与快照，并占用操作者的待批准列表',
   file_create: '在已授权目录直接创建新文本文件',
   file_edit: '基于最新读取票据在已授权目录直接编辑文本文件',
-  change_revert_prepare: '不改文件，但会建立一份新的修改集与快照，同样需要本地批准',
-  change_apply: '按本地批准写入用户文件',
+  file_delete: '在已授权目录内由本机快照基线并直接删除普通文件',
+  change_revert_prepare: '不改文件，但会建立一份新的修改集与快照',
+  change_apply: '按工作区文件修改 grant 应用已准备的修改集',
 };
 
 describe('工具清单（tools/list）', () => {
@@ -622,6 +623,7 @@ describe('tools/call 转发（真 daemon 操作表 + 真客户端）', () => {
     const NEEDS_REAL_GUARD: Readonly<Partial<Record<ToolName, string>>> = {
       file_create: '单文件创建会直接写入',
       file_edit: '单文件编辑会直接写入',
+      file_delete: '单文件删除会直接删除文件',
       change_apply: '要真的写进用户文件',
       change_revert_prepare: '入参只能来自一次已应用且已终结的修改集',
     };
@@ -696,7 +698,7 @@ describe('tools/call 转发（真 daemon 操作表 + 真客户端）', () => {
 });
 
 describe('单文件直接写工具的 MCP 输出契约', () => {
-  it('file_create 与 file_edit 都把 APPLIED 逐文件回执通过 MCP outputSchema 返回', async () => {
+  it('file_create / file_edit / file_delete 都把 APPLIED 逐文件回执通过 MCP outputSchema 返回', async () => {
     const receipt = {
       change_id: 'change-direct-write',
       operation_id: 'operation-direct-write',
@@ -745,9 +747,17 @@ describe('单文件直接写工具的 MCP 输出契约', () => {
           edits: [{ start_line: 1, end_line_exclusive: 2, old_lines: ['old'], new_lines: ['new'] }],
         },
       });
+      const deleted = await adapter.client.callTool({
+        name: 'file_delete',
+        arguments: {
+          ...common,
+          idempotency_key: 'adapter-delete-key',
+        },
+      });
       assert.notEqual(created.isError, true, textOf(created));
       assert.notEqual(edited.isError, true, textOf(edited));
-      assert.deepEqual(caller.calls.map((call) => call.operation), ['file_create', 'file_edit']);
+      assert.notEqual(deleted.isError, true, textOf(deleted));
+      assert.deepEqual(caller.calls.map((call) => call.operation), ['file_create', 'file_edit', 'file_delete']);
       assert.equal((created.structuredContent as { data?: { state?: string } }).data?.state, 'APPLIED');
       assert.equal((edited.structuredContent as { data?: { files?: readonly unknown[] } }).data?.files?.length, 1);
     } finally {

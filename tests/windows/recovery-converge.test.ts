@@ -62,7 +62,8 @@ import { BlobStore, resolveStorageRef } from '@lwb/blob-store';
 import { canonicalChangeDigest } from '@lwb/changes';
 import type { ChangeDigestFile } from '@lwb/changes';
 import { CONTRACT_VERSION, isBridgeError, LIMITS } from '@lwb/contracts';
-import { claimForExecution, createNativeApplier } from '@lwb/executor';
+import type { ChangeOp } from '@lwb/contracts';
+import { claimForExecution, createNativeApplier, ITEM_STAGE } from '@lwb/executor';
 import type { ApplyReport, ExecutionPlan } from '@lwb/executor';
 import type { ProcessProbe } from '@lwb/ipc';
 import { closeDatabase, openDatabase, Repositories } from '@lwb/persistence';
@@ -135,6 +136,7 @@ describeWindows('LWB-030 真 NTFS：启动恢复与未知结果协调', () => {
     readonly relative: string;
     readonly before: string;
     readonly after: string;
+    readonly op?: ChangeOp;
   }
 
   interface Rig {
@@ -211,6 +213,7 @@ describeWindows('LWB-030 真 NTFS：启动恢复与未知结果协调', () => {
       const files: ChangeDigestFile[] = [];
 
       for (const spec of specs) {
+        const op = spec.op ?? 'edit_text';
         const beforeBytes = Buffer.from(spec.before, 'utf8');
         const afterBytes = Buffer.from(spec.after, 'utf8');
         // 基线身份取自**真文件**，不是编的。
@@ -226,7 +229,7 @@ describeWindows('LWB-030 真 NTFS：启动恢复与未知结果协调', () => {
         items.push({
           id: `ci_${seed}_${spec.relative}`,
           path: spec.relative,
-          op: 'edit_text',
+          op,
           base_file_id: observed.identity.file_id,
           base_sha256: oldBlob.put.sha256,
           target_sha256: newBlob.put.sha256,
@@ -240,7 +243,7 @@ describeWindows('LWB-030 真 NTFS：启动恢复与未知结果协调', () => {
         });
         files.push({
           path: spec.relative,
-          op: 'edit_text',
+          op,
           before_sha256: oldBlob.put.sha256,
           before_size: oldBlob.put.size,
           after_sha256: newBlob.put.sha256,
@@ -460,6 +463,112 @@ describeWindows('LWB-030 真 NTFS：启动恢复与未知结果协调', () => {
       );
     } finally {
       closeDatabase(opened.db);
+    }
+  });
+
+  it('删除已生效、但删除日志写入前崩溃：重启按“路径不存在”收敛为 APPLIED', async () => {
+    const rig = await buildRig('delete-log-crash', [
+      { relative: 'notes/deleted.txt', before: '基线内容\n', after: '', op: 'delete_file' },
+    ]);
+    const context = openService(rig);
+    const append = context.repos.journal.append;
+    let injected = false;
+    context.repos.journal.append = function patched(input: Parameters<typeof append>[0]): number {
+      if (input.stage === ITEM_STAGE.deleted && !injected) {
+        injected = true;
+        throw new Error('故障注入：删除发生后、删除日志提交前进程退出');
+      }
+      return append.call(context.repos.journal, input);
+    };
+
+    try {
+      await assert.rejects(
+        createNativeApplier({ repos: context.repos, ops: backend, blobs: context.blobs })(
+          rig.plan,
+          new AbortController().signal,
+        ),
+        /删除发生后、删除日志提交前进程退出/,
+      );
+    } finally {
+      closeDatabase(context.opened.db);
+    }
+
+    assert.equal(injected, true, '故障注入必须落在删除后的日志边界');
+    await assert.rejects(readFile(rig.abs('notes/deleted.txt')), { code: 'ENOENT' });
+
+    const restarted = await restartAndSweep(rig);
+    try {
+      assert.equal(restarted.report.reconciled.length, 1);
+      assert.equal(restarted.report.awaiting_manual.length, 0);
+      assert.equal(restarted.report.undecidable.length, 0);
+      assert.equal(restarted.report.reconciled[0]?.reconciliation.kind, 'APPLIED');
+      assert.equal(restarted.repos.operations.requireById(rig.operation_id).state, 'APPLIED');
+      const item = restarted.repos.operations.itemResults(rig.operation_id)[0];
+      assert.equal(item?.state, 'RECOVERED_TARGET');
+      assert.equal(item?.after_sha256, sha256(Buffer.alloc(0)));
+    } finally {
+      closeDatabase(restarted.opened.db);
+    }
+  });
+
+  it('混合态授权恢复：崩溃时已删除的条目由完整快照以 CREATE_NEW 还原', async () => {
+    const rig = await buildRig('delete-repair', [
+      { relative: 'a/deleted.txt', before: '待删除文件的基线\n', after: '', op: 'delete_file' },
+      { relative: 'b/untouched.txt', before: '没有动过\n', after: '新目标\n' },
+    ]);
+    const oldFileId = rig.plan.items.find((entry) => entry.canonical_path === 'a/deleted.txt')?.base_file_id;
+    const context = openService(rig);
+    const append = context.repos.journal.append;
+    let injected = false;
+    context.repos.journal.append = function patched(input: Parameters<typeof append>[0]): number {
+      if (input.stage === ITEM_STAGE.deleted && !injected) {
+        injected = true;
+        throw new Error('故障注入：首条删除后退出，后续写尚未开始');
+      }
+      return append.call(context.repos.journal, input);
+    };
+    try {
+      await assert.rejects(
+        createNativeApplier({ repos: context.repos, ops: backend, blobs: context.blobs })(
+          rig.plan,
+          new AbortController().signal,
+        ),
+        /首条删除后退出/,
+      );
+    } finally {
+      closeDatabase(context.opened.db);
+    }
+
+    assert.equal(injected, true);
+    await assert.rejects(readFile(rig.abs('a/deleted.txt')), { code: 'ENOENT' });
+    assert.equal(await readFile(rig.abs('b/untouched.txt'), 'utf8'), '没有动过\n');
+
+    const restarted = await restartAndSweep(rig);
+    try {
+      assert.equal(restarted.report.awaiting_manual.length, 1);
+      const inspection = await restarted.recovery.inspect(rig.operation_id);
+      assert.equal(inspection?.reconciliation.reason, 'MIXED');
+      assert.equal(inspection?.repair.kind, 'ok');
+      const grant = await restarted.recovery.authorize({
+        operation_id: rig.operation_id,
+        actor: 'console:删除恢复验收',
+      });
+      const result = await restarted.recovery.repair({
+        operation_id: rig.operation_id,
+        authorization_id: grant.authorization_id,
+      });
+      assert.equal(result.repaired, 1);
+      assert.equal(result.failed, null);
+      assert.equal(restarted.repos.operations.requireById(rig.operation_id).state, 'ROLLED_BACK');
+      assert.equal(await readFile(rig.abs('a/deleted.txt'), 'utf8'), '待删除文件的基线\n');
+      assert.equal(await readFile(rig.abs('b/untouched.txt'), 'utf8'), '没有动过\n');
+      assert.notEqual(
+        (await fingerprint(rig.abs('a/deleted.txt'))).file_id,
+        oldFileId,
+        'CREATE_NEW 恢复会生成新文件身份；回读校验按基线哈希确认内容，不能伪称原 ID 未变',
+      );
+    } finally {
+      closeDatabase(restarted.opened.db);
     }
   });
 

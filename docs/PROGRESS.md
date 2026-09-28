@@ -2035,3 +2035,12 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 验证：工作区/secure-store/policy/NTFS 根专项 **178/178 PASS**；Console 工作区页 **28/28 PASS**；根/Console 类型检查、216 文件 FsGuard 导入扫描与 secret scan 通过。
 - 更新后全仓 `npm run check` **PASS**：根测试 **1,777 PASS / 13 SKIP / 0 FAIL**，Console **160/160 PASS**；FsGuard 检查 216 个文件，secret scan 通过。
 - 尚未实现显式 MCP 文件删除（用户此前要求）和真实 ChatGPT 网页验收；本轮没有对真实工作区做删除或写入。产品覆盖从窄目录扩展到显式整卷，正式 runtime 需待删除能力实现后再重建。
+
+## 2026-09-28 本轮继续：目录授权下单次调用直接删除文件
+
+- 新增 `file_delete` 的单次直接执行契约：调用方只给已授权 workspace 与相对路径，不必先调用 `file_read`，也不需要逐次本机批准。Daemon 在同一次调用中读取完整基线并先写入受保护快照；快照上限 16 MiB；之后由 NTFS 护栏按同一对象身份/哈希执行句柄删除，并核验路径消失。
+- 删除适用于文本、二进制及不可解码普通文件；多硬链接、秘密/凭据硬拒绝路径、授权根外路径仍拒绝。二进制删除的 `change_get` 只显示 metadata-only 删除差异，不返回文件正文。执行失败时既有执行器从快照恢复；若恢复路径被新对象占用则不覆盖。
+- Console 变更详情已加入删除类型与文件数统计；中英文 README 和 ADR 同步为单次直接操作与测试步骤。Windows 真 NTFS handler 用例直接删除文本文件和含 NUL 的二进制文件（没有先 `file_read`），验证状态、空文件目标哈希、路径缺失及二进制差异不泄露正文；两条场景均通过。
+- 崩溃恢复也已接通：删除落盘后、删除日志写入前退出，重启会把“路径不存在”核验为目标状态；混合态下经本地恢复授权会用快照 `CREATE_NEW` 还原已删文件并回读核对，恢复对象会有新的 NTFS file id。两个流程均有真 NTFS 故障边界测试。
+- 当前树完整检查：`npm run check` 根测试 **1793 PASS / 0 FAIL / 13 SKIP**，Console **160/160 PASS**；根与 Console 类型检查、FsGuard 扫描（216 个文件）及 secret scan 全通过。
+- 仍未完成：真实 ChatGPT 网页端的工具发现/删除验收、正式 Windows runtime 重构建与供应链独立审查；用户发起的 `change_revert_prepare` 尚不自动还原已删除文件（apply 失败后的自动快照恢复已覆盖）。这些不计为已通过。

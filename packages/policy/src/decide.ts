@@ -101,6 +101,7 @@ export const POLICY_ACTIONS = [
   'audit_export',
   'change_prepare',
   'file_create',
+  'file_delete',
   'change_revert_prepare',
   'change_apply',
 ] as const;
@@ -173,6 +174,8 @@ export const ACTION_SPECS: Readonly<Record<PolicyAction, ActionSpec>> = {
   change_prepare: { capability: 'propose', flag: 'proposal_enabled', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
   // 创建不需要先读一个不存在的目标；daemon 仍会将当前工作区代次绑定进提案。
   file_create: { capability: 'propose', flag: 'proposal_enabled', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: false },
+  // 删除在本次调用内读取并快照基线，不要求额外的 file_read 票据。
+  file_delete: { capability: 'propose', flag: 'proposal_enabled', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: false },
   change_revert_prepare: { capability: 'propose', flag: 'proposal_enabled', surface: 'snapshot_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
   change_apply: { capability: 'propose', flag: 'direct_write_enabled', surface: 'change_receipt', in_propose_chain: true, requires_approval: false, requires_ticket: true },
 };

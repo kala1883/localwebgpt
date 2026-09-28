@@ -79,6 +79,7 @@ const AVAILABILITY: Readonly<Record<ImplementedToolName, AvailabilityRule>> = {
   change_prepare: { kind: 'workspace_flag', flag: 'proposal_enabled' },
   file_create: { kind: 'workspace_flag', flag: 'proposal_enabled' },
   file_edit: { kind: 'workspace_flag', flag: 'proposal_enabled' },
+  file_delete: { kind: 'workspace_flag', flag: 'proposal_enabled' },
   // 它读的是快照库（受保护根之内，不是用户工作区），但仍需要该工作区的
   // read grant；flag 只表示 daemon 支持该操作。
   change_get: { kind: 'workspace_flag', flag: 'read_enabled' },

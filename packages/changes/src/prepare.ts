@@ -58,6 +58,7 @@ import {
   BridgeError,
   CONTRACT_VERSION,
   LIMITS,
+  sha256Hex,
   validateRelativePath,
   type ChangeFilePreview,
   type ChangeItem,
@@ -171,13 +172,16 @@ async function readBaseline(
   scope: ReadScope,
   path: string,
   maxBytes: number,
+  operation: 'edit' | 'delete' = 'edit',
 ): Promise<BaselineRead> {
   const probe = await resolveTarget(ops, scope, path, 'file');
   if (probe.size > maxBytes) {
     throw new BridgeError(
       'SIZE_LIMIT_EXCEEDED',
-      `该文件有 ${probe.size} 字节，超过可编辑上限 ${maxBytes} 字节；本文件不能在原地修改。`,
-      { reason: 'FILE_TOO_LARGE_FOR_EDIT', path, size: probe.size, limit: maxBytes },
+      operation === 'delete'
+        ? `该文件有 ${probe.size} 字节，超过完整快照读取上限 ${maxBytes} 字节；本次没有删除文件。`
+        : `该文件有 ${probe.size} 字节，超过可编辑上限 ${maxBytes} 字节；本文件不能在原地修改。`,
+      { reason: operation === 'delete' ? 'DELETE_SNAPSHOT_TOO_LARGE' : 'FILE_TOO_LARGE_FOR_EDIT', path, size: probe.size, limit: maxBytes },
     );
   }
 
@@ -429,6 +433,40 @@ async function prepareOne(
     await requireCreatable(deps.ops, args.scope, item.path);
     const applied = createTextFile({ item, max_editable_file_bytes: limits.max_editable_file_bytes });
     return preparedFrom(applied, item.path, null, null);
+  }
+
+  if (item.op === 'delete_file') {
+    // Deletion is not text editing: allow binary/read-only content up to the
+    // guarded snapshot read limit and retain the complete bytes for recovery.
+    const read = await readBaseline(deps.ops, args.scope, item.path, LIMITS.MAX_READABLE_FILE_BYTES, 'delete');
+    if (read.identity.link_count > 1) {
+      throw new BridgeError(
+        'LINK_UNSUPPORTED',
+        `该文件有 ${read.identity.link_count} 个硬链接；删除会同时影响授权根外的名称，拒绝删除。`,
+        { reason: 'DELETE_HARDLINKED_FILE', path: item.path, link_count: read.identity.link_count },
+      );
+    }
+
+    // The empty snapshot is a diff tombstone. The delete op itself, not this
+    // placeholder content, tells the executor that the expected final state is
+    // an absent directory entry. The original bytes are retained for recovery.
+    const empty = Buffer.alloc(0);
+    const inspection = inspectBytes(read.bytes);
+    return {
+      path: read.canonical_path,
+      op: 'delete_file',
+      base_volume_id: read.identity.volume_id,
+      base_file_id: read.identity.file_id,
+      base_sha256: read.sha256,
+      target_sha256: sha256Hex(empty),
+      old_bytes: read.bytes,
+      new_bytes: empty,
+      encoding: inspection.kind === 'text' ? inspection.encoding : 'unknown',
+      newline: inspection.kind === 'text' ? inspection.newline : 'none',
+      bom: inspection.kind === 'text' ? inspection.bom : false,
+      added_lines: 0,
+      removed_lines: inspection.kind === 'text' ? inspection.lines.total_lines : 0,
+    };
   }
 
   const read = await readBaseline(deps.ops, args.scope, item.path, limits.max_editable_file_bytes);
@@ -691,6 +729,9 @@ function fingerprintItems(items: readonly ChangeItem[]): readonly RequestItem[] 
     }
     if (item.op === 'replace_text') {
       return { op: 'replace_text', path: item.path, base_sha256: item.base_sha256, content: item.content };
+    }
+    if (item.op === 'delete_file') {
+      return { op: 'delete_file', path: item.path };
     }
     return {
       op: 'edit_text',

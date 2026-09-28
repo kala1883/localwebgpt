@@ -39,6 +39,7 @@ export interface ChangeTotals {
   /** 净行数变化，可为负。正数是净增。 */
   readonly net_lines: number;
   readonly created_files: number;
+  readonly deleted_files: number;
   readonly replaced_files: number;
   readonly edited_files: number;
   /** 修改前/后的总字节。新建文件的修改前字节记为 0（与契约一致）。 */
@@ -113,6 +114,7 @@ function totalsOf(files: readonly ChangeFilePreview[]): ChangeTotals {
   let added = 0;
   let removed = 0;
   let created = 0;
+  let deleted = 0;
   let replaced = 0;
   let edited = 0;
   let beforeBytes = 0;
@@ -124,6 +126,7 @@ function totalsOf(files: readonly ChangeFilePreview[]): ChangeTotals {
     beforeBytes += file.before_size;
     afterBytes += file.after_size;
     if (file.op === 'create_text') created += 1;
+    else if (file.op === 'delete_file') deleted += 1;
     else if (file.op === 'replace_text') replaced += 1;
     else edited += 1;
   }
@@ -134,6 +137,7 @@ function totalsOf(files: readonly ChangeFilePreview[]): ChangeTotals {
     removed_lines: removed,
     net_lines: added - removed,
     created_files: created,
+    deleted_files: deleted,
     replaced_files: replaced,
     edited_files: edited,
     before_bytes: beforeBytes,

@@ -52,6 +52,7 @@ import type { ChangeItemInput, ChangeItemRecord, OpenDatabaseResult } from '@lwb
 import type {
   WinfsCapability,
   WinfsCreateResult,
+  WinfsDeleteResult,
   WinfsError,
   WinfsListResult,
   WinfsOps,
@@ -441,6 +442,11 @@ interface CreateRequest extends WinfsPathRef {
   readonly content_base64: string;
 }
 
+interface DeleteRequest extends WinfsPathRef {
+  readonly expected_sha256: string;
+  readonly expected_file_id: string;
+}
+
 interface FakeOpsOptions {
   readonly objects: readonly DiskObject[];
   /** 探针/读取按路径注入的失败。 */
@@ -453,6 +459,8 @@ interface FakeOpsOptions {
   readonly beforeWrite?: (req: WriteRequest, disk: MutableObject[]) => void;
   /** 创建回执的字段。默认给一份**诚实**的回执。 */
   readonly createReceipt?: (req: CreateRequest) => Partial<WinfsCreateResult>;
+  /** 删除回执的可控偏差；默认模拟核验成功并从假磁盘移除目录项。 */
+  readonly deleteReceipt?: (req: DeleteRequest) => Partial<WinfsDeleteResult>;
   /**
    * 注入的失败（`writeErrors` / `receipt` / `createReceipt`）只作用于每个
    * 路径的**第一次**写入。默认：每一次。
@@ -496,7 +504,7 @@ interface FakeOpsOptions {
 
 interface FakeOps {
   readonly ops: WinfsOps;
-  readonly calls: readonly ('resolvePath' | 'readFileGuarded' | 'writeFileGuarded' | 'createFileGuarded')[];
+  readonly calls: readonly ('resolvePath' | 'readFileGuarded' | 'writeFileGuarded' | 'createFileGuarded' | 'deleteFileGuarded')[];
   /**
    * 发出去的**写入请求**，含那些当场失败、一个字节都没写的。
    *
@@ -514,6 +522,7 @@ interface FakeOps {
    * —— 那正是「创建不会退化成一次覆盖写」这句话的可失败形式。
    */
   readonly creates: readonly CreateRequest[];
+  readonly deletes: readonly DeleteRequest[];
   /**
    * 假磁盘**此刻**的样子。
    *
@@ -525,9 +534,10 @@ interface FakeOps {
 }
 
 function makeFakeOps(options: FakeOpsOptions): FakeOps {
-  const calls: ('resolvePath' | 'readFileGuarded' | 'writeFileGuarded' | 'createFileGuarded')[] = [];
+  const calls: ('resolvePath' | 'readFileGuarded' | 'writeFileGuarded' | 'createFileGuarded' | 'deleteFileGuarded')[] = [];
   const attempts: WriteRequest[] = [];
   const creates: CreateRequest[] = [];
+  const deletes: DeleteRequest[] = [];
   // 一份**可变的**副本：`applyWrites` 与「带现场观测的失败」都要在上面留下痕迹。
   // 复制而不是直接用 `options.objects`，是为了让调用方手上那一份保持原样 ——
   // 有几条用例正是拿它去断言「盘上那个字节原封不动」。
@@ -600,7 +610,52 @@ function makeFakeOps(options: FakeOpsOptions): FakeOps {
         flushed: true,
         bytes_written: payload.length,
       };
+      if (options.applyWrites === true) {
+        const current = find(req.relative_path);
+        if (current === undefined) {
+          disk.push({
+            canonical: req.relative_path,
+            openable_as: [req.relative_path],
+            file_id: `created-${req.relative_path}`,
+            probe_file_id: `created-${req.relative_path}`,
+            sha256: target,
+            is_directory: false,
+          });
+        } else {
+          current.file_id = `created-${req.relative_path}`;
+          current.probe_file_id = current.file_id;
+          current.sha256 = target;
+        }
+      }
       const override = faultyCreate ? options.createReceipt?.(req) : undefined;
+      return Promise.resolve(override === undefined ? honest : { ...honest, ...override });
+    },
+
+    deleteFileGuarded: (req) => {
+      calls.push('deleteFileGuarded');
+      deletes.push(req);
+      const object = find(req.relative_path);
+      if (object === undefined || object.sha256 === null) return Promise.resolve(missing(req.relative_path));
+      if (object.sha256 !== req.expected_sha256 || object.file_id !== req.expected_file_id) {
+        return Promise.resolve({
+          ok: false,
+          code: 'FILE_VERSION_CONFLICT',
+          message: '夹具：删除前身份或哈希不匹配',
+          win32_error: 0,
+        } satisfies WinfsError);
+      }
+      const before = object.sha256;
+      const honest: WinfsDeleteResult = {
+        ok: true,
+        relative_path: req.relative_path,
+        canonical_relative_path: object.canonical,
+        identity_before: { volume_id: VOLUME, file_id: object.file_id, link_count: 1 },
+        before_sha256: before,
+        bytes_deleted: 1,
+        readback_missing: options.applyWrites === true,
+      };
+      if (options.applyWrites === true) object.sha256 = null;
+      const override = options.deleteReceipt?.(req);
       return Promise.resolve(override === undefined ? honest : { ...honest, ...override });
     },
 
@@ -722,7 +777,7 @@ function makeFakeOps(options: FakeOpsOptions): FakeOps {
     },
   };
 
-  return { ops, calls, attempts, creates, disk };
+  return { ops, calls, attempts, creates, deletes, disk };
 }
 
 const applierFor = (fake: FakeOps) => createNativeApplier({ repos, ops: fake.ops, blobs });
@@ -1451,6 +1506,49 @@ describe('LWB-028 E 组：创建走 CREATE_NEW，绝不退化成一次覆盖写'
     // 报告说的是**磁盘上那个拼写**，不是条目里记的那个。
     assert.match(report.detail, /磁盘上的 src\/new\.ts 已经被占用/);
     assert.equal(fake.creates.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LWB-045：文件删除的真实执行器路径
+// ---------------------------------------------------------------------------
+
+describe('LWB-045 文件删除：按对象身份删除并核验缺失', () => {
+  it('成功删除后写入 deleted 终态，汇总为 applied', async () => {
+    const { plan, built } = await claimed('delete-success', [
+      { path: 'src/remove.txt', op: 'delete_file', base: '保留在快照中的原文', after: '' },
+    ]);
+    const item = itemOf(built, 'src/remove.txt');
+    const fake = makeFakeOps({ objects: built.objects, applyWrites: true });
+
+    const report = await applierFor(fake)(plan, new AbortController().signal);
+
+    assert.equal(report.kind, 'applied');
+    assert.match(appliedDetail(report), /已删除并核验 1/);
+    assert.equal(diskSha(fake, 'src/remove.txt'), null);
+    assert.equal(fake.deletes.length, 1);
+    assert.equal(fake.deletes[0]!.expected_file_id, item.base_file_id);
+    assert.equal(fake.deletes[0]!.expected_sha256, item.base_sha256);
+    const outcome = itemOutcomes(readItemEvents(repos, built.operation_id)).get(item.id);
+    assert.equal(outcome?.kind, 'deleted');
+    assert.equal(outcome?.last_error_code, null);
+  });
+
+  it('缺少删除后缺失回读时从快照恢复，不报应用成功', async () => {
+    const { plan, built } = await claimed('delete-no-readback', [
+      { path: 'src/remove.txt', op: 'delete_file', base: '原文', after: '' },
+    ]);
+    const fake = makeFakeOps({
+      objects: built.objects,
+      applyWrites: true,
+      deleteReceipt: () => ({ readback_missing: false }),
+    });
+
+    const report = await applierFor(fake)(plan, new AbortController().signal);
+
+    assert.equal(report.kind, 'rolled_back');
+    assert.equal(fake.deletes.length, 1);
+    assert.equal(diskSha(fake, 'src/remove.txt'), itemOf(built, 'src/remove.txt').base_sha256);
   });
 });
 

@@ -56,6 +56,7 @@ import type {
   GitStatusData,
   ImplementedToolName,
   FileCreateInput,
+  FileDeleteInput,
   FileEditInput,
   TextSearchData,
   ToolName,
@@ -370,6 +371,7 @@ export const TOOL_POLICY_ACTIONS = {
   change_prepare: 'change_prepare',
   file_create: 'file_create',
   file_edit: 'change_prepare',
+  file_delete: 'file_delete',
   // 读的是**快照库与状态库**，不是用户工作区。`snapshot_read` 这个面
   // 因此与 `file_read` 分开：它的出站义务是 `block` 而不是 `redact`
   // —— 一份差异被局部脱敏之后行号会对不上，而那正是差异的全部意义。
@@ -653,7 +655,7 @@ function presentedOf(
 ): { readonly generation: number; readonly tickets: readonly ReadTicketPayload[] } | null {
   const tickets: ReadTicketPayload[] = [];
   for (const item of items) {
-    if (item.op === 'create_text') continue;
+    if (item.op === 'create_text' || item.op === 'delete_file') continue;
     tickets.push(authority.verifyReadTicket(item.read_token, { now }));
   }
 
@@ -671,11 +673,12 @@ function presentedOf(
 }
 
 /**
- * 纯 `create_text` 提案所依据的代次。
+ * 不需要读取票据的提案（`create_text` / `delete_file`）所依据的代次。
  *
  * ## 这是一处**真实的弱化**，记在 `docs/PROGRESS.md` 的偏差里
  *
- * `create_text` 不读任何文件，因此结构上不可能有读取票据；而
+ * `create_text` 不读任何文件，`delete_file` 的基线由 daemon 在本次准备阶段读取并快照，
+ * 因此二者结构上都不需要客户端读取票据；而
  * `ACTION_SPECS.change_prepare.requires_ticket` 为 true，代次为 `null` 时
  * 判定直接拒绝 —— 于是「在已存在的父目录里创建新文件」这条 V1 明列的
  * 能力会整条不可用。
@@ -691,7 +694,7 @@ function presentedOf(
  * 两种情形（不存在 / 未授权）的回答逐字不变。行不存在时给 `-1`：
  * 那个值在判定里必然与当前代次不等，因此是**失败关闭**，不是放行。
  */
-function createOnlyGeneration(workspaceId: string, deps: ToolHandlerDeps): number {
+function unticketedGeneration(workspaceId: string, deps: ToolHandlerDeps): number {
   return deps.repos.workspaces.findById(workspaceId)?.generation ?? -1;
 }
 
@@ -815,6 +818,32 @@ async function fileEdit(
   });
 }
 
+async function fileDelete(
+  input: unknown,
+  context: RequestContext,
+  deps: ToolHandlerDeps,
+): Promise<Envelope<ChangeApplyData>> {
+  return await asEnvelope(context, async () => {
+    const parsed = parseInput('file_delete', input) as FileDeleteInput;
+    const prepared = await prepareChangeRequest(
+      {
+        workspace_id: parsed.workspace_id,
+        idempotency_key: parsed.idempotency_key,
+        summary: parsed.summary,
+        items: [{ op: 'delete_file', path: parsed.path }],
+      },
+      TOOL_POLICY_ACTIONS.file_delete,
+      context,
+      deps,
+    );
+    return await applyChangeRequest(
+      { change_id: prepared.change_id, idempotency_key: parsed.idempotency_key },
+      context,
+      deps,
+    );
+  });
+}
+
 async function prepareChangeRequest(
   parsed: ChangePrepareInput,
   action: PolicyAction,
@@ -841,7 +870,7 @@ async function prepareChangeRequest(
       // 判定当场把 `decision.rules` 交出来，而下面逐路径判硬拒绝用的
       // 就是它；`prepareChange` 落库的也是当下的 `policy_version`。
       presented: {
-        generation: presented?.generation ?? createOnlyGeneration(parsed.workspace_id, deps),
+        generation: presented?.generation ?? unticketedGeneration(parsed.workspace_id, deps),
         policy_version: null,
       },
     },
@@ -1119,7 +1148,7 @@ async function changeRevertPrepare(
         // 没有单一目标路径，给根是这件事的诚实说法。
         path: '',
         presented: {
-          generation: createOnlyGeneration(owned.workspace_id, deps),
+          generation: unticketedGeneration(owned.workspace_id, deps),
           policy_version: null,
         },
       },
@@ -1175,6 +1204,7 @@ export const TOOL_HANDLERS = {
   change_prepare: changePrepare,
   file_create: fileCreate,
   file_edit: fileEdit,
+  file_delete: fileDelete,
   change_get: changeGet,
   change_list: changeList,
   change_apply: changeApply,

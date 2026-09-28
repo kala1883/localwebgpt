@@ -208,7 +208,12 @@ export interface RequestReplaceTextItem {
   readonly content: string;
 }
 
-export type RequestItem = RequestEditTextItem | RequestCreateTextItem | RequestReplaceTextItem;
+export interface RequestDeleteFileItem {
+  readonly op: 'delete_file';
+  readonly path: string;
+}
+
+export type RequestItem = RequestEditTextItem | RequestCreateTextItem | RequestReplaceTextItem | RequestDeleteFileItem;
 
 export interface ChangeRequestFingerprintInput {
   readonly tool: string;
@@ -264,6 +269,7 @@ export function changeRequestFingerprint(input: ChangeRequestFingerprintInput): 
       continue;
     }
 
+    if (item.op === 'delete_file') continue;
     lines.push(`base_sha256 ${field(item.base_sha256)}`);
     if (item.op === 'replace_text') {
       lines.push(`content ${field(item.content)}`);

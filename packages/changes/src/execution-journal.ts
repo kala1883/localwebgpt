@@ -39,6 +39,8 @@ export const EXECUTION_JOURNAL_STAGES = {
   untouched: 'item_untouched',
   /** 护栏报告字节已写出（回执里 `bytes_written`）。 */
   written: 'item_written',
+  /** 删除回执已核对原身份/哈希，并确认路径已消失。 */
+  deleted: 'item_deleted',
   /** 同一次回执报告已刷盘（`flushed=true`）。 */
   flushed: 'item_flushed',
   /** 同一次回执报告回读与目标逐字节相同（`readback_ok` 且哈希相等）。 */

@@ -11,7 +11,7 @@
 
 import type { FileEncoding, NewlineStyle, WritableNewlineStyle } from './version.ts';
 
-export type ChangeOp = 'edit_text' | 'create_text' | 'replace_text';
+export type ChangeOp = 'edit_text' | 'create_text' | 'replace_text' | 'delete_file';
 
 export type ChangeSetState =
   | 'PENDING_APPROVAL'
@@ -137,7 +137,12 @@ export interface ReplaceTextItem {
   readonly content: string;
 }
 
-export type ChangeItem = EditTextItem | CreateTextItem | ReplaceTextItem;
+export interface DeleteFileItem {
+  readonly op: 'delete_file';
+  readonly path: string;
+}
+
+export type ChangeItem = EditTextItem | CreateTextItem | ReplaceTextItem | DeleteFileItem;
 
 export interface ChangePrepareInput {
   readonly workspace_id: string;
@@ -170,6 +175,14 @@ export interface FileEditInput {
   readonly edits: readonly LineEdit[];
 }
 
+/** 单文件专用 MCP 删除入口；基线在本机同一次调用中读取并快照。 */
+export interface FileDeleteInput {
+  readonly workspace_id: string;
+  readonly idempotency_key: string;
+  readonly summary: string;
+  readonly path: string;
+}
+
 // ---------------------------------------------------------------------------
 // 修改集视图
 // ---------------------------------------------------------------------------
@@ -179,7 +192,7 @@ export interface ChangeFilePreview {
   readonly op: ChangeOp;
   /** 修改前整个文件原始字节哈希；create_text 为 null。 */
   readonly before_sha256: string | null;
-  /** 修改后整个文件原始字节哈希。 */
+  /** 修改后目标字节的原始哈希；delete_file 使用空快照哈希作为 diff tombstone。 */
   readonly after_sha256: string;
   readonly before_size: number;
   readonly after_size: number;

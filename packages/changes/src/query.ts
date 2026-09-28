@@ -395,7 +395,7 @@ function fileStateOf(raw: string | undefined, operationState: ChangeSetState): C
  * 读成「什么都没发生」，会让一条待恢复的操作在回执里显示成写成功了 ——
  * 方向必须是 fail-closed。
  */
-function journalVerdictOf(last: ExecutionJournalRow): {
+function journalVerdictOf(last: ExecutionJournalRow, itemTargetSha256: string | null): {
   readonly state: ChangeFileState;
   readonly error_code: string | null;
 } {
@@ -410,6 +410,13 @@ function journalVerdictOf(last: ExecutionJournalRow): {
       if (last.target_sha256 === null || last.target_sha256 !== observed) return incomplete();
       return { state: 'VERIFIED', error_code: null };
     }
+    case STAGE.deleted:
+      return last.observed_file_id === null &&
+        last.target_sha256 !== null &&
+        last.target_sha256 === itemTargetSha256 &&
+        last.observed_sha256 === itemTargetSha256
+        ? { state: 'VERIFIED', error_code: null }
+        : incomplete();
     case STAGE.restored:
       return last.observed_sha256 === null ? incomplete() : { state: 'RECOVERED_ORIGINAL', error_code: null };
     case STAGE.untouched:
@@ -478,7 +485,7 @@ function fileResultOf(
     };
   }
   if (last !== null) {
-    const verdict = journalVerdictOf(last);
+    const verdict = journalVerdictOf(last, item.target_sha256);
     return {
       state: verdict.state,
       before_sha256: item.base_sha256,
@@ -641,8 +648,8 @@ function requireText(inspection: ByteInspection): DecodedText {
  * 空文件。两者的区别在回滚与冲突判定里是实质性的，因此不接受把
  * `/dev/null` 写成 `a/<path>` 的「看起来更整齐」的版本。
  */
-function renderUnified(path: string, hasOld: boolean, hunks: readonly { readonly lines: readonly string[]; readonly old_start: number; readonly old_lines: number; readonly new_start: number; readonly new_lines: number }[]): string {
-  const head = [`--- ${hasOld ? `a/${path}` : '/dev/null'}`, `+++ b/${path}`];
+function renderUnified(path: string, hasOld: boolean, hasNew: boolean, hunks: readonly { readonly lines: readonly string[]; readonly old_start: number; readonly old_lines: number; readonly new_start: number; readonly new_lines: number }[]): string {
+  const head = [`--- ${hasOld ? `a/${path}` : '/dev/null'}`, `+++ ${hasNew ? `b/${path}` : '/dev/null'}`];
   const body: string[] = [];
   for (const hunk of hunks) {
     body.push(`@@ -${hunk.old_start},${hunk.old_lines} +${hunk.new_start},${hunk.new_lines} @@`);
@@ -708,16 +715,30 @@ export async function changeDiffPageOf(args: {
 
   const oldBytes = item.old_blob_id === null ? null : await blobBytes(item.old_blob_id, args.deps);
   const newBytes = await blobBytes(item.new_blob_id, args.deps);
-  const oldText = oldBytes === null ? null : requireText(inspectBytes(oldBytes));
-  const newText = requireText(inspectBytes(newBytes));
-
-  const result = diffLines(oldText === null ? '' : comparableText(oldText), comparableText(newText), {
-    max_output_bytes: args.limits.max_diff_output_bytes,
-    context_lines: args.limits.diff_context_lines,
-    max_dp_cells: args.limits.max_dp_cells,
-  });
-
-  const unified = renderUnified(item.canonical_path, oldBytes !== null, result.hunks);
+  const oldInspection = oldBytes === null ? null : inspectBytes(oldBytes);
+  const newInspection = inspectBytes(newBytes);
+  let unified: string;
+  let truncated = false;
+  if (item.op === 'delete_file' && oldInspection === null) {
+    throw new BridgeError('INTERNAL_ERROR', '删除修改集缺少基线快照；已拒绝生成差异。', {
+      reason: 'DELETE_BASELINE_MISSING',
+    });
+  }
+  if (item.op === 'delete_file' && oldInspection !== null && oldInspection.kind !== 'text') {
+    // Deletion supports arbitrary bytes. Show only standard metadata for binary or
+    // undecodable files; never place their contents in a model-visible diff.
+    unified = `diff --git a/${item.canonical_path} b/${item.canonical_path}\ndeleted file mode 100644\nBinary files a/${item.canonical_path} and /dev/null differ`;
+  } else {
+    const oldText = oldInspection === null ? null : requireText(oldInspection);
+    const newText = requireText(newInspection);
+    const result = diffLines(oldText === null ? '' : comparableText(oldText), comparableText(newText), {
+      max_output_bytes: args.limits.max_diff_output_bytes,
+      context_lines: args.limits.diff_context_lines,
+      max_dp_cells: args.limits.max_dp_cells,
+    });
+    unified = renderUnified(item.canonical_path, oldBytes !== null, item.op !== 'delete_file', result.hunks);
+    truncated = result.truncated;
+  }
 
   // 内容出站的**唯一**入口。闸门会重判路径、重筛秘密、扣出站预算，
   // 并且因为本面是 `block`，命中高置信度凭证会让整份差异被拒。
@@ -739,7 +760,7 @@ export async function changeDiffPageOf(args: {
   return {
     path: item.canonical_path,
     unified: emission.content,
-    truncated: result.truncated,
+    truncated,
     // V1 单页：一份差异按字节上限整体裁剪，装不下的 hunk 整条丢弃
     // （`truncated` 置真）。既然永远没有下一页，就永远不发出游标 ——
     // 发一个换不来更多内容的游标，只会让调用方去循环。

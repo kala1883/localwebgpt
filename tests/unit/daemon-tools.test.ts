@@ -316,6 +316,9 @@ const ARGUMENTED_TOOLS: readonly (readonly [string, Record<string, unknown>])[] 
     base_sha256: 'a'.repeat(64), read_token: 'ticket',
     edits: [{ start_line: 1, end_line_exclusive: 2, old_lines: ['old'], new_lines: ['new'] }],
   }],
+  ['file_delete', {
+    workspace_id: 'ws-any', idempotency_key: 'idem-test-delete', summary: 'delete', path: 'a.txt',
+  }],
 ];
 
 describe('入参契约（验收 2：未知字段 / 无效枚举）', () => {
@@ -388,7 +391,7 @@ describe('入参契约（验收 2：未知字段 / 无效枚举）', () => {
     // 它会在运行时**每次都**被拒，而那看起来像是「功能没做好」，
     // 不像是一条策略约束。
     //
-    // file_create 使用无读取票据的创建策略；file_edit 与 change_prepare 共用票据策略。
+    // file_create / file_delete 不依赖先前的读取；file_edit 与 change_prepare 共用票据策略。
     const ticketed = Object.entries(TOOL_POLICY_ACTIONS)
       .filter(([, action]) => action !== null && ACTION_SPECS[action].requires_ticket)
       .map(([tool]) => tool)

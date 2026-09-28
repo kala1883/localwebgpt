@@ -92,13 +92,13 @@ Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
    | 读取文件内容 | `file_read` 及相关快照/错误详情 |
    | 搜索文本 | `text_search` |
    | 读取 Git 状态与差异 | `git_status`、`git_diff`、`git_log` |
-   | 创建/编辑文件 | 单文件 `file_create` / `file_edit` 直接写入；多文件先 `change_prepare` 再 `change_apply` |
+   | 创建/编辑/删除文件 | `file_create` / `file_edit` / `file_delete` 单次调用直接执行；删除由服务在本次调用内快照基线，无须先 `file_read`；多文件先 `change_prepare` 再 `change_apply` |
 
-每一项授权都只对该根生效；空选保存会撤销该根全部 ChatGPT 工具授权。实际调用还要求 ChatGPT 连接和工作区启用。读取、Git、文件修改分别由本页的目录授权控制；平台验收状态只作说明，不再作为隐藏的全局功能开关。授予“文件修改”即授权 ChatGPT 在该目录创建/编辑文本文件并直接应用，不会逐次等待批准。路径硬拒绝、冲突检查、快照、审计和受保护执行器仍然生效；不提供任意 Shell、目录外访问、自动 Git 提交/推送或删除文件。
+每一项授权都只对该根生效；空选保存会撤销该根全部 ChatGPT 工具授权。实际调用还要求 ChatGPT 连接和工作区启用。读取、Git、文件修改分别由本页的目录授权控制；平台验收状态只作说明，不再作为隐藏的全局功能开关。授予“文件修改”即授权 ChatGPT 在该目录创建/编辑文本文件或删除普通文件并直接应用，不会逐次等待人工批准。删除会在本机内部先读取并保存完整快照，单文件上限 16 MiB。路径范围、对象身份与版本冲突检查、秘密路径拒绝、审计和受保护执行器仍然生效；不提供任意 Shell、目录外访问或自动 Git 提交/推送。
 
 ## 6. 建议验收顺序与常见故障
 
-先确认 Tunnel 进程在线，再依次调用 `bridge_status` → `workspace_list` → 对测试根执行 `file_list` / `file_read` / `text_search`。在本地控制台对**专用临时 Git 目录**授予“文件修改”后，用 `file_create` / `file_edit` 做单文件测试并独立回读；多文件修改用 `change_prepare` 再 `change_apply`。不要用真实个人目录做首次写入测试。
+先确认 Tunnel 进程在线，再依次调用 `bridge_status` → `workspace_list` → 对测试根执行 `file_list` / `file_read` / `text_search`。在本地控制台对**专用临时 Git 目录**授予“文件修改”后，测试 `file_create` / `file_edit` 并独立回读；删除测试直接调用 `file_delete` 并确认目标消失。多文件修改用 `change_prepare` 再 `change_apply`。不要用真实个人目录做首次写入/删除测试。
 
 - 创建 App 报 424 / 无法获取工具列表：检查本机控制台的 ChatGPT 连接是否已启用、启动脚本是否仍在运行、`tunnel-client` 是否健康。
 - Tunnel 下拉框为空：核对 Platform 组织/ChatGPT 工作区关联及创建者的 `Tunnels Read + Use`。

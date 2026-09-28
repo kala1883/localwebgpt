@@ -891,7 +891,83 @@ export const MIGRATIONS: readonly Migration[] = [
          paused_at  TEXT,
          updated_at TEXT NOT NULL,
          CHECK ((paused = 1) = (paused_at IS NOT NULL))
+      )`,
+    ],
+  },
+  {
+    version: 9,
+    name: 'change_items_support_delete_file',
+    requires_foreign_keys_off: true,
+    /**
+     * `delete_file` 是一个新的、与改写不同的执行效果。SQLite 不能改
+     * `change_items.op` 的 CHECK 约束，因此按既有 v2 工作区迁移的方式重建表。
+     * 旧行逐列复制、逐条目触发器与索引全部重建；修改集、操作、逐条日志和
+     * blob 引用仍保留原主键/外键。
+     *
+     * 删除项仍保存基线快照与空 diff tombstone；`op` 才是「最终目录项不存在」
+     * 的权威事实。`unknown` 编码只供不可解码文件的删除快照记账，不允许它
+     * 进入 edit/replace 执行形态。
+     */
+    statements: [
+      `DROP TRIGGER change_items_create_has_no_base`,
+      `DROP TRIGGER change_items_edit_requires_base`,
+      `DROP TRIGGER change_items_immutable`,
+      `DROP INDEX change_items_seq_uq`,
+      `DROP INDEX change_items_path_uq`,
+      `CREATE TABLE change_items_v9 (
+         id                 TEXT PRIMARY KEY,
+         change_id          TEXT NOT NULL REFERENCES changesets(id) ON DELETE RESTRICT,
+         seq                INTEGER NOT NULL CHECK (seq >= 0),
+         op                 TEXT NOT NULL CHECK (op IN ('edit_text','create_text','replace_text','delete_file')),
+         canonical_path     TEXT NOT NULL,
+         canonical_path_key TEXT NOT NULL,
+         base_file_id       TEXT,
+         base_sha256        TEXT,
+         target_sha256      TEXT NOT NULL CHECK (length(target_sha256) = 64),
+         old_blob_id        TEXT REFERENCES blobs(id) ON DELETE RESTRICT,
+         new_blob_id        TEXT NOT NULL REFERENCES blobs(id) ON DELETE RESTRICT,
+         encoding           TEXT NOT NULL CHECK (encoding IN ('utf-8','utf-8-bom','unknown')),
+         bom                INTEGER NOT NULL DEFAULT 0 CHECK (bom IN (0,1)),
+         newline            TEXT NOT NULL CHECK (newline IN ('lf','crlf','mixed','none')),
+         added_lines        INTEGER NOT NULL DEFAULT 0 CHECK (added_lines >= 0),
+         removed_lines      INTEGER NOT NULL DEFAULT 0 CHECK (removed_lines >= 0),
+         created_at         TEXT NOT NULL
        )`,
+      `INSERT INTO change_items_v9
+         (id, change_id, seq, op, canonical_path, canonical_path_key,
+          base_file_id, base_sha256, target_sha256, old_blob_id, new_blob_id,
+          encoding, bom, newline, added_lines, removed_lines, created_at)
+       SELECT id, change_id, seq, op, canonical_path, canonical_path_key,
+              base_file_id, base_sha256, target_sha256, old_blob_id, new_blob_id,
+              encoding, bom, newline, added_lines, removed_lines, created_at
+         FROM change_items`,
+      `DROP TABLE change_items`,
+      `ALTER TABLE change_items_v9 RENAME TO change_items`,
+      `CREATE UNIQUE INDEX change_items_seq_uq ON change_items(change_id, seq)`,
+      `CREATE UNIQUE INDEX change_items_path_uq ON change_items(change_id, canonical_path_key)`,
+      `CREATE TRIGGER change_items_create_has_no_base
+         BEFORE INSERT ON change_items
+         WHEN NEW.op = 'create_text' AND (NEW.base_file_id IS NOT NULL OR NEW.base_sha256 IS NOT NULL)
+         BEGIN
+           SELECT RAISE(ABORT, 'create_text 不得携带基线身份或基线哈希');
+         END`,
+      `CREATE TRIGGER change_items_edit_requires_base
+         BEFORE INSERT ON change_items
+         WHEN NEW.op <> 'create_text' AND (NEW.base_file_id IS NULL OR NEW.base_sha256 IS NULL)
+         BEGIN
+           SELECT RAISE(ABORT, '除 create_text 外的条目必须携带基线身份与基线哈希');
+         END`,
+      `CREATE TRIGGER change_items_unknown_encoding_delete_only
+         BEFORE INSERT ON change_items
+         WHEN NEW.encoding = 'unknown' AND NEW.op <> 'delete_file'
+         BEGIN
+           SELECT RAISE(ABORT, 'unknown 编码只允许用于删除项的快照元数据');
+         END`,
+      `CREATE TRIGGER change_items_immutable
+         BEFORE UPDATE ON change_items
+         BEGIN
+           SELECT RAISE(ABORT, '修改集条目不可变');
+         END`,
     ],
   },
 ];

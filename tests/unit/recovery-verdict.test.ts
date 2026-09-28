@@ -43,6 +43,7 @@ import type { ChangeItemRecord } from '@lwb/persistence';
 const BASE = 'a'.repeat(64);
 const TARGET = 'b'.repeat(64);
 const THIRD = 'c'.repeat(64);
+const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 const BASE_ID = 'fid_base';
 const OTHER_ID = 'fid_other';
@@ -79,6 +80,17 @@ function createItem(overrides: Partial<ChangeItemRecord> = {}): ChangeItemRecord
     base_file_id: null,
     base_sha256: null,
     old_blob_id: null,
+    ...overrides,
+  });
+}
+
+function deleteItem(overrides: Partial<ChangeItemRecord> = {}): ChangeItemRecord {
+  return editItem({
+    id: 'ci_d',
+    op: 'delete_file',
+    canonical_path: 'assets/payload.bin',
+    canonical_path_key: 'assets/payload.bin',
+    target_sha256: EMPTY_SHA256,
     ...overrides,
   });
 }
@@ -345,9 +357,9 @@ describe('LWB-030 C. 创建 —— 名字空着是一格、归属不明是另一
     assert.equal(judge(createItem(), observation, journalWith('fid_new')).kind, 'THIRD_CONTENT');
   });
 
-  it('C7 创建条目的判定里不含任何「删除」这个出路', () => {
-    // 本工程不删文件。一个内容不是目标的新文件名，出路是人工，
-    // 而不是「把它删掉重来」—— 后者在本工程里没有实现，也不该被暗示。
+  it('C7 新建归属不明时不把独立删除工具当作自动恢复方案', () => {
+    // file_delete 是一项单独、明确调用的能力；不能因为内容相同就把
+    // 「这是本次创建的文件」当成事实并由启动恢复顺手删除。
     const observation: Observation = {
       kind: 'present',
       file_id: 'fid_x',
@@ -366,18 +378,56 @@ describe('LWB-030 C. 创建 —— 名字空着是一格、归属不明是另一
 });
 
 // ---------------------------------------------------------------------------
-// D. 纯函数性质
+// D. 删除：目录项不存在就是目标状态
 // ---------------------------------------------------------------------------
 
-describe('LWB-030 D. 判定是纯的', () => {
-  it('D1 同一个输入判两次，结果**逐字段**相同', () => {
+describe('LWB-030 D. 删除 —— 崩溃恢复把路径缺失识别为目标状态', () => {
+  it('D1 目标路径不存在 ⇒ TARGET_REACHED，且不编造对象身份/哈希', () => {
+    const verdict = judge(deleteItem(), ABSENT);
+    assert.equal(verdict.kind, 'TARGET_REACHED');
+    if (verdict.kind !== 'TARGET_REACHED') return;
+    assert.equal(verdict.observed_file_id, null);
+    assert.equal(verdict.observed_sha256, null);
+    assert.equal(verdict.observed_path, null);
+  });
+
+  it('D2 句柄观测明确返回 OBJECT_MISSING ⇒ TARGET_REACHED，而不是恢复失败', () => {
+    const verdict = judge(deleteItem(), {
+      kind: 'unavailable',
+      reason: 'OBJECT_MISSING',
+      detail: '护栏确认授权根下的目标路径不存在。',
+    });
+    assert.equal(verdict.kind, 'TARGET_REACHED');
+  });
+
+  it('D3 删除未发生且原身份/内容仍在 ⇒ ORIGINAL', () => {
+    assert.equal(judge(deleteItem(), PRESENT_BASE).kind, 'ORIGINAL');
+  });
+
+  it('D4 删除后按快照重建且字节等于原基线 ⇒ ORIGINAL，无需再写', () => {
+    const verdict = judge(deleteItem(), { ...PRESENT_BASE, file_id: OTHER_ID });
+    assert.equal(verdict.kind, 'ORIGINAL');
+    assert.match(verdict.detail, /文件身份已重建/);
+  });
+
+  it('D5 同一对象已有不同内容 ⇒ THIRD_CONTENT，不作自动删除/覆盖', () => {
+    assert.equal(judge(deleteItem(), PRESENT_THIRD).kind, 'THIRD_CONTENT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E. 纯函数性质
+// ---------------------------------------------------------------------------
+
+describe('LWB-030 E. 判定是纯的', () => {
+  it('E1 同一个输入判两次，结果**逐字段**相同', () => {
     const item = editItem();
     const first = judge(item, PRESENT_TARGET);
     const second = judge(item, PRESENT_TARGET);
     assert.deepEqual(first, second);
   });
 
-  it('D2 判定不改写传进来的观测与条目', () => {
+  it('E2 判定不改写传进来的观测与条目', () => {
     const item = editItem();
     const observation: Observation = { ...PRESENT_TARGET };
     const before = structuredClone(observation);
@@ -386,7 +436,7 @@ describe('LWB-030 D. 判定是纯的', () => {
     assert.equal(item.canonical_path, 'src/app.ts');
   });
 
-  it('D3 `observationOf` 把失败回执翻成 `unavailable`，原因原样保留', () => {
+  it('E3 `observationOf` 把失败回执翻成 `unavailable`，原因原样保留', () => {
     const observation = observationOf({
       ok: false,
       reason: 'GUARD_UNAVAILABLE',
@@ -396,7 +446,7 @@ describe('LWB-030 D. 判定是纯的', () => {
     assert.equal(observation.kind === 'unavailable' && observation.detail, '护栏没起来。');
   });
 
-  it('D4 成功的回执被翻成 `present`，五个字段一个不少', () => {
+  it('E4 成功的回执被翻成 `present`，五个字段一个不少', () => {
     const observation = observationOf({
       ok: true,
       file_id: BASE_ID,

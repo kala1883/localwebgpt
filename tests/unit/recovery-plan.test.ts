@@ -35,6 +35,7 @@ import type { ChangeItemRecord } from '@lwb/persistence';
 const BASE = 'a'.repeat(64);
 const TARGET = 'b'.repeat(64);
 const THIRD = 'c'.repeat(64);
+const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 function item(seq: number, overrides: Partial<ChangeItemRecord> = {}): ChangeItemRecord {
   return {
@@ -344,6 +345,25 @@ describe('LWB-030 G. 收场 —— 三条拒绝理由各自都要能被触发', 
     assert.equal(result.action, 'ROLLBACK_TO_BASELINE');
     // 与 `apply.ts` 的回滚同序：正向是 seq 升序，收回来就反过来。
     assert.deepEqual(result.targets.map((entry) => entry.item.seq), [3, 1]);
+  });
+
+  it('G6b 崩溃后已删除的目标可在本地授权下用快照 CREATE_NEW 收回', () => {
+    const removed = plan(1, {
+      kind: 'TARGET_REACHED',
+      observed_file_id: null,
+      observed_sha256: null,
+      observed_path: null,
+      detail: '目标路径不存在。',
+    }, {
+      op: 'delete_file',
+      canonical_path: 'src/removed.txt',
+      target_sha256: EMPTY_SHA256,
+    });
+    const result = repairOf([removed]);
+    assert.equal(result.kind, 'ok');
+    if (result.kind !== 'ok') return;
+    assert.equal(result.targets[0]?.item.op, 'delete_file');
+    assert.equal(result.targets[0]?.item.canonical_path, 'src/removed.txt');
   });
 
   it('G7 已经在基线上的条目**不**进收场目标（没有东西要写回去）', () => {

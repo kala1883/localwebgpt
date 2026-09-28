@@ -757,9 +757,13 @@ export class RecoveryService {
         // 存的那个：护栏的 `Assert-HandleMatches` 要求请求拼写与句柄的
         // 最终路径一致，而条目里的拼写是准备修改集时的。中间某级目录
         // 被改过大小写之后两者会分叉，用旧拼写写下去会被护栏拒绝。
-        relative_path: verdict.observed_path,
-        expected_file_id: verdict.observed_file_id,
-        expected_sha256: verdict.observed_sha256,
+        relative_path: verdict.observed_path ?? target.item.canonical_path,
+        expected_file_id: verdict.kind === 'TARGET_REACHED' && target.item.op === 'delete_file'
+          ? target.item.base_file_id!
+          : verdict.observed_file_id!,
+        expected_sha256: verdict.kind === 'TARGET_REACHED' && target.item.op === 'delete_file'
+          ? target.item.base_sha256!
+          : verdict.observed_sha256!,
         bytes: bytes.bytes,
       });
 
@@ -780,7 +784,8 @@ export class RecoveryService {
       // 独立回读：回到基线这件事不能靠写入方自己的回执来确认。
       const after = await this.#observe(inspection.scope, target.item);
       const back =
-        after.ok && after.sha256 === target.item.base_sha256 && after.file_id === target.item.base_file_id;
+        after.ok && after.sha256 === target.item.base_sha256 &&
+        (target.item.op === 'delete_file' || after.file_id === target.item.base_file_id);
       if (!back) {
         failure = `${target.item.canonical_path}：写回之后独立回读没有证实它回到了基线。`;
         this.#journalRepairFailure(inspection, target.item, failure);
@@ -792,7 +797,7 @@ export class RecoveryService {
         operation_id: inspection.operation.id,
         item_id: target.item.id,
         state: 'RECOVERED_ORIGINAL',
-        before_sha256: verdict.observed_sha256,
+        before_sha256: target.item.op === 'delete_file' ? target.item.target_sha256 : verdict.observed_sha256,
         after_sha256: after.sha256,
         error_code: null,
       });
@@ -1005,7 +1010,11 @@ export class RecoveryService {
         item_id: item.id,
         state: receiptStateOf(verdict),
         before_sha256: item.base_sha256,
-        after_sha256: verdict.kind === 'IDENTITY_UNKNOWN' ? null : verdict.observed_sha256,
+        after_sha256: verdict.kind === 'IDENTITY_UNKNOWN'
+          ? null
+          : verdict.kind === 'TARGET_REACHED' && item.op === 'delete_file'
+            ? item.target_sha256
+            : verdict.observed_sha256,
         // 判不出的那两种都要留下**为什么**：一个没有错误码的 `UNKNOWN`
         // 让操作者只知道「有一条不对」，而记录存在的意义正是说清是哪一条、
         // 哪里不对。`THIRD_CONTENT` 没有单独的 reason 字段（种类即原因），

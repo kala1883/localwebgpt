@@ -60,6 +60,8 @@ export const ITEM_STAGE = {
   untouched: 'item_untouched',
   /** 护栏报告字节已写出（回执里 `bytes_written`）。 */
   written: 'item_written',
+  /** 删除回执已通过身份、内容哈希与缺失回读核验。 */
+  deleted: 'item_deleted',
   /** 同一次回执报告已刷盘（`flushed=true`）。 */
   flushed: 'item_flushed',
   /** 同一次回执报告回读与目标逐字节相同（`readback_ok` 且哈希相等）。 */
@@ -194,7 +196,7 @@ export function readItemEvents(repos: Repositories, operationId: string): ItemEv
  * | `left_changed` | 失败/恢复失败/放弃恢复 | **可能或确实有** |
  * | `unknown` | 日志不足以判断（例如只记下意图就没有下文） | 按「有」处理 |
  */
-export type ItemOutcomeKind = 'written' | 'restored' | 'skipped' | 'untouched' | 'left_changed' | 'unknown';
+export type ItemOutcomeKind = 'written' | 'deleted' | 'restored' | 'skipped' | 'untouched' | 'left_changed' | 'unknown';
 
 export interface ItemOutcome {
   readonly item_id: string;
@@ -247,6 +249,8 @@ function kindOfLastEvent(stage: ItemStage): ItemOutcomeKind {
   switch (stage) {
     case ITEM_STAGE.verified:
       return 'written';
+    case ITEM_STAGE.deleted:
+      return 'deleted';
     case ITEM_STAGE.restored:
       return 'restored';
     case ITEM_STAGE.skipped:
@@ -274,7 +278,7 @@ function kindOfLastEvent(stage: ItemStage): ItemOutcomeKind {
  *
  * | 取值 | 判据 | 交给协调器的报告 |
  * | --- | --- | --- |
- * | `applied` | 每个条目都是 `written` 或 `skipped`，且至少一个 `written` | `applied` |
+ * | `applied` | 每个条目都是 `written` / `deleted` / `skipped`，且至少一个有实际操作 | `applied` |
  * | `rolled_back` | 每个条目都 `restored` / `skipped` / `untouched`，且至少一个不是 `skipped` | `rolled_back` |
  * | `no_change` | 每个条目都是 `skipped` | `no_change` |
  * | `unfinished` | 其余**全部**情形 | 抛（⇒ `RECOVERY_REQUIRED`） |
@@ -315,7 +319,7 @@ export function aggregateOf(outcomes: ReadonlyMap<string, ItemOutcome>, expected
   // 「盘上可能有本次执行的字节」，与三种好结局互斥。列在每条里而不是
   // 提前 return，是为了让「哪一种终局允许哪几种条目终局」一眼可见。
   if (every(['skipped'])) return 'no_change';
-  if (every(['written', 'skipped']) && any('written')) return 'applied';
+  if (every(['written', 'deleted', 'skipped']) && (any('written') || any('deleted'))) return 'applied';
   // `any('restored') || any('untouched')` 这一项排掉「全部 skipped」——
   // 那一格是 `no_change`，上面已经接走了；而一次**什么都没写、也什么都
   // 没回滚**的执行不该报成 rolled_back。
@@ -343,6 +347,7 @@ export function describeOutcomes(
 ): string {
   const label: Readonly<Record<ItemOutcomeKind, string>> = {
     written: '已写入并核验',
+    deleted: '已删除并核验',
     restored: '已回到基线',
     skipped: '无需改动',
     untouched: '未改动',

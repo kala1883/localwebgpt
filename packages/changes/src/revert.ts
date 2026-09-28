@@ -1063,7 +1063,7 @@ async function planCreatedItem(
     instruction:
       `${item.canonical_path} 的内容仍等于本次创建时回读到的哈希（${created}）。` +
       '但新建没有基线身份可锚，本服务因此**不声称**它一定由本次修改创建 —— 方案 §8.3：不能猜测所有同名内容都属于插件。' +
-      'V1 不支持自动删除文件：请你在本地确认这个文件确实由本次修改创建之后，自行删除它。' +
+      '本撤销接口不会自动删除新建文件：请先核对现场；如确需删除，可另行调用受目录 grant 控制的 file_delete。' +
       '本服务不会替你删除，也不会先删后问。',
   });
 
@@ -1355,7 +1355,7 @@ function revertSummaryOf(source: ChangeSetRecord, fileCount: number): string {
 function localReasonOf(plan: RevertPlan): string {
   const count = plan.local_actions.length;
   return (
-    `本次撤销有 ${count} 个文件需要你在本地处理（V1 不支持自动删除文件）；` +
-    '逐条说明与路径见 local_actions。本服务不会替你删除，也不会先删后问。'
+    `本次撤销有 ${count} 个文件需要本地处理（这些是新建文件，撤销接口不会自动删除）；` +
+    '逐条说明与路径见 local_actions。核实后可另行调用 file_delete。'
   );
 }

@@ -27,11 +27,9 @@
  *    注意前置条件取的是「我们留下的那一份」，**不是「现在盘上是什么」**：
  *    后者要靠一次新的读取才知道，而那样读到的可能正是别人刚写进去的内容 ——
  *    拿它当条件，回滚反而会理直气壮地覆盖掉那个人的改动。
- * 2. **创建出来的对象不删。** 护栏没有删除操作，本模块也不去造一个：
- *    删除是这条路上唯一不可逆的动作，而一个多余的文件是可逆的。
- *    于是「必须有东西被撤销、而它恰好是个新建的文件」这一格只能是
- *    待恢复（`RECOVERY_REQUIRED`）—— §8.3 说的「不谎称所有文件一直未变」
- *    正是它。
+ * 2. **批次失败时不自动删除本次新建对象。** 即使它看起来来自本次调用，
+ *    自动删除也会把一次写失败扩大成另一项不可逆操作；失败时留下明确恢复记录，
+ *    由操作者核对后可另行调用 `file_delete`。
  * 3. **不把部分完成当全成功。** 报告里那句 aggregate 由逐条目日志折叠而来，
  *    而不是「没有异常就算成功」。一个条目只要没走到「核验过」，总账里就
  *    一定有它的一条记录，而折叠函数只认三种好结局。
@@ -290,7 +288,7 @@ async function applyApprovedChange(
 // ---------------------------------------------------------------------------
 
 /**
- * 一个条目的完整写入序列：意图 → 写入 → 三条结果日志。
+ * 一个条目的完整变更序列：意图 → 写入/删除 → 经核对的结果日志。
  *
  * 返回 `null` 表示写成功；返回 `ItemFailure` 表示失败。**不抛** ——
  * 抛会把「接下来该回滚什么」这个决定从调用点拿走，而那是本模块存在的理由。
@@ -314,11 +312,32 @@ async function writeOne(
   journal(deps.repos, scope, plan, trace, {
     stage: ITEM_STAGE.intent,
     target_sha256: item.target_sha256,
-    detail: '准备写入这个条目。',
+      detail: '准备写入这个条目。',
   });
 
   const outcome = await writer.write(scope, trace.vetted);
   if (!outcome.ok) return { trace, item, outcome, complaint: null };
+
+  if (outcome.mode === 'delete_file') {
+    const receipt = outcome.result;
+    const complaint = complaintOf(item, outcome);
+    if (complaint !== null) return { trace, item, outcome, complaint };
+    deps.repos.transaction(() => {
+      journal(deps.repos, scope, plan, trace, {
+        stage: ITEM_STAGE.deleted,
+        observed_file_id: null,
+        observed_sha256: item.target_sha256,
+        target_sha256: item.target_sha256,
+        detail: '受保护护栏核对原对象身份与内容后删除；独立回读确认原路径不存在。',
+      });
+    });
+    // Retain the original identity/hash as the restore precondition basis.
+    trace.written = { file_id: receipt.identity_before.file_id, sha256: receipt.before_sha256 };
+    return null;
+  }
+  if (outcome.mode === 'restore_deleted_file') {
+    return { trace, item, outcome, complaint: '前向执行收到意外的 delete-restore 回执。' };
+  }
 
   const complaint = complaintOf(item, outcome);
   if (complaint !== null) return { trace, item, outcome, complaint };
@@ -387,6 +406,23 @@ async function classifyFailure(
 
   // --- 回执不满意：护栏说写成功了，但那次写入不是我们要的 -------------------
   if (complaint !== null && outcome.ok) {
+    if (outcome.mode === 'delete_file') {
+      journal(deps.repos, scope, plan, failure.trace, {
+        stage: ITEM_STAGE.failed,
+        observed_file_id: outcome.result.identity_before.file_id,
+        observed_sha256: outcome.result.before_sha256,
+        target_sha256: item.target_sha256,
+        error_code: 'DELETE_RECEIPT_REJECTED',
+        detail: complaint,
+      });
+      const restored = await attemptRestore(deps, writer, scope, plan, failure.trace, {
+        file_id: outcome.result.identity_before.file_id,
+        sha256: outcome.result.before_sha256,
+      });
+      return restored
+        ? `条目「${path}」删除回执不完整；已从快照恢复基线内容并回读核对。`
+        : `条目「${path}」删除回执不完整；恢复未能确认，必须查看本地恢复页。`;
+    }
     // 两种回执都有的那两项先取出来：创建的回执没有 `identity_before`，
     // 因此下面用到它的地方必须在 `isCreate` 那一支返回**之后**。
     const after = outcome.result.identity_after;
@@ -401,15 +437,15 @@ async function classifyFailure(
     });
 
     if (isCreate) {
-      // 对象已经建出来了，而护栏没有删除操作，本模块也不去造一个。
+      // 对象已经建出来；本次自动回滚不扩大为一次额外删除。
       journal(deps.repos, scope, plan, failure.trace, {
         stage: ITEM_STAGE.restore_skipped,
         observed_file_id: after.file_id,
         observed_sha256: afterSha256,
         error_code: 'CREATED_OBJECT_NOT_REMOVED',
-        detail: '这个对象是本次执行创建出来的，而收回它需要删除文件；本工程不删除用户文件。',
+        detail: '这个对象是本次执行创建出来的；自动回滚不删除新建对象，以免把异常恢复扩展成另一次删除。',
       });
-      return `条目「${path}」写入失败：${complaint}该文件是本次执行创建出来的，无法自动收回（不删除用户文件），需要人工确认。`;
+      return `条目「${path}」写入失败：${complaint}该文件是本次执行创建出来的；自动回滚未删除它，需要本地检查后再决定是否调用 file_delete。`;
     }
 
     // 到这里 `outcome.mode` 一定是 `edit_text`（上面那一支带走了创建），
@@ -458,7 +494,7 @@ async function classifyFailure(
       error_code: facts.winfs_code,
       detail: `${guardLine}。${guardVerdictClause(facts)}，本次执行在这个文件上没有留下字节。`,
     });
-    return `条目「${path}」写入失败：${guardLine}。${await corroborate(deps, writer, scope, item, isCreate)}本次执行在这个文件上没有留下字节。`;
+    return `条目「${path}」写入失败：${guardLine}。${await corroborate(deps, writer, scope, item, isCreate, item.op === 'delete_file')}本次执行在这个文件上没有留下字节。`;
   }
 
   journal(deps.repos, scope, plan, failure.trace, {
@@ -474,6 +510,16 @@ async function classifyFailure(
        的那一格上印了一句断言。 */
     detail: `${guardLine}。${guardVerdictClause(facts)}。`,
   });
+
+  if (item.op === 'delete_file') {
+    const restored = await attemptRestore(deps, writer, scope, plan, failure.trace, {
+      file_id: item.base_file_id!,
+      sha256: item.base_sha256!,
+    });
+    return restored
+      ? `条目「${path}」删除调用结果不确定；已核验或从快照恢复到删除前内容。`
+      : `条目「${path}」删除调用结果不确定；路径/快照状态需在本地恢复页处理。`;
+  }
 
   // 从这里往下都是「动过」，区别只在收不收得回来。
   const blocked = restoreBlocker(failure, facts);
@@ -537,7 +583,7 @@ function restoreBlocker(
   if (failure.trace.vetted.mode === 'create_text') {
     return {
       code: 'CREATED_OBJECT_NOT_REMOVED',
-      detail: '这个对象是本次执行创建出来的，而收回它需要删除文件；本工程不删除用户文件',
+      detail: '这个对象是本次执行创建出来的；自动回滚不删除新建对象，以免扩大恢复写入范围。',
     };
   }
   if (failure.trace.baseline === null) {
@@ -576,6 +622,10 @@ async function attemptRestore(
     return false;
   }
 
+  if (item.op === 'delete_file') {
+    return await attemptRestoreDeletedFile(deps, writer, scope, plan, trace, baseline, relative_path);
+  }
+
   const outcome = await writer.restore(scope, {
     item,
     relative_path,
@@ -594,6 +644,15 @@ async function attemptRestore(
       // 同样在源头脱敏：这几条目前只进条目级日志（那里也会脱敏），
       // 但它们离「被拼进一句会抛出去的话」只有一次改动的距离。
       detail: `回滚被护栏拒绝（${outcome.error.code}，Win32 ${outcome.error.win32_error}）：${redactRoot(outcome.error.message, scope)}`,
+    });
+    return false;
+  }
+
+  if (outcome.mode !== 'edit_text') {
+    journal(deps.repos, scope, plan, trace, {
+      stage: ITEM_STAGE.restore_failed,
+      error_code: 'UNEXPECTED_RESTORE_MODE',
+      detail: `改写回滚收到意外的护栏回执类型（${outcome.mode}）；未将其报告为已恢复。`,
     });
     return false;
   }
@@ -655,6 +714,108 @@ async function attemptRestore(
 }
 
 /**
+ * A delete rollback is not an overwrite: first prove the name is absent, then
+ * restore the snapshotted bytes with CREATE_NEW so a later user file is never
+ * replaced. A recreated file has a new NTFS file ID; byte hash plus the exact
+ * create receipt is therefore the recovery proof.
+ */
+async function attemptRestoreDeletedFile(
+  deps: NativeApplierDeps,
+  writer: NativeWriter,
+  scope: ReadScope,
+  plan: ExecutionPlan,
+  trace: ItemTrace,
+  baseline: Buffer,
+  relativePath: string,
+): Promise<boolean> {
+  const item = trace.vetted.item;
+  const current = await writer.readState(scope, item);
+  if (current.ok) {
+    if (current.file_id === item.base_file_id && current.sha256 === item.base_sha256) {
+      journal(deps.repos, scope, plan, trace, {
+        stage: ITEM_STAGE.restored,
+        observed_file_id: current.file_id,
+        observed_sha256: current.sha256,
+        target_sha256: item.base_sha256,
+        detail: '独立回读确认原文件仍是删除前的对象与字节；未覆盖或重建。',
+      });
+      trace.written = null;
+      return true;
+    }
+    journal(deps.repos, scope, plan, trace, {
+      stage: ITEM_STAGE.restore_skipped,
+      observed_file_id: current.file_id,
+      observed_sha256: current.sha256,
+      error_code: 'DELETE_RESTORE_TARGET_REPLACED',
+      detail: '原路径现由另一个对象占用；为避免覆盖后来的文件，未自动恢复。',
+    });
+    return false;
+  }
+  if (current.error.code !== 'NOT_FOUND') {
+    journal(deps.repos, scope, plan, trace, {
+      stage: ITEM_STAGE.restore_skipped,
+      error_code: current.error.code,
+      detail: `恢复前无法确认删除目标是否仍为空（${current.error.code}）；未尝试创建。`,
+    });
+    return false;
+  }
+
+  const outcome = await writer.restore(scope, {
+    item,
+    relative_path: relativePath,
+    expected_file_id: item.base_file_id!,
+    expected_sha256: item.base_sha256!,
+    bytes: baseline,
+  });
+  if (!outcome.ok) {
+    journal(deps.repos, scope, plan, trace, {
+      stage: ITEM_STAGE.restore_failed,
+      error_code: outcome.error.code,
+      detail: `通过 CREATE_NEW 恢复删除文件失败（${outcome.error.code}）：${redactRoot(outcome.error.message, scope)}`,
+    });
+    return false;
+  }
+  const complaint = restoreComplaint(
+    item,
+    { sha256: item.base_sha256!, file_id: item.base_file_id!, bytes: baseline.length },
+    outcome,
+  );
+  if (complaint !== null || outcome.mode !== 'restore_deleted_file') {
+    journal(deps.repos, scope, plan, trace, {
+      stage: ITEM_STAGE.restore_failed,
+      error_code: 'DELETE_RESTORE_RECEIPT_REJECTED',
+      detail: complaint ?? '恢复路径没有返回 CREATE_NEW 的核验回执。',
+    });
+    return false;
+  }
+
+  const restoredId = outcome.result.identity_after.file_id;
+  const after = await writer.readState(scope, item);
+  if (!after.ok || after.file_id !== restoredId || after.sha256 !== item.base_sha256) {
+    journal(deps.repos, scope, plan, trace, {
+      stage: ITEM_STAGE.restore_failed,
+      observed_file_id: after.ok ? after.file_id : null,
+      observed_sha256: after.ok ? after.sha256 : null,
+      error_code: after.ok ? 'DELETE_RESTORE_READBACK_MISMATCH' : after.error.code,
+      detail: after.ok
+        ? '删除回滚后的独立回读与 CREATE_NEW 回执/基线哈希不一致。'
+        : `删除回滚后无法独立回读（${after.error.code}）。`,
+    });
+    return false;
+  }
+
+  journal(deps.repos, scope, plan, trace, {
+    stage: ITEM_STAGE.restored,
+    observed_file_id: after.file_id,
+    observed_sha256: after.sha256,
+    target_sha256: item.base_sha256,
+    detail: '删除回滚以 CREATE_NEW 从快照重建文件；回读确认新对象字节与删除前基线一致。',
+  });
+  trace.written = null;
+  return true;
+}
+
+/**
  * 倒序收回本次执行写成功的那些条目。
  *
  * **倒序**：计划里的次序是按加锁次序排的（`claim.ts`），倒着来就是先解
@@ -687,7 +848,7 @@ async function unwind(
         error_code: trace.vetted.mode === 'create_text' ? 'CREATED_OBJECT_NOT_REMOVED' : 'NO_BASELINE_BYTES',
         detail:
           trace.vetted.mode === 'create_text'
-            ? '这个对象是本次执行创建出来的，而收回它需要删除文件；本工程不删除用户文件。'
+            ? '这个对象是本次执行创建出来的；自动回滚未删除它，需要本地检查后再决定是否调用 file_delete。'
             : '手上没有这个条目的基线字节，无法把内容写回去。',
       });
       continue;
@@ -769,6 +930,7 @@ async function corroborate(
   scope: ReadScope,
   item: ChangeItemRecord,
   isCreate: boolean,
+  isDelete: boolean,
 ): Promise<string> {
   const state = await writer.readState(scope, item);
 
@@ -778,6 +940,17 @@ async function corroborate(
       return `独立回读发现该路径下已经有一个对象（身份 ${state.file_id}）；它不是本次执行创建的，请人工确认。`;
     }
     return `独立回读没有完成（${state.error.code}），只有护栏的报告作依据。`;
+  }
+
+  if (isDelete) {
+    if (!state.ok && state.error.code === 'NOT_FOUND') {
+      return '独立回读发现路径当前不存在；护栏报告本次调用未进入删除区域，因此不把缺失归因于本操作。';
+    }
+    if (!state.ok) return `独立回读没有完成（${state.error.code}），只有护栏的报告作依据。`;
+    if (state.file_id === item.base_file_id && state.sha256 === item.base_sha256) {
+      return '独立回读证实原文件仍是读取时的对象与字节。';
+    }
+    return `独立回读发现路径上是另一个对象/版本（${state.file_id}/${state.sha256}），不归因于本次删除。`;
   }
 
   if (!state.ok) return `独立回读没有完成（${state.error.code}），只有护栏的报告作依据。`;

@@ -186,6 +186,7 @@ describe('A 组 · 摘要与事实的分区（验收标准 1）', () => {
       removed_lines: 11,
       net_lines: 2,
       created_files: 1,
+      deleted_files: 0,
       replaced_files: 1,
       edited_files: 1,
       before_bytes: 110,

@@ -75,6 +75,7 @@ import { operationReceiptFor, isExecutionChangeState } from '@lwb/changes';
 import { BridgeError, TOOLS_BY_NAME } from '@lwb/contracts';
 import type {
   ChangeApplyData,
+  ChangeGetData,
   ChangePrepareData,
   Envelope,
   FileReadData,
@@ -389,6 +390,53 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     assert.equal(created.state, 'APPLIED');
     assert.equal((await readFile(absOf(harness, 'new-note.txt'), 'utf8')), 'created\n');
     assert.equal(created.files[0]?.after_sha256, sha256(await readFile(absOf(harness, 'new-note.txt'))));
+
+    const deleted = dataOf<ChangeApplyData>(
+      await callTool(harness, 'file_delete', {
+        workspace_id: harness.workspace.id,
+        idempotency_key: idem('single-delete'),
+        summary: '一次调用直接删除',
+        path: 'new-note.txt',
+      }, harness.adapterContext()),
+      'file_delete 直接删除',
+    );
+    assert.equal(deleted.state, 'APPLIED');
+    assert.equal(deleted.files[0]?.after_sha256, sha256(Buffer.alloc(0)));
+    await assert.rejects(readFile(absOf(harness, 'new-note.txt')), { code: 'ENOENT' });
+    const receipt = dataOf<ChangeGetData>(
+      await callTool(harness, 'change_get', {
+        change_id: deleted.change_id,
+        path: 'new-note.txt',
+      }, harness.adapterContext()),
+      '删除后的 change_get 差异回读',
+    );
+    assert.match(receipt.diff?.unified ?? '', /^--- a\/new-note\.txt/m);
+    assert.match(receipt.diff?.unified ?? '', /^\+\+\+ \/dev\/null/m);
+
+    const binaryPath = absOf(harness, 'opaque.bin');
+    const binaryBytes = Buffer.from('DELETE_DIFF_MUST_NOT_LEAK\u0000binary-payload', 'utf8');
+    await writeFile(binaryPath, binaryBytes);
+    const binaryDeleted = dataOf<ChangeApplyData>(
+      await callTool(harness, 'file_delete', {
+        workspace_id: harness.workspace.id,
+        idempotency_key: idem('single-delete-binary'),
+        summary: '一次调用直接删除二进制文件',
+        path: 'opaque.bin',
+      }, harness.adapterContext()),
+      'file_delete 直接删除二进制文件',
+    );
+    assert.equal(binaryDeleted.state, 'APPLIED');
+    assert.equal(binaryDeleted.files[0]?.after_sha256, sha256(Buffer.alloc(0)));
+    await assert.rejects(readFile(binaryPath), { code: 'ENOENT' });
+    const binaryReceipt = dataOf<ChangeGetData>(
+      await callTool(harness, 'change_get', {
+        change_id: binaryDeleted.change_id,
+        path: 'opaque.bin',
+      }, harness.adapterContext()),
+      '二进制删除后的 metadata-only change_get 差异',
+    );
+    assert.match(binaryReceipt.diff?.unified ?? '', /Binary files a\/opaque\.bin and \/dev\/null differ/);
+    assert.equal(binaryReceipt.diff?.unified.includes('DELETE_DIFF_MUST_NOT_LEAK'), false);
   });
 
   it('§1 单次 change_apply 会基于目录 grant 写入并留下 grant 来源记录', async () => {

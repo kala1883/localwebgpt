@@ -7,7 +7,7 @@
  * | 判定 | §8.4 的说法 | 它凭什么成立 |
  * | --- | --- | --- |
  * | `ORIGINAL` | 当前身份/内容符合原状态 | 内容等于基线，**且对象还是被批准的那个**（改写）／名字还空着（创建） |
- * | `TARGET_REACHED` | 当前符合目标状态 | 内容等于目标，**且对象身份对得上** |
+ * | `TARGET_REACHED` | 当前符合目标状态 | 改写/创建的目标字节核验通过；删除目标是路径不存在 |
  * | `THIRD_CONTENT` | 当前是第三种内容 | 是一个读得到的、既非基线也非目标的内容 |
  * | `IDENTITY_UNKNOWN` | 身份变化、日志缺失或新建归属不明 | 上面三条都不成立 —— **不猜** |
  *
@@ -117,9 +117,10 @@ export type ItemVerdict =
     }
   | {
       readonly kind: 'TARGET_REACHED';
-      readonly observed_file_id: string;
-      readonly observed_sha256: string;
-      readonly observed_path: string;
+      /** 删除目标是路径不存在；因此这三个观察值都为 null。 */
+      readonly observed_file_id: string | null;
+      readonly observed_sha256: string | null;
+      readonly observed_path: string | null;
       readonly detail: string;
     }
   | {
@@ -178,6 +179,16 @@ export const NO_JOURNAL_EVIDENCE: JournalEvidence = {
  * | 在 | `≠ base_file_id` | 等于目标或基线 | `IDENTITY_UNKNOWN(REPLACED_OBJECT)` |
  * | 在 | 任意 | 其余 | `THIRD_CONTENT` |
  *
+ * 判定表（`delete_file`）：
+ *
+ * | 观测 | 判据 | 判定 |
+ * | --- | --- | --- |
+ * | 不在 | — | `TARGET_REACHED`（删除目标即目录项不存在） |
+ * | 读不到 | — | `IDENTITY_UNKNOWN` |
+ * | 在 | 身份与内容都等于基线 | `ORIGINAL`（删除未发生） |
+ * | 在 | 基线哈希相同但身份变化 | `IDENTITY_UNKNOWN(REPLACED_OBJECT)` |
+ * | 在 | 其余内容 | `THIRD_CONTENT` |
+ *
  * 判定表（`create_text`）：
  *
  * | 观测 | 判据 | 判定 |
@@ -201,6 +212,7 @@ export function classifyItem(input: {
   const path = item.canonical_path;
 
   if (item.op === 'create_text') return classifyCreated(path, item, observation, journal);
+  if (item.op === 'delete_file') return classifyDeleted(path, item, observation);
 
   // 以下都是改写（`edit_text` / `replace_text`）。基线与基线身份都必须有 ——
   // 没有的话这不是一条可以被判定的记录，而记录的不完整本身就是要报的事。
@@ -266,6 +278,56 @@ export function classifyItem(input: {
     detail:
       `${path} 的当前内容既不是基线（${item.base_sha256}）也不是目标（${item.target_sha256}）；` +
       '它是一个第三种内容，本流程不覆盖它。',
+  };
+}
+
+function classifyDeleted(path: string, item: ChangeItemRecord, observation: Observation): ItemVerdict {
+  if (item.base_file_id === null || item.base_sha256 === null) {
+    return {
+      kind: 'IDENTITY_UNKNOWN',
+      reason: 'READ_FAILED',
+      detail: `${path} 是一条删除项，却没有原对象身份或基线哈希；无法判定并保留现场。`,
+    };
+  }
+  if (observation.kind === 'unavailable') {
+    if (observation.reason === 'OBJECT_MISSING') {
+      return {
+        kind: 'TARGET_REACHED',
+        observed_file_id: null,
+        observed_sha256: null,
+        observed_path: null,
+        detail: `核验到删除目标状态：${path} 在授权根下不存在。`,
+      };
+    }
+    return { kind: 'IDENTITY_UNKNOWN', reason: observation.reason, detail: observation.detail };
+  }
+  if (observation.kind === 'absent') {
+    return {
+      kind: 'TARGET_REACHED',
+      observed_file_id: null,
+      observed_sha256: null,
+      observed_path: null,
+      detail: `核验到删除目标状态：${path} 不存在。`,
+    };
+  }
+
+  if (observation.sha256 === item.base_sha256) {
+    return {
+      kind: 'ORIGINAL',
+      observed_file_id: observation.file_id,
+      observed_sha256: observation.sha256,
+      observed_path: observation.canonical_path,
+      detail: observation.file_id === item.base_file_id
+        ? `核验到原状态：${path} 仍是删除前的对象与内容。`
+        : `核验到原状态：${path} 当前内容与删除前完整基线相同；文件身份已重建，但恢复无需再写。`,
+    };
+  }
+  return {
+    kind: 'THIRD_CONTENT',
+    observed_file_id: observation.file_id,
+    observed_sha256: observation.sha256,
+    observed_path: observation.canonical_path,
+    detail: `${path} 当前存在的内容不是删除前基线；本流程不覆盖它。`,
   };
 }
 

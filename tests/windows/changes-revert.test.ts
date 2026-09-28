@@ -793,7 +793,7 @@ describeWindows('LWB-031 真 NTFS：安全撤销提议', () => {
   });
 
   // -------------------------------------------------------------------------
-  // E 组 —— 新建文件：V1 不删除，输出本地方案
+  // E 组 —— 新建文件：revert_prepare 不自动删除，输出本地方案
   // -------------------------------------------------------------------------
 
   it('E1：撤销一个只含新建的修改集 ⇒ 没有提案，但有一条明确的本地方案', async () => {
@@ -803,7 +803,7 @@ describeWindows('LWB-031 真 NTFS：安全撤销提议', () => {
 
     const plan = await r.planRevert();
     assert.equal(plan.items[0]!.verdict, 'LOCAL_DELETE_REQUIRED');
-    assert.equal(plan.proposal.length, 0, 'V1 不做删除，因此没有可执行的条目');
+    assert.equal(plan.proposal.length, 0, '撤销规划不直接删除，因此没有可执行的逆向条目');
     assert.equal(plan.local_actions.length, 1);
 
     const action = plan.local_actions[0]!;
@@ -812,9 +812,9 @@ describeWindows('LWB-031 真 NTFS：安全撤销提议', () => {
     assert.equal(action.created_sha256, sha256(created), '方案里给的是**创建时回读到的**哈希');
     assert.equal(action.observed_sha256, sha256(created));
     assert.equal(action.matches_creation, true);
-    // 方案必须说清三件事：谁来做、为什么不是自动的、以及**不声称归属**。
+    // 方案必须说清三件事：谁来做、为何本撤销 API 不自动执行、以及**不声称归属**。
     assert.ok(action.instruction.includes('新文件.txt'), action.instruction);
-    assert.ok(action.instruction.includes('自行删除'), action.instruction);
+    assert.ok(action.instruction.includes('file_delete'), action.instruction);
     assert.ok(action.instruction.includes('不声称'), action.instruction);
 
     const data = await r.prepareRevert('e1-key');
@@ -838,8 +838,8 @@ describeWindows('LWB-031 真 NTFS：安全撤销提议', () => {
       `总述要说清有几条；实际 ${String(data.local_action_reason)}`,
     );
 
-    // 文件**还在**：V1 绝不自动删。
-    assert.equal(sha256(await r.onDisk('新文件.txt')), sha256(created), 'V1 不得删除文件');
+    // 文件**还在**：规划/提案工具本身不直接删除；文件删除是独立的 MCP 调用。
+    assert.equal(sha256(await r.onDisk('新文件.txt')), sha256(created), '本次只规划，没有调用 file_delete');
     assert.equal(repos.changes.list({ limit: 500 }).length, 1, '没有新建修改集');
   });
 

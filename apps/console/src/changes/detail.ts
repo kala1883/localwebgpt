@@ -192,7 +192,7 @@ function strArray(value: unknown): readonly string[] | null {
  * 失败的方向是「这份修改集显示不出来」—— 响亮、可查、不会让人
  * 误以为自己在看一次普通编辑。
  */
-const CHANGE_OPS: readonly ChangeOp[] = ['edit_text', 'create_text', 'replace_text'];
+const CHANGE_OPS: readonly ChangeOp[] = ['edit_text', 'create_text', 'replace_text', 'delete_file'];
 const FILE_ENCODINGS: readonly FileEncoding[] = ['utf-8', 'utf-8-bom', 'unknown'];
 const NEWLINE_STYLES: readonly NewlineStyle[] = ['lf', 'crlf', 'mixed', 'none'];
 

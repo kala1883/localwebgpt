@@ -109,6 +109,7 @@ import type { ChangeItemRecord, Repositories, WorkspaceRecord } from '@lwb/persi
 import {
   isWinfsError,
   type WinfsCreateResult,
+  type WinfsDeleteResult,
   type WinfsError,
   type WinfsOps,
   type WinfsWriteResult,
@@ -135,6 +136,7 @@ const WRITABLE_OPS: ReadonlySet<ChangeItemRecord['op']> = new Set<ChangeItemReco
   'edit_text',
   'replace_text',
   'create_text',
+  'delete_file',
 ]);
 
 /**
@@ -151,7 +153,8 @@ const WRITABLE_OPS: ReadonlySet<ChangeItemRecord['op']> = new Set<ChangeItemReco
  * 会在两条路之间那把 `if` 上留下 TOCTOU 窗口，而窗口的另一侧正是验收标准
  * 第一条问的那件事。
  */
-export type WriteMode = 'edit_text' | 'create_text';
+export type WriteMode = 'edit_text' | 'create_text' | 'delete_file' | 'restore_deleted_file';
+type ForwardWriteMode = Exclude<WriteMode, 'restore_deleted_file'>;
 
 /**
  * 本模块交给 `apply.ts` 的**全部**能力。
@@ -287,13 +290,10 @@ export type BufferOutcome =
 
 /** 一次写入的结果，按护栏**说了什么**分类，不按异常分类。 */
 export type WriteOutcome =
-  | {
-      readonly ok: true;
-      readonly mode: WriteMode;
-      readonly result: WinfsWriteResult | WinfsCreateResult;
-      /** 交出去的字节数（用来核回执里的 `bytes_written`）。 */
-      readonly payload_bytes: number;
-    }
+  | { readonly ok: true; readonly mode: 'edit_text'; readonly result: WinfsWriteResult; readonly payload_bytes: number }
+  | { readonly ok: true; readonly mode: 'create_text'; readonly result: WinfsCreateResult; readonly payload_bytes: number }
+  | { readonly ok: true; readonly mode: 'delete_file'; readonly result: WinfsDeleteResult; readonly payload_bytes: number }
+  | { readonly ok: true; readonly mode: 'restore_deleted_file'; readonly result: WinfsCreateResult; readonly payload_bytes: number }
   | { readonly ok: false; readonly mode: WriteMode; readonly error: WinfsError };
 
 export interface RestoreRequest {
@@ -341,6 +341,28 @@ async function writeItem(deps: NativeApplierDeps, scope: ReadScope, vetted: Vett
     content_base64: payload.toString('base64'),
   };
 
+  if (mode === 'delete_file') {
+    if (deps.ops.deleteFileGuarded === undefined) {
+      return {
+        ok: false,
+        mode,
+        error: {
+          ok: false,
+          code: 'NATIVE_GUARD_UNAVAILABLE',
+          message: '当前原生护栏未实现句柄内文件删除；不会退化为按路径删除。',
+          win32_error: 0,
+        },
+      };
+    }
+    const deleted = await deps.ops.deleteFileGuarded({
+      ...refOf(scope, canonical_path),
+      expected_sha256: item.base_sha256!,
+      expected_file_id: item.base_file_id!,
+    });
+    if (isWinfsError(deleted)) return { ok: false, mode, error: deleted };
+    return { ok: true, mode, result: deleted, payload_bytes: 0 };
+  }
+
   // 两条路走两个原生操作，且**不合并**：合并的实现要在调用之前按
   // 「目标存不存在」挑一个，而那正是验收标准第一条要关掉的那个窗口。
   if (mode === 'create_text') {
@@ -366,6 +388,15 @@ async function writeItem(deps: NativeApplierDeps, scope: ReadScope, vetted: Vett
  * 差别只在 `expected_*` 指的是「我们写下去的那一份」而不是「批准时的基线」。
  */
 async function restoreItem(deps: NativeApplierDeps, scope: ReadScope, request: RestoreRequest): Promise<WriteOutcome> {
+  if (request.item.op === 'delete_file') {
+    const recreated = await deps.ops.createFileGuarded({
+      ...refOf(scope, request.relative_path),
+      content_base64: request.bytes.toString('base64'),
+    });
+    if (isWinfsError(recreated)) return { ok: false, mode: 'restore_deleted_file', error: recreated };
+    return { ok: true, mode: 'restore_deleted_file', result: recreated, payload_bytes: request.bytes.length };
+  }
+
   const result = await deps.ops.writeFileGuarded({
     ...refOf(scope, request.relative_path),
     content_base64: request.bytes.toString('base64'),
@@ -411,7 +442,7 @@ export interface VettedItem {
   /** 护栏给出的**磁盘规范拼写**；阶段 C 按它写入。 */
   readonly canonical_path: string | null;
   /** 阶段 C 走哪一条原生操作。只有 `write` 时有意义。 */
-  readonly mode: WriteMode;
+  readonly mode: ForwardWriteMode;
 }
 
 function heldOf(
@@ -426,8 +457,9 @@ function heldOf(
   return { item, verdict, payload, canonical_path: canonical, mode: modeOf(item.op) };
 }
 
-function modeOf(op: ChangeItemRecord['op']): WriteMode {
+function modeOf(op: ChangeItemRecord['op']): ForwardWriteMode {
   if (op === 'create_text') return 'create_text';
+  if (op === 'delete_file') return 'delete_file';
   return 'edit_text';
 }
 
@@ -466,8 +498,39 @@ async function vetItem(deps: NativeApplierDeps, scope: ReadScope, item: ChangeIt
         '没有基线的改写无法核对到底要改的是哪一个对象、哪一份内容。拒绝。',
     );
   }
-  if (item.encoding === 'unknown') {
+  if (item.encoding === 'unknown' && item.op !== 'delete_file') {
     return refuse('条目的编码声明是 unknown，无法核对将要写入的字节形态。拒绝。');
+  }
+
+  if (item.op === 'delete_file') {
+    const probe = await deps.ops.resolvePath({ ...refOf(scope, item.canonical_path), expect: 'file' });
+    if (isWinfsError(probe)) {
+      if (probe.code === 'NOT_FOUND') return hold({ kind: 'already_target' }, Buffer.alloc(0), item.canonical_path);
+      const mapped = mapPreWriteError(probe);
+      return hold({ kind: mapped.kind, detail: detailOf(probe, mapped.kind, scope) }, null, null);
+    }
+    if (!isReadShaped(probe) || probe.canonical_relative_path === null || probe.attributes.is_directory) {
+      return conflict('删除目标不是可证明位于授权根下的普通文件。');
+    }
+    const canonical = probe.canonical_relative_path;
+    if (classifyFile(canonical).kind === 'hard_deny') {
+      return refuse(`磁盘上的 ${canonical} 命中硬拒绝规则；该文件不能经 MCP 删除。`);
+    }
+    if (probe.identity.link_count > 1) {
+      return refuse(`磁盘上的 ${canonical} 有多个硬链接；删除会影响工作区外名称，拒绝。`);
+    }
+    if (probe.identity.file_id !== item.base_file_id) {
+      return conflict(`待删除对象已不是读取时的那个文件：${canonical}。拒绝删除。`);
+    }
+    const read = await deps.ops.readFileGuarded(refOf(scope, canonical));
+    if (isWinfsError(read)) {
+      const mapped = mapPreWriteError(read);
+      return hold({ kind: mapped.kind, detail: detailOf(read, mapped.kind, scope) }, null, null);
+    }
+    if (read.identity.file_id !== probe.identity.file_id || read.sha256 !== item.base_sha256) {
+      return conflict(`待删除文件 ${canonical} 的身份或字节已变化；请重新读取后再删除。`);
+    }
+    return hold({ kind: 'write' }, Buffer.alloc(0), canonical);
   }
 
   const target = await targetBytesOf(deps, item);
@@ -860,9 +923,23 @@ export function observationIsComplete(actual: NonNullable<WinfsError['actual_sta
  */
 export function complaintOf(item: ChangeItemRecord, outcome: WriteOutcome): string | null {
   if (!outcome.ok) return null;
+  if (outcome.mode === 'delete_file') {
+    if (item.op !== 'delete_file') return '护栏返回删除回执，但修改项并非 delete_file。';
+    if (outcome.result.identity_before.file_id !== item.base_file_id) {
+      return '护栏删除的对象身份与本机准备快照时的对象不符。';
+    }
+    if (outcome.result.before_sha256 !== item.base_sha256) {
+      return '护栏删除前读到的内容哈希与本机准备快照时的内容不符。';
+    }
+    if (!outcome.result.readback_missing) return '删除后独立回读未确认原路径消失。';
+    return null;
+  }
+  if (outcome.mode === 'restore_deleted_file') {
+    return restoreDeletedFileComplaint(item, outcome.result, outcome.payload_bytes);
+  }
   return outcome.mode === 'create_text'
-    ? createComplaint(item, outcome.result as WinfsCreateResult, outcome.payload_bytes)
-    : receiptComplaint(item, outcome.result as WinfsWriteResult);
+    ? createComplaint(item, outcome.result, outcome.payload_bytes)
+    : receiptComplaint(item, outcome.result);
 }
 
 /**
@@ -932,6 +1009,9 @@ export function restoreComplaint(
   outcome: WriteOutcome,
 ): string | null {
   if (!outcome.ok) return null;
+  if (outcome.mode === 'restore_deleted_file') {
+    return restoreDeletedFileComplaint(item, outcome.result, outcome.payload_bytes, expected.sha256, expected.bytes);
+  }
   const receipt = outcome.result as WinfsWriteResult;
   const complaint = writeReceiptComplaint(
     item.canonical_path,
@@ -945,6 +1025,24 @@ export function restoreComplaint(
       '该文件不得报告为已回到基线。'
     );
   }
+  return null;
+}
+
+function restoreDeletedFileComplaint(
+  item: ChangeItemRecord,
+  result: WinfsCreateResult,
+  bytesWritten: number,
+  expectedSha256 = item.base_sha256,
+  expectedBytes: number | undefined = undefined,
+): string | null {
+  if (expectedSha256 === null || expectedSha256 === undefined) return '恢复删除项缺少基线哈希。';
+  if (result.target_sha256 !== expectedSha256 || result.after_sha256 !== expectedSha256 || !result.readback_ok) {
+    return `恢复 ${item.canonical_path} 后的内容回读与删除前基线不符。`;
+  }
+  if (expectedBytes !== undefined && bytesWritten !== expectedBytes) {
+    return `恢复 ${item.canonical_path} 写入的字节数与删除前快照大小不符。`;
+  }
+  if (!result.flushed) return `恢复 ${item.canonical_path} 后刷盘未完成。`;
   return null;
 }
 

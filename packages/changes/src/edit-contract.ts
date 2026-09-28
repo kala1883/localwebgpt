@@ -108,7 +108,12 @@ export interface ValidatedReplaceText {
   readonly content: string;
 }
 
-export type ValidatedChangeItem = ValidatedEditText | ValidatedCreateText | ValidatedReplaceText;
+export interface ValidatedDeleteFile {
+  readonly op: 'delete_file';
+  readonly path: string;
+}
+
+export type ValidatedChangeItem = ValidatedEditText | ValidatedCreateText | ValidatedReplaceText | ValidatedDeleteFile;
 
 export interface ChangePlan {
   readonly items: readonly ValidatedChangeItem[];
@@ -193,7 +198,7 @@ export function assertDistinctTargets(targets: readonly ChangeTarget[]): void {
 }
 
 function targetOf(item: ValidatedChangeItem): ChangeTarget {
-  if (item.op === 'create_text') {
+  if (item.op === 'create_text' || item.op === 'delete_file') {
     return Object.freeze({ path: item.path, op: item.op, volume_id: null, file_id: null });
   }
   return Object.freeze({
@@ -224,6 +229,8 @@ function validateItem(raw: unknown, context: ChangeValidationContext): Validated
       return validateCreateText(item, path);
     case 'replace_text':
       return validateReplaceText(item, path, context);
+    case 'delete_file':
+      return validateDeleteFile(item, path, context);
     default:
       throw invalid('UNKNOWN_CHANGE_OP', `不支持的修改类型 ${JSON.stringify(item['op'])}；只支持 edit_text / create_text / replace_text。`);
   }
@@ -353,6 +360,16 @@ function validateReplaceText(
 
   const content = requireWritableContent(item['content'], 'replace_text');
   return Object.freeze({ op: 'replace_text', path, base_sha256: baseSha256, ticket, content });
+}
+
+function validateDeleteFile(
+  _item: Record<string, unknown>,
+  path: string,
+  _context: ChangeValidationContext,
+): ValidatedDeleteFile {
+  // The daemon captures the current identity, bytes and snapshot during prepare.
+  // A caller-supplied hash or prior read token would add a redundant tool step.
+  return Object.freeze({ op: 'delete_file', path });
 }
 
 // ---------------------------------------------------------------------------

@@ -121,10 +121,11 @@ describe('LWB-029 词汇：阶段全集', () => {
     assert.equal(isItemStage(''), false);
   });
 
-  it('十个阶段一个不少 —— 少一个就意味着某一步的边界没地方记', () => {
+  it('十一个阶段一个不少 —— 少一个就意味着某一步的边界没地方记', () => {
     // 按字典序排：`item_restore_failed` 排在 `item_restored` **前面**
     // （`_` 的码位小于 `d`），这不是笔误。
     assert.deepEqual([...ALL_ITEM_STAGES].sort(), [
+      'item_deleted',
       'item_failed',
       'item_flushed',
       'item_intent',
@@ -233,6 +234,15 @@ describe('LWB-029 总账：三种好结局，其余一律 unfinished', () => {
     assert.equal(aggregateOf(kinds('written', 'written', 'skipped'), 3), 'applied');
   });
 
+  it('删除回执核验完成后终局为 `deleted`', () => {
+    assert.equal(only(fold(event('i1', ITEM_STAGE.deleted)), 'i1').kind, 'deleted');
+  });
+
+  it('删除已核验（可与写入/跳过混合） ⇒ `applied`', () => {
+    assert.equal(aggregateOf(kinds('deleted'), 1), 'applied');
+    assert.equal(aggregateOf(kinds('written', 'deleted', 'skipped'), 3), 'applied');
+  });
+
   it('全部 skipped ⇒ `no_change`', () => {
     assert.equal(aggregateOf(kinds('skipped', 'skipped'), 2), 'no_change');
   });
@@ -307,6 +317,10 @@ describe('LWB-029 报告：逐条目小结', () => {
     const text = describeOutcomes(outcomes('written', 'skipped'), paths);
     assert.equal(text, '已写入并核验 1；无需改动 1');
     assert.equal(text.includes('需要人看的条目'), false);
+  });
+
+  it('删除终态在人类可读汇总中明确显示', () => {
+    assert.equal(describeOutcomes(outcomes('deleted'), paths), '已删除并核验 1');
   });
 
   it('坏结局点名，并带上那条日志的原话', () => {

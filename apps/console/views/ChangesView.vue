@@ -311,7 +311,8 @@ function sortedRisks(): readonly { readonly level: string; readonly code: string
             <span class="changes__num">{{ described.facts.totals.file_count }}</span> 个文件
             （改 {{ described.facts.totals.edited_files }} /
             新建 {{ described.facts.totals.created_files }} /
-            整文件替换 {{ described.facts.totals.replaced_files }}）
+            整文件替换 {{ described.facts.totals.replaced_files }} /
+            删除 {{ described.facts.totals.deleted_files }}）
           </li>
           <li data-testid="total-lines">
             <span class="changes__num">{{

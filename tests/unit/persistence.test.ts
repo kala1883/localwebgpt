@@ -681,7 +681,7 @@ describe('LWB-006 修改集条目的形状约束', () => {
     );
   });
 
-  it('不可编辑的编码写不进可执行计划', () => {
+  it('unknown 编码只能作为 delete_file 的快照元数据写进修改集', () => {
     const bob = repos.blobs.ensure({
       id: 'blob_old4',
       sha256: 'b'.repeat(64),
@@ -717,8 +717,42 @@ describe('LWB-006 修改集条目的形状约束', () => {
             },
           ],
         }),
-      /CHECK|constraint/i,
+      /CHECK|constraint|unknown 编码/i,
     );
+
+    const empty = repos.blobs.ensure({
+      id: 'blob_empty_delete',
+      sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      size: 0,
+      storage_ref: 'blobs/e3/empty',
+    });
+    const deleted = repos.changes.create({
+      id: 'chg_delete_binary',
+      owner_connection_id: 'conn_test',
+      workspace_id: 'ws_test',
+      root_generation: 1,
+      policy_version: 1,
+      contract_version: '0.1.0',
+      digest: 'd'.repeat(64),
+      summary: '删除一个二进制文件',
+      expires_at: '2099-01-01T00:00:00.000Z',
+      items: [{
+        id: 'delete_0',
+        path: 'assets/image.bin',
+        op: 'delete_file',
+        base_file_id: 'f',
+        base_sha256: 'b'.repeat(64),
+        target_sha256: empty.blob.sha256,
+        old_blob_id: bob.blob.id,
+        new_blob_id: empty.blob.id,
+        encoding: 'unknown',
+        bom: false,
+        newline: 'none',
+        added_lines: 0,
+        removed_lines: 0,
+      }],
+    });
+    assert.equal(repos.changes.items(deleted.id)[0]?.op, 'delete_file');
   });
 
   it('未通过路径语法校验的路径不得进入基线表', () => {

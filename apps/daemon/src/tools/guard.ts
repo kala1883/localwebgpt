@@ -89,6 +89,7 @@ export const WORKSPACE_TOOL_NAMES = [
   'change_prepare',
   'file_create',
   'file_edit',
+  'file_delete',
   // 下面这两个是写链上的（LWB-031 / LWB-032）。它们进这张表，而不是
   // 进 `NON_WORKSPACE_TOOL_NAMES`，有两条各自独立的理由：
   //

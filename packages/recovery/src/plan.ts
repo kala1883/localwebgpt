@@ -189,7 +189,7 @@ export type RepairRefusal =
   | 'HAS_UNRESOLVED_ITEMS'
   /** 全部条目都还在基线上 —— 没有任何东西需要收回来。 */
   | 'NOTHING_TO_ROLL_BACK'
-  /** 要收回的东西里有一个是**新建**出来的文件，而本工程不删文件。 */
+  /** 目标包含新建文件；恢复收场不自动删除该对象。 */
   | 'CREATED_OBJECT_NOT_REMOVED';
 
 export type RepairPlan =
@@ -210,11 +210,11 @@ export type RepairPlan =
  *    `IDENTITY_UNKNOWN` / `THIRD_CONTENT` 就拒绝。理由不是保守，是**边界**：
  *    那些条目的现场不属于我们，一次「顺手把它们也办了」的收场会越过
  *    §8.4 划的那条线。
- *  - 至少要有**一条** `TARGET_REACHED` 的改写。全都还在基线上时无事可做，
+ *  - 至少要有**一条** `TARGET_REACHED` 的条目。全都还在基线上时无事可做，
  *    而「执行一次什么都不做的恢复授权」应当在授权之前就被拒掉。
- *  - `TARGET_REACHED` 的**新建**条目一律拒绝：护栏没有删除操作，
- *    本工程不去造一个（`apply.ts` 的第 2 条不可让渡的规则）。
- *    一个多余的文件是可逆的，因此这里宁可要求人工处理它。
+ *  - `TARGET_REACHED` 的**新建**条目一律拒绝：这条计划不能推断新文件的归属。
+ *  - `TARGET_REACHED` 的删除条目可以从已校验快照用 CREATE_NEW 恢复；
+ *    这不会覆盖现有文件，且只在本地恢复授权后执行。
  *
  * ## 为什么 `targets` 是倒序的
  *
@@ -253,9 +253,8 @@ export function repairOf(items: readonly ItemPlan[]): RepairPlan {
       kind: 'refused',
       reason: 'CREATED_OBJECT_NOT_REMOVED',
       detail:
-        `${paths} 是本次执行**新建**出来的文件，而本工程不删除文件 —— ` +
-        '护栏没有删除操作，也不去造一个（删除是这条路上唯一不可逆的动作，' +
-        '而一个多余的文件是可逆的）。请人工核对后删除，再重新做一次判定。',
+        `${paths} 是本次执行**新建**出来的文件；本恢复流程不会自动删除创建出的对象，` +
+        '以免把启动/崩溃后的猜测变成一次不可逆写入。请在本地核对并处理后，再重新做一次判定。',
     };
   }
 
