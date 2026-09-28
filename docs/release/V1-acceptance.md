@@ -18,11 +18,12 @@
 
 | 验收面 | 状态 | 证据/缺口 |
 | --- | --- | --- |
-| 类型、Console、单元、安全和 Windows 自动化 | PASS | 最新 `npm run check`：根测试 1,833 项 / **1,818 PASS、15 SKIP、0 FAIL**；Console **162/162 PASS**；根/Console 类型检查、218 文件 FsGuard 导入扫描与 secret scan 全通过。opt-in LWB-044 单机基准另行 **1/1 PASS**；小时级 soak、睡眠唤醒等长时环境项仍未验收。 |
+| 类型、Console、单元、安全和 Windows 自动化 | PASS | 最新 `npm run check`：根测试 1,838 项 / **1,823 PASS、15 SKIP、0 FAIL**；Console **168/168 PASS**；根/Console 类型检查、219 文件 FsGuard 导入扫描与 secret scan 全通过。opt-in LWB-044 单机基准另行 **1/1 PASS**；小时级 soak、睡眠唤醒等长时环境项仍未验收。 |
 | Tunnel 本机健康/就绪 | PASS（本机采样） | 本机 `127.0.0.1:8080/healthz` 与 `/readyz` 返回 HTTP 200。只能证明运行中的 tunnel-client 就绪，不等于 ChatGPT 调用成功。 |
 | LocalWebGPT 控制面会话保护 | PASS（本机采样） | 无会话访问 `/api/status` 返回 401，符合需本机 Console 会话的保护行为。 |
 | LWB-043 受控目标场景 | PASS（受控副本） | 最新 `npm run acceptance:lwb043`：真实 NTFS + handler；单文件编辑/创建直接 `APPLIED`，随后 MCP `file_read` 回读哈希与回执一致；外部 canary、Git index、HEAD 与源副本不变。仅四个样例文件复制到临时仓库。详见 [`../evidence/user-journeys.md`](../evidence/user-journeys.md)。 |
 | 单文件删除与恢复 | PASS（真 NTFS） | `file_delete` 无需先 `file_read`，文本/二进制路径均直接删除并返回核验回执；二进制差异只回 metadata。删除日志前崩溃会按缺失目标收敛，混合态可经本地恢复授权从快照 `CREATE_NEW` 还原；对可精确重建的已删除 UTF-8 文本，`change_revert_prepare` 会生成 `create_text` 逆提案并经真 NTFS 验证 BOM/CRLF 字节恢复。删除二进制、混合换行及超 2 MiB 文本暂不自动逆向重建。 |
+| LWB-037 本地快照导出 | PARTIAL | 控制面与恢复页已接通受保护 BlobStore → 本机保存选择器 → 长度/SHA-256 校验 → 所选新文件。控制面及 Console 自动化覆盖 original/proposed 版本、拒绝模型调用/目标路径参数、拒绝已有目标、竞争创建、取消与哈希错误；当前两组新增测试随 `npm run check` 通过。真实浏览器保存选择器尚未运行；使用 `npm run acceptance:lwb037-export`，需先确保单用户 daemon IPC 可用。 |
 | ChatGPT 网页 MCP discovery、读取、写入、搜索与命令 | PARTIAL | Manage 页 `Refresh tools` 后，Temporary Chat 中真实调用 `workspace_list`、`file_create` → 磁盘 `file_read` → `file_edit` → 再次 `file_read`；写入均 `APPLIED`、`VERIFIED`，哈希与回读一致。26 秒 PowerShell `command_exec` smoke 实测 28,601 ms、exit 0、`timed_out=false`，详见 [`../evidence/lwb-command-no-hard-timeout.md`](../evidence/lwb-command-no-hard-timeout.md)。专用验收文件仍等待用户确认删除。最新源码服务重启后，全根搜索按 3 秒预算返回 `deadline_exceeded=true`、`scope.complete=false` 的部分结果，而非 IPC 超时或伪称无命中；精确文件 glob 搜索找到了唯一标记，但 scope 仍不完整。冲突、拒绝、断连/重连、删除/恢复等真实网页场景仍未验收。详见 [`../evidence/platform-capability.md`](../evidence/platform-capability.md) §§12–13 与 [`../evidence/lwb-015-search-deadline.md`](../evidence/lwb-015-search-deadline.md)。 |
 | 独立安全审查 | NOT_RUN | `docs/evidence/security-review.md` 是实现者自查与自动回归，不是非实现者签署。 |
 | LWB-038 长时间配额/磁盘压力、LWB-039 睡眠唤醒、LWB-044 soak/冷缓存 | PARTIAL | 已有有界配额、模拟/定向 Windows 与基准证据；小时级 soak、睡眠唤醒和真冷缓存未跑。 |
