@@ -37,7 +37,7 @@ export const LIMITS = {
    * 读取票据与分页游标的有效期（LWB-013）。
    *
    * 为什么可以短：票据只证明「读到的是什么」，而真正落地写入还要过
-   * `base_sha256` 基线与本地批准两道。有效期短的代价只是「再读一次」
+   * `base_sha256` 基线与 workspace 文件修改 grant 两道。有效期短的代价只是「再读一次」
    * （一次读取的成本）；有效期长的代价是「一份更早的观察被当成本次操作的依据」。
    */
   READ_TOKEN_TTL_MS: 1 * HOUR,
@@ -93,7 +93,7 @@ export const LIMITS = {
   MAX_CHANGE_TOTAL_BYTES: 8 * MIB,
   /** 修改集有效期。 */
   CHANGE_TTL_MS: 24 * HOUR,
-  /** 本地批准有效期；执行开始时必须再次校验。 */
+  /** 一次性执行授权记录有效期；执行开始时必须再次校验。 */
   APPROVAL_TTL_MS: 10 * MINUTE,
   /** 全局并发读取数。 */
   MAX_CONCURRENT_READS: 4,

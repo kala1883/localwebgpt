@@ -1,5 +1,5 @@
 /**
- * LWB-032 真 NTFS 验收：已批准修改集的应用（`change_apply`）。
+ * LWB-032 真 NTFS 验收：按 workspace grant 应用修改集（`change_apply`）。
  *
  * ## 为什么这一格必须在真盘上、且必须走**工具面**
  *
@@ -16,22 +16,22 @@
  *   真 NTFS 文件 → 真 PowerShellWinfsBackend（句柄级身份复核）
  *     → 真工具面（makeToolHarness 的 operations/handler）
  *     → 真票据权威 → 真 prepareChange（重读、切片、落快照）
- *     → 真本地批准（approvals 表）
+ *     → 真 workspace `propose` grant 校验 → daemon 内部一次性摘要绑定记录
  *     → 真 ExecutionCoordinator + 真 createNativeApplier
  *     → **盘上真的变了字节**
  * ```
  *
  * ## 逐条对应任务书（LWB-032）
  *
- *  步骤 1「change_apply 只处理已批准修改集，返回稳定 operation_id；
- *  控制台批准并应用走相同服务」—— §1（未批准 ⇒ 拒绝且零写入）、
- *  §3（批准后应用出回执）、§5（控制台路径与工具路径**同一条操作**）。
+ *  当前权限契约：`change_apply` 只处理具有 workspace `propose` grant 的修改集，
+ *  返回稳定 operation_id；本地控制面兼容路径与工具路径也收敛到同一操作。
+ *  §1/§2 验证授权拒绝与 grant 获授后的直接执行，§5 验证操作唯一性。
  *  步骤 2「快速完成返回实际回执；未完成返回 RUNNING，后续用 change_get 查询」
  *  —— §6（`wait_ms: 0` 那一格）。
  *  步骤 3「重复调用无论是否使用同一幂等键，均返回该修改集唯一操作」—— §4。
  *  步骤 4「工具说明禁止模型在未取得终态回执时宣称文件已保存」—— §8。
  *
- *  验收 1「网页批准/本地批准的差异有清晰提示，本地批准不可省略」—— §1 + §2。
+ *  验收 1「逐 workspace grant 是模型写入授权；模型不能用参数伪造授权」—— §1 + §2。
  *  验收 2「断网、超时、重复点击和重复工具调用不产生第二次写」—— §4 + §6。
  *  验收 3「回执包括逐文件哈希和 tests_run:false，不把落盘当成功通过测试」
  *  —— §3。
@@ -455,7 +455,7 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     assert.equal(approval?.actor, `workspace-grant:${harness.repos.grants.find(ADAPTER_CONNECTION, harness.workspace.id)?.id}`);
   });
 
-  it('§1 批准是唯一来源：approved / user_id / principal_id 一律进不来（strict 入参）', async () => {
+  it('§1 workspace grant 是写入授权来源；approved / user_id / principal_id 一律进不来（strict 入参）', async () => {
     const harness = await rig('forged', { files: { 'note.txt': '甲\n乙\n' } });
     const file = absOf(harness, 'note.txt');
     const before = await fingerprint(file);
@@ -488,7 +488,7 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
   });
 
   // -------------------------------------------------------------------------
-  // §2 批准之后：真的落盘、真的回执
+  // §2 grant 授权之后：真的落盘、真的回执
   // -------------------------------------------------------------------------
 
   it('§2 目录授权后应用：state=APPLIED、tests_run=false，且逐文件哈希与独立回读一致', async () => {

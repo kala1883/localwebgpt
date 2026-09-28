@@ -110,7 +110,7 @@ export function modeOffers(
       mode: 'read_propose_apply_with_local_approval',
       label: '读取 + 修改',
       risk:
-        '勾选“文件修改”后，ChatGPT 可在此授权目录内直接创建和编辑文本文件，不会逐次等待本机批准。' +
+        '勾选“文件修改”后，ChatGPT 可在此授权目录内直接创建/删除普通文件并应用修改集，不会逐次等待本机批准；编辑已有文件还需同时授予“读取文件内容”。' +
         '每次写入仍检查路径、冲突并保留恢复快照；不提供任意命令执行或目录外访问。' +
         (write.direct_write ? '' : `（${write.reasons.join('')}）`),
       requires_ack: true,

@@ -30,7 +30,7 @@ export const CAPABILITIES = [
   'tools.read',
   /** 提交修改集（不写文件） */
   'tools.propose',
-  /** 请求执行修改集（仍需本地批准） */
+  /** 请求执行修改集；MCP 写入在工具调用时由 workspace grant 授权。 */
   'tools.apply',
   /** 读取审计事件 */
   'audit.read',

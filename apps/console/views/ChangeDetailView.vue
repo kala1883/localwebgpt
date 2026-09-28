@@ -526,7 +526,7 @@ function sortedRisks(): readonly { readonly level: string; readonly code: string
               <kbd>{{ entry.keys }}</kbd> {{ entry.label }}
             </li>
           </ul>
-          <p class="detail__dim">批准只能点击 —— 一次写入不接受单键快捷方式。</p>
+          <p class="detail__dim">键盘快捷键只用于浏览差异，不触发写入；写入权限由当前 workspace 的工具 grant 决定。</p>
         </details>
       </section>
 
@@ -565,11 +565,14 @@ function sortedRisks(): readonly { readonly level: string; readonly code: string
             批准并应用
           </button>
         </div>
-        <p v-if="!affordance.can_approve && affordance.blocked_reason !== 'NOT_REQUIRED'" data-testid="blocked-reason">
-          批准入口不可用（{{ affordance.blocked_reason }}）。
+        <p v-if="affordance.blocked_reason === 'NOT_REQUIRED'" data-testid="grant-write-hint">
+          无需逐次本地批准；调用 change_apply 时会重新核验当前 workspace 的“文件修改” grant。
         </p>
-        <p v-else data-testid="not-written-hint">
+        <p v-else-if="affordance.can_approve" data-testid="not-written-hint">
           批准只记录授权并排队，**不会立即写入文件**。
+        </p>
+        <p v-else data-testid="blocked-reason">
+          批准入口不可用（{{ affordance.blocked_reason }}）。
         </p>
       </footer>
     </template>

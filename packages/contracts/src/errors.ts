@@ -149,13 +149,13 @@ export const BRIDGE_ERRORS = {
     code: 'APPROVAL_REQUIRED',
     category: 'business',
     autoRetry: 'await_human',
-    summary: '尚无有效的本地批准；模型不能自行批准。',
+    summary: '缺少与当前内容绑定的有效执行授权记录。',
   },
   APPROVAL_EXPIRED: {
     code: 'APPROVAL_EXPIRED',
     category: 'business',
     autoRetry: 'await_human',
-    summary: '本地批准已过期或被撤销。',
+    summary: '执行授权记录已过期或被撤销。',
   },
   CHANGE_NOT_FOUND: {
     code: 'CHANGE_NOT_FOUND',

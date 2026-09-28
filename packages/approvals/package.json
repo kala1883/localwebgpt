@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "本地批准：由落库事实重载修改集并重算摘要、批准/拒绝决定、执行前的批准门禁（不消费）。",
+  "description": "修改集执行授权记录：重载并核对摘要、支持本地复核与 workspace-grant 授权路径、执行前完整性门禁。",
   "exports": {
     ".": "./src/index.ts",
     "./*": "./src/*.ts"

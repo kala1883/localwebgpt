@@ -57,8 +57,8 @@ const ACCESS_OPTIONS: readonly {
   { capability: 'list', label: '列出目录/文件名', tools: 'file_list' },
   { capability: 'read', label: '读取文件内容', tools: 'file_read、文件快照/错误详情' },
   { capability: 'search', label: '搜索文本', tools: 'text_search' },
-  { capability: 'git_read', label: '读取 Git 状态与差异', tools: 'git_status、git_diff、git_log' },
-  { capability: 'propose', label: '文件修改（直接写入）', tools: 'file_create、file_edit、change_prepare、change_apply' },
+  { capability: 'git_read', label: '读取 Git 状态与差异', tools: 'git_status、git_diff' },
+  { capability: 'propose', label: '文件修改（直接写入）', tools: 'file_create、file_delete、change_prepare、change_apply、change_revert_prepare；file_edit 还需读取授权' },
 ];
 
 const props = withDefaults(
@@ -497,7 +497,7 @@ function cancelAccess(): void {
             </button>
             <div v-if="accessDraft?.workspace_id === row.workspace_id" class="ws__access-editor" :data-testid="`access-editor-${row.workspace_id}`">
               <p class="ws__risk">
-                只对上面这个目录生效。勾选“文件修改”代表允许 ChatGPT 在此目录直接创建/编辑文本文件，不再逐次等待批准；取消勾选并保存即可撤销。其他目录不受影响。
+                只对上面这个目录生效。勾选“文件修改”代表允许 ChatGPT 在此目录直接创建/删除普通文件并应用修改集，不再逐次等待批准；编辑已有文件还需同时授予“读取文件内容”。取消勾选并保存即可撤销。其他目录不受影响。
               </p>
               <label v-for="option in ACCESS_OPTIONS" :key="option.capability" class="ws__choice ws__access-option">
                 <input

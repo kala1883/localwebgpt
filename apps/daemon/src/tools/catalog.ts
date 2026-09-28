@@ -11,8 +11,9 @@
  * 于是 `tools.catalog` 是一条 IPC 操作：适配器问 daemon「现在能挂哪些」，
  * 得到的名字集合与本地 `TOOLS` 取交集之后才出现在 `tools/list` 里。
  *
- * 工具清单仅包含本连接至少有一个匹配的已启用 workspace/tool grant 的工具；
- * 每次调用时策略层再针对指定工作区检查同一权限。平台验收和实现 flags 不参与授权。
+ * 工具清单仅包含本连接至少有一个已启用 workspace 满足该工具全部 grant 前置条件的工具；
+ * 多个 grant 必须落在同一 workspace。每次调用时策略层再针对指定工作区重新检查写入授权。
+ * 平台验收和实现 flags 不参与授权。
  */
 
 import { TOOL_NAMES, isControlPlaneName, isImplementedToolName, isToolName } from '@lwb/contracts';
@@ -37,40 +38,42 @@ export interface CatalogEntry {
  */
 type AvailabilityRule =
   | { readonly kind: 'connection' }
-  | { readonly kind: 'workspace_grant'; readonly capability: CapabilityName };
+  | { readonly kind: 'workspace_grant'; readonly capabilities: readonly CapabilityName[] };
 
 const AVAILABILITY: Readonly<Record<ImplementedToolName, AvailabilityRule>> = {
   // 不读工作区内容：连接在册且启用即可用。
   bridge_status: { kind: 'connection' },
   workspace_list: { kind: 'connection' },
-  file_list: { kind: 'workspace_grant', capability: 'list' },
-  file_read: { kind: 'workspace_grant', capability: 'read' },
-  text_search: { kind: 'workspace_grant', capability: 'search' },
-  git_status: { kind: 'workspace_grant', capability: 'git_read' },
-  git_diff: { kind: 'workspace_grant', capability: 'git_read' },
-  change_prepare: { kind: 'workspace_grant', capability: 'propose' },
-  file_create: { kind: 'workspace_grant', capability: 'propose' },
-  file_edit: { kind: 'workspace_grant', capability: 'propose' },
-  file_delete: { kind: 'workspace_grant', capability: 'propose' },
+  file_list: { kind: 'workspace_grant', capabilities: ['list'] },
+  file_read: { kind: 'workspace_grant', capabilities: ['read'] },
+  text_search: { kind: 'workspace_grant', capabilities: ['search'] },
+  git_status: { kind: 'workspace_grant', capabilities: ['git_read'] },
+  git_diff: { kind: 'workspace_grant', capabilities: ['git_read'] },
+  change_prepare: { kind: 'workspace_grant', capabilities: ['propose'] },
+  file_create: { kind: 'workspace_grant', capabilities: ['propose'] },
+  // Editing needs both permission to change this root and permission to read the
+  // baseline that supplies its signed file hash/read ticket.
+  file_edit: { kind: 'workspace_grant', capabilities: ['read', 'propose'] },
+  file_delete: { kind: 'workspace_grant', capabilities: ['propose'] },
   // 它读的是快照库（受保护根之内，不是用户工作区），但仍需要该工作区的 read grant。
-  change_get: { kind: 'workspace_grant', capability: 'read' },
+  change_get: { kind: 'workspace_grant', capabilities: ['read'] },
   // 不读任何工作区内容，只读本连接自己的状态库行 —— 与 `bridge_status`
   // 同类，因此是连接级。
   change_list: { kind: 'connection' },
-  change_apply: { kind: 'workspace_grant', capability: 'propose' },
-  change_revert_prepare: { kind: 'workspace_grant', capability: 'propose' },
+  change_apply: { kind: 'workspace_grant', capabilities: ['propose'] },
+  change_revert_prepare: { kind: 'workspace_grant', capabilities: ['propose'] },
 };
 
 export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): readonly CatalogEntry[] {
   const connection = resolveConnection(context, deps);
   const usable = usableWorkspaces(deps.repos, connection.id);
 
-  const anyWorkspaceHas = (capability: CapabilityName): boolean =>
+  const anyWorkspaceHas = (capabilities: readonly CapabilityName[]): boolean =>
     usable.some((workspace) => {
       if (!workspace.enabled) return false;
-      if (capability === 'propose' && workspace.mode !== 'read_propose_apply_with_local_approval') return false;
+      if (capabilities.includes('propose') && workspace.mode !== 'read_propose_apply_with_local_approval') return false;
       const grant = deps.repos.grants.find(connection.id, workspace.id);
-      return grant?.enabled === true && grant.capabilities.includes(capability);
+      return grant?.enabled === true && capabilities.every((capability) => grant.capabilities.includes(capability));
     });
 
   return TOOL_NAMES.map<CatalogEntry>((name) => {
@@ -85,7 +88,7 @@ export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): read
 
     const rule = AVAILABILITY[name];
     if (rule.kind === 'connection') return { name, available: true, reason: null };
-    if (!anyWorkspaceHas(rule.capability)) {
+    if (!anyWorkspaceHas(rule.capabilities)) {
       return { name, available: false, reason: 'WORKSPACE_TOOL_NOT_GRANTED' };
     }
     return { name, available: true, reason: null };

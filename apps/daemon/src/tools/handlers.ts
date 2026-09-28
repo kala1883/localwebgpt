@@ -381,10 +381,8 @@ export const TOOL_POLICY_ACTIONS = {
   change_list: null,
   // `propose` 是本地控制台配置的逐目录读写授权；具体写入仍由受保护执行器完成。
   change_apply: 'change_apply',
-  // 撤销**提议**：与 `change_prepare` 同类（会读基线、会建记录），
-  // 因此它的开关是 `proposal_enabled`，而不是 `direct_write_enabled` ——
-  // 本工具一个用户字节都不写，把它归到写入档会让它在写入关闭时无故消失，
-  // 而「撤销的提案」恰恰是操作者最需要提前看到的东西。
+  // 撤销**提议**：与 `change_prepare` 一样由该 workspace 的 propose grant 授权；
+  // 它只生成逆向修改集，不直接写用户文件。
   change_revert_prepare: 'change_revert_prepare',
 } satisfies Readonly<Record<ImplementedToolName, PolicyAction | null>>;
 

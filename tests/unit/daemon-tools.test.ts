@@ -196,6 +196,24 @@ describe('工具清单（验收 1：无控制面方法）', () => {
     }
   });
 
+  it('file_edit 只有在同一工作区同时获授读取和文件修改时才出现在工具清单', async () => {
+    const restricted = await makeToolHarness({ gates: GATES_OFF });
+    try {
+      restricted.grant(ADAPTER_CONNECTION, restricted.workspace.id, ['propose']);
+      let catalog = await catalogOf(restricted);
+      assert.equal(catalog.tools.find((entry) => entry.name === 'file_create')?.available, true);
+      assert.equal(catalog.tools.find((entry) => entry.name === 'file_delete')?.available, true);
+      assert.equal(catalog.tools.find((entry) => entry.name === 'change_apply')?.available, true);
+      assert.equal(catalog.tools.find((entry) => entry.name === 'file_edit')?.available, false);
+
+      restricted.grant(ADAPTER_CONNECTION, restricted.workspace.id, ['read', 'propose']);
+      catalog = await catalogOf(restricted);
+      assert.equal(catalog.tools.find((entry) => entry.name === 'file_edit')?.available, true);
+    } finally {
+      restricted.close();
+    }
+  });
+
   it('门禁全开时，可用的是全部已实现工具；未实现的理由是「没实现」而不是「开关关了」', async () => {
     const catalog = await catalogOf(h);
     const available = catalog.tools.filter((entry) => entry.available).map((entry) => entry.name);

@@ -352,9 +352,9 @@ describe('B 组 · 键盘（LWB-036 步骤 1：键盘可访问性）', () => {
     assert.equal(rows.length, new Set(REVIEW_KEYMAP.map((b) => b.action)).size);
     assert.equal(rows.some((row) => (row.text()).includes('j / ArrowDown')), true);
     assert.equal(actions.includes('approve' as never), false);
-    // 「批准没有快捷键」这句话必须与表**一起**显示：只给一张表，
-    // 操作者会去找那个不存在的键。
-    assert.match(textOf(wrapper, 'keyboard'), /批准只能点击/);
+    // 快捷键只浏览差异，不得暗示批准就是普通写入的必要步骤。
+    assert.match(textOf(wrapper, 'keyboard'), /键盘快捷键只用于浏览差异，不触发写入/);
+    assert.match(textOf(wrapper, 'keyboard'), /写入权限由当前 workspace 的工具 grant 决定/);
   });
 });
 
@@ -439,6 +439,19 @@ describe('D 组 · 复核覆盖挡住批准（验收标准 a）', () => {
     assert.equal(wrapper.find('[data-testid="approve-button"]').exists(), true);
     assert.equal(wrapper.find('[data-testid="review-coverage"]').attributes('data-status'), 'complete');
     assert.equal(wrapper.findAll('[data-testid="file-covered"]').length, 2);
+  });
+
+  it('workspace 写 grant 已授权的修改集不显示逐次批准，并提示调用时复核 grant', () => {
+    const wrapper = mountDetail({
+      detail: detailOf({ change: changeOf({ approval_required: false }) }),
+      session: SESSION,
+      texts: reviewed(['src/app.ts']),
+    });
+
+    assert.equal(wrapper.find('[data-testid="approve-button"]').exists(), false);
+    assert.equal(wrapper.find('[data-testid="grant-write-hint"]').exists(), true);
+    assert.match(wrapper.find('[data-testid="grant-write-hint"]').text(), /change_apply.*workspace.*grant/);
+    assert.equal(wrapper.find('[data-testid="not-written-hint"]').exists(), false);
   });
 
   it('D4 服务端拒绝交内容时是 unavailable，而不是「还有文件没看过」', () => {

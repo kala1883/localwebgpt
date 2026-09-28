@@ -174,7 +174,7 @@ export const CHANGE_REVERT_PREPARE_TOOL = 'change_revert_prepare';
  * `RECOVERY_REQUIRED` 与 `CONFLICT` 都是「还没定案」：前者要等恢复流程
  * （`@lwb/recovery`）把现场判成 `APPLIED` 或 `ROLLED_BACK`，后者要等人处理。
  * 在定案之前生成一份撤销提议，会得到一份**基于一个还在变的现场**的提案，
- * 而它要拿本地批准 —— 一次建立在不确定现场上的批准，比一次拒绝糟糕得多。
+ * 而它会被 workspace `propose` grant 授权执行；不确定现场不能成为新写入的依据。
  */
 export const REVERTIBLE_CHANGE_STATES: readonly ChangeSetState[] = ['APPLIED'];
 
@@ -1376,8 +1376,8 @@ function unavailableFrom(error: unknown, path: string): ObservationResult {
  *    本文件的字节一个都不出站（不返给模型、不进工具结果），因此那条
  *    裁定没有对应物；而它真正保护的东西（「敏感内容不能变成一次写入的
  *    基线」）在这里由另一条更强的性质覆盖：可撤销的条目，其基线与当前内容
- *    都来自**同一条已经被批准并执行过**的修改集，而那次执行本身就是
- *    经过策略与本地批准的。策略版本变化由 `revalidateExecutionBindings`
+ *    都来自**同一条已经按授权执行过**的修改集，而那次执行本身经过 workspace grant
+ *    与策略校验。策略版本变化由 `revalidateExecutionBindings`
  *    的 `POLICY_VERSION_CHANGED` 拦住。
  *
  * 返回 `null` 表示可以改写。
@@ -1525,7 +1525,7 @@ function reproduceInverse(
 function revertSummaryOf(source: ChangeSetRecord, fileCount: number): string {
   return (
     `撤销修改集 ${source.id}（核对码 ${shortCodeOf(source.digest)}）对 ${fileCount} 个文件的修改：` +
-    '把这些文件恢复为该修改集建立时的内容。这是一份**新的**修改集，仍需本地操作者独立批准后才能写入。'
+    '把这些文件恢复为该修改集建立时的内容。这是一份**新的**修改集；应用时由当前 workspace 的文件修改 grant 授权，不要求逐次人工批准。'
   );
 }
 

@@ -3,9 +3,9 @@
  *
  * 核心语义：
  *  - 修改集一经创建**内容不可变**；改任何字节/路径/基线都生成新 change_id，
- *    旧批准不能继承（方案 §6.4）。
- *  - `summary` 是模型撰写的不受信文案，只能作为展示，**不能**作为批准依据。
- *  - 批准绑定唯一摘要、主体、工作区代次、策略版本与有效期。
+ *    旧执行授权不能继承（方案 §6.4）。
+ *  - `summary` 是模型撰写的不受信文案，只能作为展示，**不能**作为授权依据。
+ *  - 执行授权记录绑定唯一摘要、主体、工作区代次、策略版本与有效期。
  *  - 一个修改集最多关联一个 operation，即使更换幂等键（UNIQUE(change_id)）。
  */
 
@@ -357,7 +357,8 @@ export interface ChangeRevertPrepareInput {
 
 export interface ChangeRevertPrepareData {
   /**
-   * 新的逆向修改集；仍需独立批准，不直接恢复。
+   * 新的逆向修改集；不是直接恢复。应用时仍须当前 workspace 的 `propose` grant，
+   * 不额外要求逐次人工批准。
    *
    * ## 类型是 `ChangePrepareData` 而不是 `ChangeSetView`
    *

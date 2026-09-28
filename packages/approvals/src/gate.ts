@@ -63,12 +63,12 @@ import { reloadChangeSet } from './reload.ts';
  */
 export type ApplyGateReason =
   | 'CHANGE_NOT_FOUND'
-  /** 一条批准记录都没有。这是模型单独调用应用工具时**唯一**该看到的答案。 */
+  /** 缺少与摘要绑定的一次性执行授权记录；正常 MCP 路径会先核验 workspace grant 再生成它。 */
   | 'APPROVAL_MISSING'
   | 'APPROVAL_EXPIRED'
   | 'APPROVAL_REVOKED'
   | 'APPROVAL_CONSUMED'
-  /** 批准绑定的摘要与重新加载并重算出的摘要不是同一串。 */
+  /** 执行授权记录绑定的摘要与重新加载并重算出的摘要不是同一串。 */
   | 'APPROVAL_DIGEST_MISMATCH'
   /** 落库事实自身不一致：记录不完整、被改动过，或快照读不到。 */
   | 'CHANGE_INTEGRITY'
@@ -112,15 +112,15 @@ function gateMessage(reason: ApplyGateReason): string {
     case 'CHANGE_NOT_FOUND':
       return '修改集不存在。';
     case 'APPROVAL_MISSING':
-      return '尚无有效的本地批准；批准只能由本地操作者在控制台给出，模型不能自行批准。';
+      return '缺少与当前摘要匹配的一次性执行授权记录；MCP 写入权限由当前工作区的文件修改 grant 决定。';
     case 'APPROVAL_EXPIRED':
-      return '本地批准已过期（执行开始前须重新校验有效期）。';
+      return '一次性执行授权记录已过期（执行开始前须重新校验有效期）。';
     case 'APPROVAL_REVOKED':
-      return '本地批准已被操作者撤销。';
+      return '一次性执行授权记录已被撤销。';
     case 'APPROVAL_CONSUMED':
-      return '该批准已被使用过；一个修改集只能对应一次写入操作。';
+      return '该一次性执行授权记录已被使用；一个修改集只能对应一次写入操作。';
     case 'APPROVAL_DIGEST_MISMATCH':
-      return '本次要应用的内容与获批内容不是同一份摘要；批准不适用于它。';
+      return '本次要应用的内容与执行授权记录绑定的摘要不符；已拒绝写入。';
     case 'CHANGE_INTEGRITY':
       return '修改集记录自身不一致，无法确认待写内容；已拒绝执行。';
     default:
@@ -147,7 +147,7 @@ export type ApplyGateVerdict =
 /**
  * 排队前的入口允许的来源状态。
  *
- * 只有 `APPROVED`：`PENDING_APPROVAL` 意味着还没有人批准，而
+ * 只有 `APPROVED`：`PENDING_APPROVAL` 意味着尚未记录有效执行授权，而
  * `QUEUED` 及以上意味着**已经**排过一次队了 —— 放它进来会让第二次调用
  * 产生第二个操作，而 `UNIQUE(change_id)` 只会在更晚的一步把它撞掉。
  */

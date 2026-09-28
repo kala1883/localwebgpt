@@ -471,7 +471,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     description:
       '把一组确定的行级编辑/创建操作冻结为不可变修改集，返回 change_id 与摘要。' +
       '**本工具不会修改任何用户文件**，但它会创建持久化记录，因此不是只读操作。' +
-      '调用前必须先 file_read 取得该文件最新的 sha256 与 read_token。' +
+      '编辑既有文件时，调用前必须先 file_read 取得该文件最新的 sha256 与 read_token（因此需要同时授予读取和文件修改）；仅创建新文件时不需要读取票据。' +
       '若工作区已授予“文件修改”，随后调用 change_apply 即可执行，无需逐次本地批准；' +
       '否则会返回授权拒绝。',
     inputSchema: TOOL_INPUT_SCHEMAS.change_prepare,
@@ -490,7 +490,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'file_edit',
     title: '编辑文本文件',
     description:
-      '基于最新 file_read 的完整读取票据、哈希与精确行区间，直接编辑一个已授权文本文件。' +
+      '基于最新 file_read 的完整读取票据、哈希与精确行区间，直接编辑一个已授权文本文件；工具清单仅在同一工作区同时获授读取和文件修改时提供本工具。' +
       '冲突时不覆盖；修改经受保护执行器完成并返回逐文件回执，无需逐次本机批准。',
     inputSchema: TOOL_INPUT_SCHEMAS.file_edit,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },

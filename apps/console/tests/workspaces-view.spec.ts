@@ -229,7 +229,8 @@ describe('B 组 · 目录 / 单文件、两种模式与各自的说明（执行�
     // 这句话必须出现在**选只读的时候**：一个认为只读就是安全的用户
     // 不会去读页面底部的说明。
     assert.match(risks[0]?.text() ?? '', /只读不等于不出本机/);
-    assert.match(risks[1]?.text() ?? '', /直接创建和编辑文本文件/);
+    assert.match(risks[1]?.text() ?? '', /直接创建\/删除普通文件并应用修改集/);
+    assert.match(risks[1]?.text() ?? '', /编辑已有文件还需同时授予“读取文件内容”/);
     assert.match(risks[1]?.text() ?? '', /不会逐次等待本机批准/);
   });
 
@@ -239,7 +240,7 @@ describe('B 组 · 目录 / 单文件、两种模式与各自的说明（执行�
     assert.match(offRisk, /本机服务能力状态暂时不可用/);
 
     const on = mountView({ flags: { ...FLAGS_OFF, direct_write_enabled: true } });
-    assert.match(on.findAll('[data-testid="mode-risk"]')[1]?.text() ?? '', /直接创建和编辑文本文件/);
+    assert.match(on.findAll('[data-testid="mode-risk"]')[1]?.text() ?? '', /直接创建\/删除普通文件并应用修改集/);
   });
 
   it('B3 提议模式不勾风险说明就提交不了，且理由逐条在列', async () => {

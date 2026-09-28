@@ -91,7 +91,8 @@ export type WorkspaceKind = 'directory' | 'file';
 
 /**
  * 工作区访问模式。V1 只有这两种；不存在「模型可写」模式。
- * 写入永远需要本地批准，模式只决定是否允许直接拒绝整个提议链路。
+ * `read_propose_apply_with_local_approval` 是持久化/API 兼容名称；实际模型写入
+ * 由当前 workspace 的 `propose` tool grant 授权，不再要求逐次本机批准。
  */
 export type WorkspaceMode = 'read_only' | 'read_propose_apply_with_local_approval';
 
