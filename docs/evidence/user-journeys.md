@@ -28,18 +28,20 @@ repository and removed that repository in teardown.
    appended a synthetic saved-but-unstaged marker to its Vue sample. `file_read`
    reported `source=disk`, saw the marker, and returned the exact baseline hash.
 3. With the workspace's file-modification grant, `file_edit` returned
-   `APPLIED` directly (no per-change console approval). Operation
-   `op_f4ad08a80e924372b7f48ca71b8918d2` changed the Vue SHA-256 from
-   `56cc0485e28716109071a02a086c89dc1fbbd00fea9223b939fb7218b4726316` to
-   `92aafef14241322261618da03a78e16e416b6324a3b18f139a3dee4b75cb5a42`.
+   `APPLIED` directly (no per-change console approval). Latest operation
+   `op_4e98014ba13d45468e4012f6c5b76884` (`chg_ef081b1c-4b43-4a11-bd80-7035978eb4fe`)
+   changed the Vue SHA-256 from
+   `4c39d9d91a5692c6b166f6666c8c2fa8fceaca3f7271079a72f081c0f304ec27` to
+   `b6fe002ac6f03501f93442051c3d7ca2af7fa66ba6030f5e09a85315a2b764e0`.
    A follow-up MCP `file_read` returned the same after-hash and expected marker.
 4. `file_create` returned `APPLIED` in one call. Operation
-   `op_0aa647f88b644ecd999533f5e078ba0d` created
+   `op_7f28f2cf457e4907b21626b7782866a1` (`chg_c2df1cc4-a680-48e8-9dbc-ce362ad83239`) created
    `docs/lwb043-workspace-grant-acceptance.md` with SHA-256
    `1dea021a02eac740ed2ba010030f76e5eb02f1cdf3afc2c771d9f21830dd68e0`;
    a follow-up MCP `file_read` returned the same hash and expected content.
 5. Only the Vue sample and generated note changed in the disposable working
-   tree. Git HEAD and staged diff were unchanged; no commit or push occurred.
+   tree after its baseline commit. Git HEAD and staged diff remained unchanged;
+   no post-baseline commit or push occurred.
    The outside-workspace canary retained its hash, and the original controlled
    source copy remained clean.
 

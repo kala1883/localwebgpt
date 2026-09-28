@@ -18,10 +18,10 @@
 
 | 验收面 | 状态 | 证据/缺口 |
 | --- | --- | --- |
-| 类型、Console、单元、安全和 Windows 自动化 | PASS | 最新 `npm run check`：根测试 1,807 项 / **1,794 PASS、13 SKIP、0 FAIL**；Console **160/160 PASS**；根/Console 类型、216 文件 FsGuard 导入扫描与 secret scan 全通过。性能 soak/睡眠唤醒等长时环境项不包含在这项 PASS 中。 |
+| 类型、Console、单元、安全和 Windows 自动化 | PASS | 最新 `npm run check`：根测试 1,826 项 / **1,811 PASS、15 SKIP、0 FAIL**；Console **162/162 PASS**；根/Console 类型检查、218 文件 FsGuard 导入扫描与 secret scan 全通过。opt-in LWB-044 单机基准另行 **1/1 PASS**；小时级 soak、睡眠唤醒等长时环境项仍未验收。 |
 | Tunnel 本机健康/就绪 | PASS（本机采样） | 本机 `127.0.0.1:8080/healthz` 与 `/readyz` 返回 HTTP 200。只能证明运行中的 tunnel-client 就绪，不等于 ChatGPT 调用成功。 |
 | LocalWebGPT 控制面会话保护 | PASS（本机采样） | 无会话访问 `/api/status` 返回 401，符合需本机 Console 会话的保护行为。 |
-| LWB-043 受控目标场景 | PASS（受控副本） | `npm run acceptance:lwb043`：真实 NTFS + handler；单文件编辑/创建直接 `APPLIED`，随后 MCP `file_read` 回读 SHA-256 与独立磁盘哈希一致；外部 canary、Git index、HEAD 与源副本不变。详见 [`../evidence/user-journeys.md`](../evidence/user-journeys.md)。 |
+| LWB-043 受控目标场景 | PASS（受控副本） | 最新 `npm run acceptance:lwb043`：真实 NTFS + handler；单文件编辑/创建直接 `APPLIED`，随后 MCP `file_read` 回读哈希与回执一致；外部 canary、Git index、HEAD 与源副本不变。仅四个样例文件复制到临时仓库。详见 [`../evidence/user-journeys.md`](../evidence/user-journeys.md)。 |
 | 单文件删除与恢复 | PASS（真 NTFS） | `file_delete` 无需先 `file_read`，文本/二进制路径均直接删除并返回核验回执；二进制差异只回 metadata。删除日志前崩溃会按缺失目标收敛，混合态可经本地恢复授权从快照 `CREATE_NEW` 还原；对可精确重建的已删除 UTF-8 文本，`change_revert_prepare` 会生成 `create_text` 逆提案并经真 NTFS 验证 BOM/CRLF 字节恢复。删除二进制、混合换行及超 2 MiB 文本暂不自动逆向重建。 |
 | ChatGPT 网页 MCP discovery、读取和写入回读 | NOT_RUN | 当前没有从真实 ChatGPT 会话采集完整工具序列、回执与回读证据。请依照 [`../operator-runbook.md`](../operator-runbook.md) §6 执行。 |
 | 独立安全审查 | NOT_RUN | `docs/evidence/security-review.md` 是实现者自查与自动回归，不是非实现者签署。 |

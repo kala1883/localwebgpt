@@ -2102,3 +2102,14 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - Windows `10.0.26200` / NTFS 隔离夹具基准 **1/1 PASS**，重复项各 5 次：暖读 P50/P95 **27.50/47.93 ms**；搜索 **1,352.32/1,599.20 ms**，82 个普通文本文件均在预算内完成；Git status **1,350.57/1,569.95 ms**；长行搜索 **37.57/41.89 ms**；直接编辑+MCP 回读 **214.60 ms**；辅助进程退出后的下一独立调用重连 **1,608.72 ms**。
 - 搜索遇到 1,004 个硬拒绝 `.env.*` 文件；最终搜索 JSON 657 字节，Git 状态 JSON 6,383 字节；秘密文件未送入受保护文件读取 API。Node RSS 单次前后差 **26,079,232 bytes**，句柄数 264→264（delta 0），仅是短测观察值，不证明长期无泄漏。类型检查通过。
 - 性能文档已替换为这次与当前授权模型一致的结果；睡眠/唤醒、小时级 soak、缓存驱逐和多机器尾延迟仍 NOT_RUN，因此 LWB-044 继续 PARTIAL，不将这些数字写成产品保证。
+
+## 2026-09-28：重跑 LWB-043 受控副本 MCP 工具旅程
+
+- 使用干净源副本提交 `99f312a451f7e897ac66acb7640393dab4857413`，再次运行 `npm run acceptance:lwb043`，**1/1 PASS**。仅把四个指定样例文件复制到临时 NTFS/Git 工作区；测试后源副本仍 clean。
+- 当前运行中 `file_edit` 与 `file_create` 均由 workspace grant 单次直接 `APPLIED`，无逐次审批；Vue 和新建文档的 MCP `file_read` SHA-256 分别与工具回执一致。临时副本 Git HEAD/index 未变化、外部 canary 未变化；变更只在 disposable copy，未对原 TransportAndAI 工作树写入。
+- 此证据是本地 handler + 真 NTFS 护栏的受控副本流程，不是 ChatGPT 网页真实账号/隧道验收；LWB-043 仍 PARTIAL。更新的 operation/change ID 与哈希见 `docs/evidence/user-journeys.md`。
+
+## 2026-09-28：端到端准备状态复核
+
+- 最新完整 `npm run check` **PASS**：根 1,826 项（1,811 PASS、15 SKIP、0 FAIL），Console 162/162 PASS；含根/Console 类型、218 文件 FsGuard 导入扫描与 secret scan。opt-in LWB-044 基准与 LWB-043 受控旅程均另行实跑通过。
+- 只读检查到项目随包 `tunnel-client v0.0.15` 正监听本机 8080；`/healthz`、`/readyz` 均 HTTP 200。这只证明本地隧道客户端存活/就绪，不能代替 ChatGPT 网页工具调用验收。
