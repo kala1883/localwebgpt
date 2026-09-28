@@ -2114,3 +2114,9 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 
 - 最新完整 `npm run check` **PASS**：根 1,826 项（1,811 PASS、15 SKIP、0 FAIL），Console 162/162 PASS；含根/Console 类型、218 文件 FsGuard 导入扫描与 secret scan。opt-in LWB-044 基准与 LWB-043 受控旅程均另行实跑通过。
 - 只读检查到项目随包 `tunnel-client v0.0.15` 正监听本机 8080；`/healthz`、`/readyz` 均 HTTP 200。这只证明本地隧道客户端存活/就绪，不能代替 ChatGPT 网页工具调用验收。
+
+## 2026-09-28：ChatGPT 工具刷新与真实命令调用 smoke
+
+- 在现有 Local Workspace Bridge Manage 页底部执行 **Refresh tools** 后，通过 ChatGPT Temporary chat 实际调用 `workspace_list` 与 `command_exec`。`workspace_list` 找到已启用的 `maas_business`；PowerShell `Write-Output 'LWB_COMMAND_OK'` 返回退出码 0 与预期 stdout。Console 显示该 workspace 持有独立 `command_exec` grant，`本项目目录` 未获此 grant，未扩大权限。
+- 本机只读审计查询显示这一个用户请求期间有两个不同 `workspace_list` request ID（`req_49`、`req_50`）和两个不同 `command_exec` request ID（`req_51`、`req_52`），均为 allow。因审计不存命令正文与逐次输出，重复 `command_exec` 的具体参数无法从审计单独证实；此 smoke 使用的是无文件副作用命令。需保留该重复调用现象，不把 ChatGPT 最终摘要里的两种工具误作总共两次调用。
+- 此实测证明了 Manage 刷新后工具可见且命令能力能实际启动进程，不等于完整 V1 验收。LWB-002 仍 PARTIAL：未完成真实网页文件读取、写入、回读；LWB-041 仍 PARTIAL：编辑/冲突/拒绝/超时/重连等评测矩阵未完成。证据补记于 `docs/evidence/platform-capability.md` §12。

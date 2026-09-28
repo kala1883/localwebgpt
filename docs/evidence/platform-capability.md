@@ -1,7 +1,8 @@
 # LWB-002 · 平台能力核实（Secure MCP Tunnel）— 证据与阻塞点
 
-**状态：BLOCKED**（不是 PARTIAL，也不是 DONE）。
-**采集日期：** 2026-09-26
+**初次采集状态（2026-09-26）：BLOCKED。**
+**当前状态（2026-09-28）：PARTIAL，见 §12。** 工具刷新与命令工具的真实网页调用已通过；任务书要求的真实文件读—写—回读仍未完成。
+**初次采集日期：** 2026-09-26
 **采集环境：** Windows 11 Home China 10.0.26200（**未提权**）/ 真实网络
 **本文件不含任何凭证。** 下文出现的唯一一个「像密钥」的字符串是配置文件里的
 **环境变量引用**（`env:CONTROL_PLANE_API_KEY`），不是密钥本身。
@@ -380,3 +381,10 @@ $env:CONTROL_PLANE_API_KEY = "<runtime key>"
 - 根因：`ensureAdapterConnection` 新建模型连接为 `enabled=false`；`tools.catalog` 经 `withToolGuard` → `resolveConnection` 检查后拒绝。适配器把拒绝收敛成安全的通用 MCP `-32603`，故网页没有暴露本地拒绝码。
 - 修复：ConsoleHost 增加“ChatGPT 连接”页，通过本地会话、CSRF 和一次性 nonce 调用现有 `connections.resume/pause`；启用需本机确认并审计，不会更改任何 workspace grants 或 G0/能力门禁。适配器未实现 OAuth，因此开发模式 Tunnel 连接使用 No authentication / None；此设置不等于放行文件访问。
 - 验证：ConnectionView UI 测试 **2/2 PASS**、控制台 Vite 构建通过，根与控制台类型检查及静态导入检查通过。尚未重启用户的真实 tunnel 进程或再次点击 ChatGPT Create；下一步由用户在重启后打开本机控制台、启用连接，再重试发现工具。文件读写验收仍 NOT_RUN，G0 仍关闭。
+
+## 12. 2026-09-28 Manage Refresh tools 与命令工具真实网页调用
+
+- 在现有 Local Workspace Bridge Manage 页底部执行 **Refresh tools**，不更改 ChatGPT 的工具权限级别、本机连接状态或任何 workspace grant。操作者随后确认新工具出现；本次也从插件页打开 Temporary chat，composer 中明确附带 `@Local Workspace Bridge`。
+- 实际 ChatGPT 工具回执：`workspace_list` 找到启用的 `maas_business`；随后 `command_exec` 使用 `powershell` 执行仅向 stdout 输出标记的 `Write-Output 'LWB_COMMAND_OK'`，返回 `exit_code=0`、`timed_out=false`、`output_truncated=false`、stdout=`LWB_COMMAND_OK`。该命令不读、创建、编辑或删除文件。当前 Console 仍显示只有 `maas_business` 有独立 `command_exec` grant；`本项目目录` 没有该 grant。
+- 同一条用户请求只要求一次 `workspace_list` 与一次 `command_exec`，但本机只读审计查询在 `2026-09-28T09:18:03Z` 至 `09:18:15Z` 发现了四个不同请求：`req_49`/`req_50` 为两次获准的 `workspace_list`，`req_51`/`req_52` 为两次获准的 `command_exec`。因此“新工具能被发现和执行”通过，但该回合实际发生重复工具调用；审计不存命令正文/逐次 stdout，无法仅凭审计证明两个命令参数完全相同。两个请求的会话回执均未显示文件操作；重复调用行为列为待关注，不把模型最终摘要中的“两种工具”误读成“总共只调用两次”。
+- 本次只验证了工具元数据刷新、`workspace_list` 和授权工作区上的无文件副作用 `command_exec` smoke。没有进行真实文件写入、回读、冲突、断连/重连或恢复测试；单用户/工作区成员边界也没有重新核验。因此 LWB-002 与 LWB-041 继续 **PARTIAL**，不把 command smoke 扩写成完整读—写—回读验收。
