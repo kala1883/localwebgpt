@@ -21,8 +21,8 @@
  *
  * ## 判据：形态与内容，两道都过才放行
  *
- *  - **形态**：出现盘符路径（`C:\`、`C:/`）或 UNC/设备前缀（`\\`）即判定
- *    「这是本机诊断文本」，整句换成该错误码的 `summary`。
+ *  - **形态**：出现 Windows 盘符/UNC/设备路径、POSIX 绝对路径或 `file:` URL，
+ *    即判定「这是本机诊断文本」，整句换成该错误码的 `summary`。
  *  - **内容**：`screenText` 命中**高置信度**秘密同样换掉。这里只认 certain 档，
  *    与 `packages/files/src/list.ts` 对文件名的处置一致 —— likely 档会给
  *    大量假阳性，而假阳性的代价是「错误信息里全是被替换掉的占位符」。
@@ -41,17 +41,22 @@ import type { BridgeErrorPayload } from '@lwb/contracts';
 import { screenText } from '@lwb/egress';
 
 /**
- * 本机绝对路径的形状。
+ * Windows 本机绝对路径的形状。
  *
  * 前导字符那一段是必要的：`C:/x` 里的 `C:` 只有在词首才是指盘符，
  * 否则 `abc:C:/x` 也算 —— 那会让一句话里的普通文本被整句换掉，
  * 属于假阳性方向，代价是整个错误信息失去信息量。
  */
 const LOCAL_PATH_SHAPE = /(?:^|[^A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\)/;
+// `file:` is checked separately so punctuation before the scheme (including a
+// localized colon) cannot bypass the path filter; raw POSIX paths keep a
+// narrower boundary to avoid treating ordinary URL paths as local filenames.
+const FILE_URL_PATH_SHAPE = /(?:^|[^A-Za-z0-9])file:(?:\/\/(?:localhost)?\/+|\/+)(?:[A-Za-z0-9._~+-]+\/)*[A-Za-z0-9._~+-]+/i;
+const POSIX_PATH_SHAPE = /(?:^|[\s"'`=])\/(?:[A-Za-z0-9._~+-]+\/)*[A-Za-z0-9._~+-]+/;
 
 /** 这段文本能不能出站。 */
 export function isSafeForModel(text: string): boolean {
-  if (LOCAL_PATH_SHAPE.test(text)) return false;
+  if (LOCAL_PATH_SHAPE.test(text) || FILE_URL_PATH_SHAPE.test(text) || POSIX_PATH_SHAPE.test(text)) return false;
   return !screenText(text).has_certain;
 }
 

@@ -996,8 +996,21 @@ describe('错误载荷', () => {
     assert.equal(payload.message, BRIDGE_ERRORS.NOT_FOUND.summary);
     assert.equal(isSafeForModel('D:\\本机\\boom.ts 不存在。'), false);
 
+    const fileUrl = '读取失败：file:///home/mj/private.txt';
+    const fileUrlPayload = toModelPayload(new BridgeError('NOT_FOUND', fileUrl));
+    assert.equal(fileUrlPayload.message, BRIDGE_ERRORS.NOT_FOUND.summary);
+    assert.equal(isSafeForModel(fileUrl), false);
+
+    const fileUrlDetail = toModelPayload(new BridgeError('NOT_FOUND', '工作区内没有这个路径。', {
+      path: 'file:///home/mj/private.txt',
+    }));
+    assert.equal(fileUrlDetail.message, '工作区内没有这个路径。');
+    assert.equal(fileUrlDetail.details, undefined);
+
     // 安全的那一份原样通过 —— 否则上面那条只是「这个函数总是替换」。
     const safe = toModelPayload(new BridgeError('NOT_FOUND', '工作区内没有这个路径。'));
     assert.equal(safe.message, '工作区内没有这个路径。');
+    const safeUrl = toModelPayload(new BridgeError('NOT_FOUND', '参考文档：https://example.com/files/readme'));
+    assert.equal(safeUrl.message, '参考文档：https://example.com/files/readme');
   });
 });
