@@ -2071,6 +2071,7 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 
 - 新增 Windows E2E 测试：在当前用户管道可用时启动隔离 `acquireSingleInstance` 服务，运行随包的 PowerShell 停止脚本，并核验 `STOPPING` ACK 与服务端 stop 信号；子进程使用不含 Tunnel/API/IPC 凭据的最小环境。若已有 daemon 占用用户管道，测试只 skip，不触碰已有进程。
 - 当前环境中测试按预期 skip，因为旧 daemon 仍持有当前用户管道；停止脚本的新版确认路径尚待用户在原启动终端 Ctrl+C 后实测。
+- 新增该用例后的完整 `npm run check` **PASS**：根 **1809 项 / 1795 PASS / 14 SKIP / 0 FAIL**（含这一条旧 daemon 占管道的安全 skip），Console **161/161 PASS**；类型检查、216 文件 FsGuard 与 secret scan 全通过。
 
 ## 2026-09-28：停止命令修复与完整回归
 
