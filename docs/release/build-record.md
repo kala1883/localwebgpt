@@ -1,13 +1,13 @@
 # LocalWebGPT build record
 - Evidence type: packaged-runtime evidence
-- Generated at (UTC): 2026-09-28T11:12:11.799Z
-- Source commit: `3214b3d794b3c126dcb1cf33637f2d45bc4420a6`
+- Generated at (UTC): 2026-09-28T12:36:27.891Z
+- Source commit: `ed3e23a9707502698ce7aa61214dad3764f4403e`
 - Source working tree: clean
-- Source manifest SHA-256: `cb5d26fa4f4bb65ff4b916083b07c9f17ad15143bd8b1f3a29bfddb8bcc21e8b` (448 files; excludes generated `docs/release/` evidence)
+- Source manifest SHA-256: `21599ab4798ef46cd340d0337a6f38cbec5cdc5d322b660f1290d67805d5bf91` (449 files; excludes generated `docs/release/` evidence)
 - Runtime package: `local-workspace-bridge@0.1.0`
-- Runtime payload manifest SHA-256: `e88ef2bf2a9436b025039282983813fc1bc8f86b24e561b2865a7520f0f5c4fd` (9894 files; excludes generated release evidence)
+- Runtime payload manifest SHA-256: `7b9e57f6291c91cd214075d0ad9b25633a3cb3c9aa11c104d18127ee244e1a31` (9894 files; excludes generated release evidence)
 - package-lock.json SHA-256: `62de222f40ac5c649fd41f8eca3be52a9687a84a159e963cb2ce751fa80ec3a5`
-- SPDX SBOM SHA-256: `123d22278793d7e88e7310a2d01f7bd16adc4c11037a1b15fe803376ab74becf` (303 packages)
+- SPDX SBOM SHA-256: `f2959dd82c59a50a69d4819951a7127f69707b8b70811beafdb0125cdf83e5c2` (303 packages)
 - Node.js: `v22.20.0`; npm: `10.9.3`
 - tunnel-client version: `v0.0.15`
 - verified tunnel-client archive SHA-256: `3b53133a1e24d43f63088d843860cb1701a4c3ed6390de2e19f69089e43bddc1`
