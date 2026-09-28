@@ -32,6 +32,7 @@ import {
   Repositories,
   closeDatabase,
   migrationChecksum,
+  migrationChecksumMatches,
   openDatabase,
   withImmediateTransaction,
   type OpenDatabaseResult,
@@ -141,6 +142,41 @@ describe('LWB-006 冻结枚举与契约一致', () => {
   });
 });
 
+describe('LWB-006 migration checksum compatibility', () => {
+  it('ignores SQL formatting whitespace but preserves quoted content', () => {
+    const formatted = {
+      version: 98,
+      name: 'checksum_test',
+      statements: [`CREATE TABLE sample (
+  "col name" TEXT DEFAULT 'a  b'
+)`],
+    } as const;
+    const reformatted = {
+      ...formatted,
+      statements: [`CREATE/* layout note */ TABLE sample (
+        "col name"   TEXT DEFAULT 'a  b'
+ )`],
+    } as const;
+    const changedLiteral = {
+      ...reformatted,
+      statements: [`CREATE/* layout note */ TABLE sample (
+        "col name"   TEXT DEFAULT 'a b'
+ )`],
+    } as const;
+    const changedQuotedIdentifier = {
+      ...reformatted,
+      statements: [`CREATE/* layout note */ TABLE sample (
+        "col  name"   TEXT DEFAULT 'a  b'
+ )`],
+    } as const;
+
+    assert.equal(migrationChecksum(formatted), migrationChecksum(reformatted));
+    assert.notEqual(migrationChecksum(reformatted), migrationChecksum(changedLiteral));
+    assert.notEqual(migrationChecksum(reformatted), migrationChecksum(changedQuotedIdentifier));
+  });
+
+});
+
 describe('LWB-006 打开与迁移', () => {
   let dir: string;
 
@@ -202,6 +238,33 @@ describe('LWB-006 打开与迁移', () => {
       versions.map((v) => v.version),
       MIGRATIONS.map((m) => m.version),
     );
+  });
+
+  it('仍能打开保存了 v8 原始文本 checksum 的旧数据库', () => {
+    const file = path.join(dir, 'legacy-v8-checksum.db');
+    const created = openDatabase({ path: file });
+    closeDatabase(created.db);
+
+    const raw = new Database(file);
+    raw
+      .prepare('UPDATE schema_migrations SET checksum = ? WHERE version = 8')
+      .run('72ad9e20b921ed0860bb3bbf6805c706c9aa5c0a0c4f8291f0fc5dc26aaaeae7');
+    raw.close();
+
+    const v8 = MIGRATIONS.find((migration) => migration.version === 8);
+    assert.ok(v8);
+    assert.equal(
+      migrationChecksumMatches(v8, '72ad9e20b921ed0860bb3bbf6805c706c9aa5c0a0c4f8291f0fc5dc26aaaeae7'),
+      true,
+    );
+    assert.equal(migrationChecksumMatches(v8, '0'.repeat(64)), false);
+    const reopened = openDatabase({ path: file });
+    try {
+      assert.equal(reopened.schema_version, KNOWN_SCHEMA_VERSION);
+      assert.deepEqual(reopened.applied_migrations, []);
+    } finally {
+      closeDatabase(reopened.db);
+    }
   });
 
   it('v1 → v2 表重建：既有数据必须逐列存活，外键不得悬空', () => {

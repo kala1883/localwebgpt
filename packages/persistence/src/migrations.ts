@@ -8,10 +8,11 @@
  *
  * ## 为什么这里的枚举值是**字面量**，而不是从 @lwb/contracts 引用
  *
- * 已发布的迁移必须是**不可变文本**：它的 sha256 在首次应用时落库，
- * 之后每次打开都重新计算比对。如果迁移 SQL 里插入了来自契约文件的活值，
- * 那么将来契约新增一个状态，v1 的迁移文本就变了，所有既有数据库都会
- * 在启动时因校验和不符而被拒绝 —— 一个纯类型层面的改动会变成数据不可用。
+ * 已发布迁移的**语义**必须不可变：其版本、名称与 SQL 语义 checksum 在首次应用时落库，
+ * 之后每次打开都重新计算比对。checksum 规范化 SQL 引号外的格式空白和注释，
+ * 但保留字符串与引用标识符中的内容；纯排版调整不会让既有数据库无法启动，
+ * 而 SQL 语义改动仍会被拒绝。如果迁移引用契约文件里的活值，契约新增状态仍可能
+ * 改变旧迁移的语义，因此这里继续冻结字面量，并由测试检查契约漂移。
  *
  * 因此本文件冻结字面量，另用测试（tests/unit/persistence.test.ts）
  * 断言这些冻结集合与契约当前定义一致：漂移由测试发现，而不是由用户发现。
@@ -851,7 +852,7 @@ export const MIGRATIONS: readonly Migration[] = [
      *
      * 这台机器从来没有被暂停过 —— 与「暂停过、已恢复」不同（那一行会留下
      * `updated_at`）。迁移**不播种**初始行：一条播种用的语句需要一个时间戳，
-     * 而迁移文本是冻结的（它的 sha256 存在 `schema_migrations` 里、
+     * 而迁移定义是冻结的（它的语义 checksum 存在 `schema_migrations` 里、
      * 每次打开都要比对），把某个具体时刻冻进迁移里会是一句关于这台机器的
      * 假话。因此「没有行」就是它的初值，由 `ServicePauseRepo.current()` 表达。
      *
@@ -891,7 +892,7 @@ export const MIGRATIONS: readonly Migration[] = [
          paused_at  TEXT,
          updated_at TEXT NOT NULL,
          CHECK ((paused = 1) = (paused_at IS NOT NULL))
-      )`,
+       )`,
     ],
   },
   {
@@ -976,13 +977,102 @@ export const MIGRATIONS: readonly Migration[] = [
 export const KNOWN_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
 
 /**
- * 迁移文本的校验和。
- *
- * 覆盖版本、名称与全部语句：只要已发布的迁移被改动一个字符，
- * 既有数据库在下次打开时就会因校验和不符而被拒绝，
- * 而不是带着不确定的模式继续跑。
+ * 将 SQL 格式空白规范化；引号内容原样保留，SQL 注释作为空白处理。
+ * 这是有意采用的轻量词法处理：迁移 checksum 不依赖缩进、换行或注释排版，
+ * 但字符串字面量及引用标识符任何变化仍会改变 checksum。
  */
-export function migrationChecksum(migration: Migration): string {
+function canonicalizeSql(sql: string): string {
+  let result = '';
+  let pendingSpace = false;
+  let index = 0;
+
+  const append = (text: string): void => {
+    if (pendingSpace && result.length > 0) result += ' ';
+    result += text;
+    pendingSpace = false;
+  };
+
+  while (index < sql.length) {
+    const character = sql[index]!;
+    if (/\s/.test(character)) {
+      pendingSpace = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === '-' && sql[index + 1] === '-') {
+      index += 2;
+      while (index < sql.length && sql[index] !== '\n' && sql[index] !== '\r') index += 1;
+      pendingSpace = true;
+      continue;
+    }
+
+    if (character === '/' && sql[index + 1] === '*') {
+      const commentEnd = sql.indexOf('*/', index + 2);
+      if (commentEnd < 0) throw new Error('迁移 SQL 包含未闭合的块注释。');
+      index = commentEnd + 2;
+      pendingSpace = true;
+      continue;
+    }
+
+    if (character === "'" || character === '"' || character === '`' || character === '[') {
+      const start = index;
+      const closing = character === '[' ? ']' : character;
+      index += 1;
+      while (index < sql.length) {
+        if (sql[index] !== closing) {
+          index += 1;
+          continue;
+        }
+        if (closing !== ']' && sql[index + 1] === closing) {
+          index += 2;
+          continue;
+        }
+        index += 1;
+        break;
+      }
+      append(sql.slice(start, index));
+      continue;
+    }
+
+    append(character);
+    index += 1;
+  }
+
+  return result.trim();
+}
+
+function legacyMigrationChecksum(migration: Migration): string {
   const payload = `${migration.version}\u0000${migration.name}\u0000${migration.statements.join('\u0000')}`;
   return createHash('sha256').update(payload, 'utf8').digest('hex');
+}
+
+/** v8 首次发布时的原始文本 checksum；只用于兼容其一格缩进调整前的现有状态库。 */
+const LEGACY_CHECKSUM_ALIASES: ReadonlyMap<number, readonly string[]> = new Map([
+  [8, ['72ad9e20b921ed0860bb3bbf6805c706c9aa5c0a0c4f8291f0fc5dc26aaaeae7']],
+]);
+
+/**
+ * 迁移语义 checksum v2。排版不参与签名，版本、名称、语句顺序与 SQL 内容参与签名。
+ * JSON 数组与域分隔前缀避免字段拼接歧义，也使 checksum 算法可显式升级。
+ */
+export function migrationChecksum(migration: Migration): string {
+  const payload = JSON.stringify([
+    migration.version,
+    migration.name,
+    migration.statements.map(canonicalizeSql),
+  ]);
+  return createHash('sha256')
+    .update('localwebgpt:migration-checksum:v2\u0000', 'utf8')
+    .update(payload, 'utf8')
+    .digest('hex');
+}
+
+/** 接受当前规范化 checksum，以及旧版已发布记录的原始文本 checksum。 */
+export function migrationChecksumMatches(migration: Migration, candidate: string): boolean {
+  return (
+    candidate === migrationChecksum(migration) ||
+    candidate === legacyMigrationChecksum(migration) ||
+    (LEGACY_CHECKSUM_ALIASES.get(migration.version)?.includes(candidate) ?? false)
+  );
 }

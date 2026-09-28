@@ -19,7 +19,13 @@ import { existsSync, renameSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 
-import { KNOWN_SCHEMA_VERSION, MIGRATIONS, migrationChecksum, type Migration } from './migrations.ts';
+import {
+  KNOWN_SCHEMA_VERSION,
+  MIGRATIONS,
+  migrationChecksum,
+  migrationChecksumMatches,
+  type Migration,
+} from './migrations.ts';
 
 /** better-sqlite3 以 `export =` 导出类；用实例类型而不是命名空间查询，避免导入形态依赖。 */
 export type SqliteDatabase = InstanceType<typeof Database>;
@@ -112,8 +118,8 @@ function assertAppliedChecksums(applied: readonly AppliedMigrationRow[]): void {
       });
     }
     const expected = migrationChecksum(migration);
-    if (expected !== row.checksum) {
-      throw storageError('已应用的迁移文本与当前程序不一致，已拒绝打开以免模式漂移。', {
+    if (!migrationChecksumMatches(migration, row.checksum)) {
+      throw storageError('已应用迁移的校验和与当前程序不一致，已拒绝打开以免模式漂移。', {
         version: row.version,
         recorded_checksum: row.checksum,
         computed_checksum: expected,

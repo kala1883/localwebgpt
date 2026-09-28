@@ -45,7 +45,7 @@ snapshot_store_max_bytes=536870912
 
 当本机已有较旧 schema 的状态库时，daemon 在单实例锁与受保护目录检查之后、打开迁移连接之前，会：
 
-1. 只读核对迁移记录与校验和；遇到未知/不一致 schema 时拒绝继续。
+1. 只读核对迁移记录与校验和。当前算法会规范化 SQL 引号外的格式空白与注释，因此排版调整不会阻断升级；SQL 字符串/引用标识符变化、未知版本或不匹配校验和仍会拒绝继续。旧版原始文本 checksum（包括 v8 一格缩进调整前的历史值）也在兼容表中接受。
 2. 若存在 `QUEUED`、`VALIDATING`、`APPLYING` 或 `RECOVERY_REQUIRED` 操作，拒绝升级；先用兼容版本在本机完成恢复，再退出旧进程。
 3. 否则用 SQLite 在线备份 API 在 `%LOCALAPPDATA%\LocalWorkspaceBridge\db` 生成快照（涵盖 WAL 中已提交内容），检查 `quick_check` 和迁移元数据，再运行 schema 迁移。只有验证过的快照才会以 `.pre-migration-...sqlite` 名称保留。
 

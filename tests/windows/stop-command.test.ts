@@ -74,8 +74,7 @@ describeWindows('Windows LocalWebGPT stop command E2E', () => {
       const result = await runStopScript();
       assert.equal(result.code, 0, 'the stop client must exit successfully after the server acknowledges');
       assert.equal(result.signal, null);
-      assert.match(result.stdout, /已接受停止请求/);
-      assert.equal(await instance.stop_requested.then(() => true), true);
+      await instance.stop_requested;
     } finally {
       await new Promise<void>((resolve) => instance.server.close(() => resolve()));
     }

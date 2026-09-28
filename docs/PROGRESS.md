@@ -2079,3 +2079,9 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 实测当前仍运行的 daemon 来自旧 `feat/lwb-p0-p2` checkout；该版本没有 `LWB_STOP` 协议。停止脚本没有确认并未停止此旧进程，端口仍由原进程持有。为避免强杀，本次未绕过保护；需在原启动终端按 Ctrl+C 后才能由 `main` 版本重新启动并验收新版停止命令。
 - `release-evidence` 单测改为对 JSON 规范化 CRLF/LF 后校验 SBOM SHA-256，避免 Windows checkout 行尾转换造成错误失败；控制台断言同步最新 grant 文案。
 - 完整 `npm run check` **PASS**：根测试 **1808 项 / 1795 PASS / 13 SKIP / 0 FAIL**，Console **161/161 PASS**；类型检查、FsGuard（216 文件）、工作树秘密扫描通过。真实 ChatGPT 网页端读写/删除验收仍未执行。
+
+## 2026-09-28：迁移 checksum 格式兼容
+
+- 保留 v8 `service_pause` SQL 的有意缩进变更；checksum 升级为带算法域标记的 v2 语义哈希，规范化引号外空白与注释，同时保留字符串及引用标识符内部字节。纯格式重排不改变 checksum，SQL 内容变化仍不匹配。
+- 兼容旧数据库的原始文本哈希：按当前源码接受未改写迁移的旧哈希，并显式登记 v8 原始发布 checksum `72ad9e20…aaaeae7`；旧库无需就地改写 `schema_migrations`。未知 checksum 继续 fail-closed。
+- 定向数据库升级/持久化测试 **49/49 PASS**；全仓 `npm run check` **PASS**：根测试 **1811 项 / 1797 PASS / 14 SKIP / 0 FAIL**，Console **161/161 PASS**，根与 Console 类型检查、FsGuard 216 文件扫描、secret scan 全通过。所有数据库测试均使用临时测试库，未触碰用户状态库。

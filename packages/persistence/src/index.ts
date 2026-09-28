@@ -32,6 +32,7 @@ export {
   KNOWN_SCHEMA_VERSION,
   MIGRATIONS,
   migrationChecksum,
+  migrationChecksumMatches,
   type Migration,
 } from './migrations.ts';
 
