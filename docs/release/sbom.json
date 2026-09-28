@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "local-workspace-bridge@0.1.0",
-  "documentNamespace": "http://spdx.org/spdxdocs/local-workspace-bridge-0.1.0-71a34a3f-3744-415a-a559-3f4f875aa2fa",
+  "documentNamespace": "http://spdx.org/spdxdocs/local-workspace-bridge-0.1.0-a18ef713-2596-4ef5-9ddf-3e0af5711c89",
   "creationInfo": {
-    "created": "2026-09-28T05:40:55.203Z",
+    "created": "2026-09-28T06:06:43.807Z",
     "creators": [
       "Tool: npm/cli-10.9.3"
     ]
