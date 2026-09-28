@@ -18,7 +18,7 @@
 
 | 验收面 | 状态 | 证据/缺口 |
 | --- | --- | --- |
-| 类型、Console、单元、安全和 Windows 自动化 | PASS | 最新 `npm run check`：根测试 1,838 项 / **1,823 PASS、15 SKIP、0 FAIL**；Console **168/168 PASS**；根/Console 类型检查、219 文件 FsGuard 导入扫描与 secret scan 全通过。opt-in LWB-044 单机基准另行 **1/1 PASS**；小时级 soak、睡眠唤醒等长时环境项仍未验收。 |
+| 类型、Console、单元、安全和 Windows 自动化 | PASS | 最新 `npm run check`：根测试 1,839 项 / **1,824 PASS、15 SKIP、0 FAIL**；Console **168/168 PASS**；根/Console 类型检查、219 文件 FsGuard 导入扫描与 secret scan 全通过。opt-in LWB-044 单机基准另行 **1/1 PASS**；小时级 soak、睡眠唤醒等长时环境项仍未验收。 |
 | Tunnel 本机健康/就绪 | PASS（本机采样） | 本机 `127.0.0.1:8080/healthz` 与 `/readyz` 返回 HTTP 200。只能证明运行中的 tunnel-client 就绪，不等于 ChatGPT 调用成功。 |
 | LocalWebGPT 控制面会话保护 | PASS（本机采样） | 无会话访问 `/api/status` 返回 401，符合需本机 Console 会话的保护行为。 |
 | LWB-043 受控目标场景 | PASS（受控副本） | 最新 `npm run acceptance:lwb043`：真实 NTFS + handler；单文件编辑/创建直接 `APPLIED`，随后 MCP `file_read` 回读哈希与回执一致；外部 canary、Git index、HEAD 与源副本不变。仅四个样例文件复制到临时仓库。详见 [`../evidence/user-journeys.md`](../evidence/user-journeys.md)。 |
