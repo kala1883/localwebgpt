@@ -2067,6 +2067,11 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 新 `sbom.json` 与 `build-record.md` 已同步到仓库并由 release-evidence **3/3 PASS**、secret scan 验证。Node `v22.20.0` 对 `abbrev@5.0.0` / `nopt@10.0.1` 有 engine-range warning；构建退出码仍为 0。临时 runtime 与当前 source commit 精确绑定，路径固定，不要移动。
 - LWB-045 仍为 PARTIAL：尚无签名安装器、独立供应链审查或实际安装/升级验收。ChatGPT 网页端工具发现与读写/回读仍 NOT_RUN；旧 daemon 需在原启动终端退出后，才能让当前 `main` 版本接管本地隧道端口。
 
+## 2026-09-28：停止命令真实管道测试
+
+- 新增 Windows E2E 测试：在当前用户管道可用时启动隔离 `acquireSingleInstance` 服务，运行随包的 PowerShell 停止脚本，并核验 `STOPPING` ACK 与服务端 stop 信号；子进程使用不含 Tunnel/API/IPC 凭据的最小环境。若已有 daemon 占用用户管道，测试只 skip，不触碰已有进程。
+- 当前环境中测试按预期 skip，因为旧 daemon 仍持有当前用户管道；停止脚本的新版确认路径尚待用户在原启动终端 Ctrl+C 后实测。
+
 ## 2026-09-28：停止命令修复与完整回归
 
 - 修正 `Stop-LocalWebGPT.ps1` 在 Windows 命名管道上使用不受支持的 `ReadTimeout` 的问题，改为带 3 秒总期限的异步读取，并严格要求 `STOPPING` 回执；没有回执时不尝试终止任何进程。
