@@ -2043,4 +2043,6 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - Console 变更详情已加入删除类型与文件数统计；中英文 README 和 ADR 同步为单次直接操作与测试步骤。Windows 真 NTFS handler 用例直接删除文本文件和含 NUL 的二进制文件（没有先 `file_read`），验证状态、空文件目标哈希、路径缺失及二进制差异不泄露正文；两条场景均通过。
 - 崩溃恢复也已接通：删除落盘后、删除日志写入前退出，重启会把“路径不存在”核验为目标状态；混合态下经本地恢复授权会用快照 `CREATE_NEW` 还原已删文件并回读核对，恢复对象会有新的 NTFS file id。两个流程均有真 NTFS 故障边界测试。
 - 当前树完整检查：`npm run check` 根测试 **1793 PASS / 0 FAIL / 13 SKIP**，Console **160/160 PASS**；根与 Console 类型检查、FsGuard 扫描（216 个文件）及 secret scan 全通过。
-- 仍未完成：真实 ChatGPT 网页端的工具发现/删除验收、正式 Windows runtime 重构建与供应链独立审查；用户发起的 `change_revert_prepare` 尚不自动还原已删除文件（apply 失败后的自动快照恢复已覆盖）。这些不计为已通过。
+- LWB-045 构建证据：从干净主分支提交 `c0f4716` 成功构建 Windows x64 runtime 到 `%TEMP%\LocalWebGPT-runtime-c0f4716`；构建包含锁定依赖安装、Console production build、FsGuard 导入扫描、SQLite native smoke、tunnel-client/cloudflared/SQLite 哈希核对，以及 303 包 SPDX 与 payload fingerprint。`.env` 未打包。两项 npm 子依赖报告 Node engine warning（需较新的 22.x 补丁版本），但完整构建以退出码 0 完成；正式发布仍需版本升级评估。
+- `docs/release/sbom.json` 与 `build-record.md` 已更新为该 packaged-runtime 证据；定向 release-evidence **3/3 PASS**，工作树 secret scan 通过。LWB-045 仍 PARTIAL：没有签名安装器、独立供应链审查或实际安装/升级验收。
+- 仍未完成：真实 ChatGPT 网页端工具发现/读写/删除验收、非实现者安全签署与完整 V1 发布。用户发起的 `change_revert_prepare` 尚不自动还原已删除文件（失败批次及崩溃后的本地恢复已覆盖）；V1.1/V2 任务继续保留在原计划状态。这些不计为已通过。

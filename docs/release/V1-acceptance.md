@@ -26,7 +26,7 @@
 | ChatGPT 网页 MCP discovery、读取和写入回读 | NOT_RUN | 当前没有从真实 ChatGPT 会话采集完整工具序列、回执与回读证据。请依照 [`../operator-runbook.md`](../operator-runbook.md) §6 执行。 |
 | 独立安全审查 | NOT_RUN | `docs/evidence/security-review.md` 是实现者自查与自动回归，不是非实现者签署。 |
 | LWB-038 长时间配额/磁盘压力、LWB-039 睡眠唤醒、LWB-044 soak/冷缓存 | PARTIAL | 已有有界配额、模拟/定向 Windows 与基准证据；小时级 soak、睡眠唤醒和真冷缓存未跑。 |
-| Windows 安装、自动升级/卸载、代码签名 | PARTIAL | 可构建固定路径 runtime；迁移前快照和手工保留状态卸载已记录；没有签名安装器或自动卸载器。 |
+| Windows 安装、自动升级/卸载、代码签名 | PARTIAL | 已在本机从干净提交构建固定路径 Windows x64 runtime，并生成 303 包 SPDX 与绑定 source commit 的 payload 指纹；没有签名安装器、自动升级/卸载器或独立供应链签署。 |
 | 公开插件分发 | OUT OF SCOPE | Secure MCP Tunnel 支持私有开发连接；公开插件需要稳定公网 HTTPS MCP endpoint 与单独提审，Tunnel 不满足公开分发要求。 |
 
 ## 操作入口
