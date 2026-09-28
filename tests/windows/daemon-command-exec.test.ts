@@ -60,12 +60,13 @@ describe('command_exec MCP tool', () => {
         workspace_id: harness.workspace.id,
         idempotency_key: 'idem-command-filter-test-0001',
         shell: 'powershell',
-        command: "Write-Output 'C:\\private\\outside.txt'; Write-Output '/home/mj/private.txt'",
+        command: "Write-Output 'C:\\private\\outside.txt'; Write-Output '/home/mj/private.txt'; Write-Output 'file:///home/mj/private.txt'",
       }));
       assert.equal(result.exit_code, 0);
       assert.equal(result.output_withheld, true);
       assert.doesNotMatch(JSON.stringify(result), /C:\\private/);
       assert.doesNotMatch(JSON.stringify(result), /\/home\/mj/);
+      assert.doesNotMatch(JSON.stringify(result), /file:\/\/\/home\/mj/);
     } finally {
       harness.close();
     }

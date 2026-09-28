@@ -636,7 +636,7 @@ type CommandCancellationCode =
   | 'RECOVERY_REQUIRED'
   | 'STORAGE_UNAVAILABLE';
 
-const POSIX_ABSOLUTE_PATH_SHAPE = /(?:^|[\s"'`=])\/(?:[A-Za-z0-9._~+-]+\/)*[A-Za-z0-9._~+-]+/;
+const POSIX_ABSOLUTE_PATH_SHAPE = /(?:^|[\s"'`=])(?:file:\/\/(?:localhost)?\/+|file:\/+|\/)(?:[A-Za-z0-9._~+-]+\/)*[A-Za-z0-9._~+-]+/i;
 
 function commandOutputIsSafe(text: string): boolean {
   return isSafeForModel(text) && !POSIX_ABSOLUTE_PATH_SHAPE.test(text);
