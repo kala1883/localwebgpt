@@ -32,8 +32,12 @@ describe('LWB-045 release evidence artifacts', () => {
     const lockfileHash = createHash('sha256')
       .update(readFileSync(path.resolve(import.meta.dirname, '../../package-lock.json')))
       .digest('hex');
+    // Git may check this tracked JSON out with CRLF on Windows although the
+    // build record was generated from LF bytes. Hash the canonical text so the
+    // evidence remains stable across checkout line-ending conversions.
+    const sbomCanonical = readFileSync(path.join(releaseRoot, 'sbom.json'), 'utf8').replace(/\r\n/g, '\n');
     const sbomHash = createHash('sha256')
-      .update(readFileSync(path.join(releaseRoot, 'sbom.json')))
+      .update(sbomCanonical, 'utf8')
       .digest('hex');
 
     assert.match(record, /Source commit: `(?:[0-9a-f]{40}|unavailable)`/);

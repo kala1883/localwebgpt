@@ -2060,3 +2060,10 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 修正修改集详情页的旧“批准只排队”提示；现在明确说明 `change_apply` 会在调用时复核当前 grant。文档、错误说明和执行状态说明同步使用“执行授权”语义。
 - `file_edit` 必须使用 `file_read` 签发的读取票据，因此工具清单仅在同一 workspace 同时获授 `read` 与 `propose` 时暴露它；创建、删除和授权修改集执行仅依赖 `propose`。控制台和中英文 README 已说明此差异。
 - 验证：根/Console 类型检查通过；Console **161/161**、工具目录单测 **37/37**、MCP adapter E2E **10/10**、真实 NTFS grant 写入 **13/13**、授权/查询/恢复相关单测 **76/76** 通过。真实 ChatGPT 网页端验收仍未执行。
+
+## 2026-09-28：停止命令修复与完整回归
+
+- 修正 `Stop-LocalWebGPT.ps1` 在 Windows 命名管道上使用不受支持的 `ReadTimeout` 的问题，改为带 3 秒总期限的异步读取，并严格要求 `STOPPING` 回执；没有回执时不尝试终止任何进程。
+- 实测当前仍运行的 daemon 来自旧 `feat/lwb-p0-p2` checkout；该版本没有 `LWB_STOP` 协议。停止脚本没有确认并未停止此旧进程，端口仍由原进程持有。为避免强杀，本次未绕过保护；需在原启动终端按 Ctrl+C 后才能由 `main` 版本重新启动并验收新版停止命令。
+- `release-evidence` 单测改为对 JSON 规范化 CRLF/LF 后校验 SBOM SHA-256，避免 Windows checkout 行尾转换造成错误失败；控制台断言同步最新 grant 文案。
+- 完整 `npm run check` **PASS**：根测试 **1808 项 / 1795 PASS / 13 SKIP / 0 FAIL**，Console **161/161 PASS**；类型检查、FsGuard（216 文件）、工作树秘密扫描通过。真实 ChatGPT 网页端读写/删除验收仍未执行。

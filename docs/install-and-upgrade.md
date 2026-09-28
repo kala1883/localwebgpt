@@ -37,7 +37,7 @@ snapshot_store_max_bytes=536870912
 
 可用 `-ValidateOnly` 单独检查 `.env` 格式；该模式不启动 daemon 或隧道，也不显示凭据。
 
-停止已运行服务时，在另一个 PowerShell 窗口执行源码目录的 `.\packaging\windows\Stop-LocalWebGPT.ps1`，或 runtime 根目录的 `.\Stop-LocalWebGPT.ps1`；等待启动窗口返回提示符。命令不按 PID 杀进程；服务先拒绝新操作并等待在途处理器结束。若停在一次工具调用期间，重连后查询 `change_get` 确认状态，勿盲目重复应用。
+停止已运行服务时，在另一个 PowerShell 窗口执行源码目录的 `.\packaging\windows\Stop-LocalWebGPT.ps1`，或 runtime 根目录的 `.\Stop-LocalWebGPT.ps1`；等待启动窗口返回提示符。命令不按 PID 杀进程；服务先拒绝新操作并等待在途处理器结束。若脚本未收到 `STOPPING` 确认（例如 daemon 是不支持管道停止协议的旧版），不要强杀；回到启动时的原终端按 Ctrl+C 并等待退出。若停在一次工具调用期间，重连后查询 `change_get` 确认状态，勿盲目重复应用。
 
 ## 升级与卸载限制
 

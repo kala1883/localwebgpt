@@ -26,15 +26,25 @@ try {
     exit 0
   }
 
-  $pipeClient.ReadTimeout = 3000
   $requestBytes = [System.Text.Encoding]::UTF8.GetBytes("LWB_STOP`n")
   $pipeClient.Write($requestBytes, 0, $requestBytes.Length)
   $pipeClient.Flush()
 
   $reply = [System.Text.StringBuilder]::new()
+  $readBuffer = [byte[]]::new(1)
+  $readDeadline = [DateTime]::UtcNow.AddSeconds(3)
   while ($reply.Length -lt 32) {
-    $nextByte = $pipeClient.ReadByte()
-    if ($nextByte -lt 0 -or $nextByte -eq 10) { break }
+    $remainingMilliseconds = [int][Math]::Floor(($readDeadline - [DateTime]::UtcNow).TotalMilliseconds)
+    if ($remainingMilliseconds -le 0) {
+      throw 'LocalWebGPT 未在 3 秒内确认停止请求；没有终止任何进程。'
+    }
+    $readTask = $pipeClient.ReadAsync($readBuffer, 0, 1)
+    if (-not $readTask.Wait($remainingMilliseconds)) {
+      throw 'LocalWebGPT 未在 3 秒内确认停止请求；没有终止任何进程。'
+    }
+    $readCount = $readTask.Result
+    if ($readCount -le 0 -or $readBuffer[0] -eq 10) { break }
+    $nextByte = $readBuffer[0]
     if ($nextByte -ne 13) { [void]$reply.Append([char]$nextByte) }
   }
   if ($reply.ToString() -cne 'STOPPING') {

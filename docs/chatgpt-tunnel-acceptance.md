@@ -28,7 +28,7 @@ npm run chatgpt:local
 
 启动器会先构建本地控制台，再启动 daemon；随后用同一组参数执行 `tunnel-client doctor`，通过后以前台方式启动隧道。若隧道子进程意外退出，启动器在原 daemon 内按 1、2、5、10、30、60 秒（封顶）退避，再运行 doctor；doctor 通过才重新启动隧道，doctor 失败则停止并要求操作者处理，避免凭据错误时无限空转。恢复过程中不会重建 daemon 或写执行器。runtime key 只在 tunnel-client 所需的环境里；它启动 MCP 子进程时，薄启动入口会先移除 runtime key、`OPENAI_API_KEY` 和 tunnel ID，再加载适配器。daemon 只向 tunnel-client 提供 MCP adapter 专属 IPC 凭据，不提供控制台 audience 凭据；秘密不进入命令行、配置文件或启动日志。Ctrl+C 用于结束前台隧道与本地服务。
 
-也可从另一个 PowerShell 窗口请求停止 LocalWebGPT：源码目录运行 `.\packaging\windows\Stop-LocalWebGPT.ps1`，打包 runtime 根目录运行 `.\Stop-LocalWebGPT.ps1`。命令向本机控制管道发送固定停止请求，不按进程名或 PID 终止；服务会拒绝新操作、等在途处理器结束后关闭。若恰好在工具调用中停止，ChatGPT 可能收不到该次回执；重连后用 `change_get` 核对状态，不能盲目重复应用。Windows 下 Node 会强制终止本启动器自己创建的 tunnel-client 子进程，daemon 仍会等待已进入的操作结束后再关闭状态库。
+也可从另一个 PowerShell 窗口请求停止 LocalWebGPT：源码目录运行 `.\packaging\windows\Stop-LocalWebGPT.ps1`，打包 runtime 根目录运行 `.\Stop-LocalWebGPT.ps1`。命令向本机控制管道发送固定停止请求，不按进程名或 PID 终止；服务会拒绝新操作、等在途处理器结束后关闭。若脚本未收到 `STOPPING` 确认（例如 daemon 是不支持管道停止协议的旧版），不要强杀；回到启动时的原终端按 Ctrl+C 并等待退出。若恰好在工具调用中停止，ChatGPT 可能收不到该次回执；重连后用 `change_get` 核对状态，不能盲目重复应用。Windows 下 Node 会强制终止本启动器自己创建的 tunnel-client 子进程，daemon 仍会等待已进入的操作结束后再关闭状态库。
 
 daemon 启动后，从一次性本地控制台链接进入 **ChatGPT 连接** 页，选中“我确认……”并点击“在本机启用 ChatGPT 连接”；这一步只启用模型侧连接，不创建工作区授权。
 

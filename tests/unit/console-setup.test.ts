@@ -372,7 +372,8 @@ describe('C 组 · 文件修改能力状态（验收状态只作诊断）', () =
     const open = proposeRisk(writeGate({ gates: ALL_PASS, flags: FLAGS_ON }), true);
 
     assert.match(closed, /本机服务的目录写入功能当前不可用/);
-    assert.match(open, /直接创建和编辑文本文件/);
+    assert.match(open, /直接创建\/删除普通文件并应用修改集/);
+    assert.match(open, /编辑已有文件还需同时授予“读取文件内容”/);
     assert.match(open, /不会逐次等待本机批准/);
     // 风险说明直接说清本地目录 grant 是权限来源。
     assert.notEqual(closed, open);
