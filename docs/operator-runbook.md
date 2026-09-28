@@ -78,10 +78,10 @@ Invoke-WebRequest http://127.0.0.1:8080/readyz
 
 1. 通常先登记一个**专用测试目录**（例如 `D:\LWB-Test`）。若你明确选择 `C:\` / `D:\` 这样的卷根，权限范围就是该卷内的所有可访问路径，会覆盖该卷上的窄目录授权。
 2. 对刚创建的 ChatGPT 连接勾选所需工具：读取、搜索、Git 只读、文件修改。只开实际需要的项。
-3. 保存授权。每个目录的工具 grant 是实际权限来源；`file_create` / `file_edit` 在同一 MCP 调用内直接写入，多文件修改用 `change_prepare` → `change_apply`，都不再要求每次操作去 Console 点击批准。
+3. 保存授权。每个目录的工具 grant 是实际权限来源；`file_create` / `file_edit` / `file_delete` 在同一 MCP 调用内直接执行，多文件修改用 `change_prepare` → `change_apply`，都不再要求每次操作去 Console 点击批准。删除只需路径；daemon 在本次调用内保存完整基线快照（单文件上限 16 MiB）。
 4. 删除/撤销 workspace grant 或暂停连接后，再次调用应被拒绝。出现不确定结果时先查 Console 的更改/恢复页，不要盲目重试写入。
 
-当前 MCP 不提供任意 Shell、文件删除、Git commit/push 或工作区外路径访问。关键路径/秘密文件拒绝、冲突检查、快照、审计、回读校验与紧急暂停仍保留。
+当前 MCP 不提供任意 Shell、Git commit/push 或工作区外路径访问。`file_delete` 可删除普通文件，但秘密/凭据硬拒绝路径、多硬链接对象及越出授权根的路径仍拒绝；关键路径拒绝、冲突检查、快照、审计、回读校验与紧急暂停仍保留。
 
 ## 6. 建议的网页验收顺序
 
@@ -92,8 +92,9 @@ Invoke-WebRequest http://127.0.0.1:8080/readyz
 3. “读取 `README.md` 并只总结第一段。”预期：`file_read`；内容必须来自工具回执。
 4. “在此工作区创建 `acceptance-note.txt`，内容只有 `saved by workspace grant`，现在直接保存。”预期：`file_create` 返回 `state=APPLIED` 和回执。之后再要求读取该文件，并与磁盘字节核对。
 5. 对测试文本文件先读取，再要求把某行的唯一标记改掉。预期：`file_edit` 使用该次读取的 `read_token` 和 SHA-256，返回 `APPLIED`；再次 `file_read` 并核对摘要。
-6. 若要测多文件，明确要求修改两个测试文件。预期：`change_prepare` 后对同一 `change_id` 调 `change_apply`；成功必须有 `APPLIED` 回执。不要在真实仓库首次试写。
-7. 撤销测试目录的“文件修改”授权，再请求一次写入；预期拒绝且文件字节不变。
+6. 在同一临时目录新建一个 disposable 文本文件，直接请求 `file_delete`（不要先 `file_read`）。预期：返回 `APPLIED`，并确认路径不存在；二进制测试应仅查看 metadata-only 删除差异。
+7. 若要测多文件，明确要求修改两个测试文件。预期：`change_prepare` 后对同一 `change_id` 调 `change_apply`；成功必须有 `APPLIED` 回执。不要在真实仓库首次试写/删除。
+8. 撤销测试目录的“文件修改”授权，再请求一次写入或删除；预期拒绝且文件字节不变。
 
 只有实际看到正确工具序列、`APPLIED` 回执、回读哈希一致和未授权拒绝，才能记录该项网页验收 PASS。代码/单元测试通过不等于 ChatGPT 网页已验收。
 
