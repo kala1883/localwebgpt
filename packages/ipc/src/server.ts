@@ -39,7 +39,7 @@ import {
 import { encodeFrame, FrameDecoder, FrameParseError, FrameTooLargeError } from './framing.ts';
 import type { OperationRegistry, RequestContext } from './operations.ts';
 
-/** 单次请求的处理上限。超过后**返回超时**，而不是当作失败。 */
+/** 普通 IPC 请求的处理上限；`command_exec` 刻意不设硬时限。 */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 export type SessionEvent =
@@ -255,6 +255,10 @@ export class ConnectionSession {
     requestId: string,
     operationName: string,
   ): Promise<{ timedOut: true } | { timedOut: false; value: unknown }> {
+    if (operationName === 'command_exec') {
+      return { timedOut: false, value: await promise };
+    }
+
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<{ timedOut: true }>((resolve) => {
       timer = setTimeout(() => {

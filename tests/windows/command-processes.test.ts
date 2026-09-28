@@ -14,7 +14,7 @@ const emitLarge = process.platform === 'win32'
   ? "[Console]::Out.Write('x' * 8192)"
   : "head -c 8192 /dev/zero | tr '\\000' x";
 
-describe('bounded workspace command process manager', () => {
+describe('workspace command process manager', () => {
   it('starts the selected shell in the supplied working directory and returns bounded output', async () => {
     const manager = new CommandProcessManager({ timeout_ms: 10_000 });
     const result = await manager.run({ shell, command: writeMarker, cwd: process.cwd() });
@@ -23,6 +23,20 @@ describe('bounded workspace command process manager', () => {
     assert.equal(result.exit_code, 0);
     assert.match(result.stdout, /LWB_COMMAND_PROCESS_OK/);
     assert.equal(result.timed_out, false);
+    await manager.terminateAll();
+  });
+
+  it('uses no default execution deadline', async () => {
+    const manager = new CommandProcessManager();
+    const command = process.platform === 'win32'
+      ? 'Start-Sleep -Milliseconds 300; Write-Output LWB_NO_DEFAULT_DEADLINE'
+      : 'sleep 0.3; echo LWB_NO_DEFAULT_DEADLINE';
+    const result = await manager.run({ shell, command, cwd: process.cwd() });
+
+    assert.equal(result.started, true);
+    assert.equal(result.exit_code, 0);
+    assert.equal(result.timed_out, false);
+    assert.match(result.stdout, /LWB_NO_DEFAULT_DEADLINE/);
     await manager.terminateAll();
   });
 

@@ -69,6 +69,7 @@ async function startServer(options: {
   readonly secrets?: Record<Audience, string>;
   readonly operations?: OperationRegistry;
   readonly registered?: readonly string[];
+  readonly requestTimeoutMs?: number;
 }): Promise<TestServer> {
   const pipeName = options.pipeName ?? uniquePipeName();
   const events: unknown[] = [];
@@ -84,6 +85,7 @@ async function startServer(options: {
       operations,
       isRegisteredConnection: (id) => registered.has(id),
       onEvent: (event) => events.push(event),
+      ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
     });
   });
   openServers.push(server);
@@ -192,6 +194,36 @@ describe('LWB-008 验收标准 1：单实例互斥', () => {
 });
 
 describe('LWB-039：停止服务时先排空在途操作', () => {
+  it('command_exec 不受普通 IPC 请求超时限制', async () => {
+    const operations = new OperationRegistry();
+    operations.register({
+      name: 'command_exec',
+      required: 'tools.apply',
+      handler: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return { completed: true };
+      },
+    });
+    const server = await startServer({ operations, requestTimeoutMs: 10 });
+    const client = new IpcClient({
+      pipeName: server.pipeName,
+      secret: ADAPTER_SECRET,
+      audience: 'mcp-adapter',
+      connectionId: 'conn-1',
+      requestTimeoutMs: 10,
+    });
+
+    try {
+      await client.connect();
+      const outcome = await client.call('command_exec', {});
+      assert.deepEqual(outcome, { ok: true, result: { completed: true } });
+      assert.equal(server.events.some((event) => (event as { type?: string }).type === 'timeout'), false);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('关闭数据管道会拒绝新请求，并等待已经进入的处理器完成后才断开 socket', async () => {
     const operations = new OperationRegistry();
     let signalStarted!: () => void;

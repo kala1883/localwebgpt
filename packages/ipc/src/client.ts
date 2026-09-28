@@ -65,7 +65,7 @@ export const DEFAULT_CLIENT_REQUEST_TIMEOUT_MS = 60_000;
 
 interface Pending {
   readonly resolve: (outcome: IpcOutcome) => void;
-  readonly timer: NodeJS.Timeout;
+  readonly timer?: NodeJS.Timeout;
 }
 
 export class IpcClient {
@@ -149,10 +149,14 @@ export class IpcClient {
     }
 
     const requestId = `req_${++this.#nextRequestId}`;
-    const timeoutMs = this.#options.requestTimeoutMs ?? DEFAULT_CLIENT_REQUEST_TIMEOUT_MS;
+    // A remote tool host may stop waiting independently; that does not cancel
+    // the local child process.
+    const timeoutMs = operation === 'command_exec'
+      ? undefined
+      : this.#options.requestTimeoutMs ?? DEFAULT_CLIENT_REQUEST_TIMEOUT_MS;
 
     return await new Promise<IpcOutcome>((resolve) => {
-      const timer = setTimeout(() => {
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
         this.#pending.delete(requestId);
         resolve({
           ok: false,
@@ -161,9 +165,9 @@ export class IpcClient {
           outcome_unknown: true,
         });
       }, timeoutMs);
-      timer.unref?.();
+      timer?.unref?.();
 
-      this.#pending.set(requestId, { resolve, timer });
+      this.#pending.set(requestId, timer === undefined ? { resolve } : { resolve, timer });
       socket.write(encodeFrame({ type: 'request', request_id: requestId, operation, input }));
     });
   }
@@ -299,7 +303,7 @@ export class IpcClient {
       const pending = this.#pending.get(requestId);
       if (!pending) continue;
       this.#pending.delete(requestId);
-      clearTimeout(pending.timer);
+      if (pending.timer !== undefined) clearTimeout(pending.timer);
 
       if (message['ok'] === true) {
         pending.resolve({ ok: true, result: message['result'] });
@@ -318,7 +322,7 @@ export class IpcClient {
     const pending = [...this.#pending.values()];
     this.#pending.clear();
     for (const entry of pending) {
-      clearTimeout(entry.timer);
+      if (entry.timer !== undefined) clearTimeout(entry.timer);
       entry.resolve({
         ok: false,
         code: 'IPC_INTERRUPTED',

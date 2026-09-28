@@ -1,5 +1,5 @@
 /**
- * Bounded command execution for the explicitly granted MCP `command_exec` tool.
+ * Command execution for the explicitly granted MCP `command_exec` tool.
  *
  * This sets a working directory; it is not an OS sandbox. Children run as the
  * daemon's user and may access other locations allowed to that user.
@@ -11,7 +11,6 @@ import process from 'node:process';
 
 import type { CommandShell } from '@lwb/contracts';
 
-export const COMMAND_TIMEOUT_MS = 25_000;
 export const COMMAND_OUTPUT_LIMIT_BYTES = 24 * 1024;
 const TERMINATE_WAIT_MS = 3_000;
 
@@ -34,7 +33,7 @@ export interface CommandProcessOptions {
 }
 
 export interface CommandProcessManagerOptions {
-  /** Test seam; production uses the fixed constants and never accepts model overrides. */
+  /** Optional timeout override for tests. Production command execution has no hard deadline. */
   readonly timeout_ms?: number;
   readonly output_limit_bytes?: number;
 }
@@ -48,15 +47,15 @@ interface ActiveProcess {
 /** Owns command children so an orderly daemon shutdown can stop them. */
 export class CommandProcessManager {
   readonly #active = new Set<ActiveProcess>();
-  readonly #timeoutMs: number;
+  readonly #timeoutMs: number | undefined;
   readonly #outputLimitBytes: number;
   #shuttingDown = false;
 
   constructor(options: CommandProcessManagerOptions = {}) {
-    this.#timeoutMs = options.timeout_ms ?? COMMAND_TIMEOUT_MS;
+    this.#timeoutMs = options.timeout_ms;
     this.#outputLimitBytes = options.output_limit_bytes ?? COMMAND_OUTPUT_LIMIT_BYTES;
-    if (!Number.isInteger(this.#timeoutMs) || this.#timeoutMs <= 0 || this.#timeoutMs > COMMAND_TIMEOUT_MS) {
-      throw new RangeError(`Command timeout must be between 1 and ${COMMAND_TIMEOUT_MS} ms.`);
+    if (this.#timeoutMs !== undefined && (!Number.isInteger(this.#timeoutMs) || this.#timeoutMs <= 0)) {
+      throw new RangeError('Command timeout override must be a positive integer.');
     }
     if (
       !Number.isInteger(this.#outputLimitBytes) ||
@@ -136,7 +135,9 @@ export class CommandProcessManager {
     const onAbort = (): void => terminate('cancelled');
     options.signal?.addEventListener('abort', onAbort, { once: true });
     if (options.signal?.aborted) onAbort();
-    timer = setTimeout(() => terminate('timeout'), this.#timeoutMs);
+    if (this.#timeoutMs !== undefined) {
+      timer = setTimeout(() => terminate('timeout'), this.#timeoutMs);
+    }
 
     return await new Promise<CommandProcessResult>((resolve) => {
       const finish = (exitCode: number | null): void => {

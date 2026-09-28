@@ -2134,3 +2134,9 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 新增 `COMMAND_REPLAY_SUPPRESSED`（`autoRetry=never`）；输出丢失时不能自动重跑。保护只覆盖**同键**重试：模型若为同一用户意图另造新键，仍会被视为新执行，因此对未知结果仍须先检查现场，不能宣称 exactly-once。
 - 验证：`npm run check` 通过，主测试 **1816 PASS / 15 SKIP / 0 FAIL**，Console **162/162 PASS**；定向 Windows 命令测试 **5/5**、命令工具/对话评测/幂等相关单测 **79/79** 通过；根与 Console 类型检查、FsGuard（218 文件）及 secrets scan 通过。
 - 工具输入 schema 已变化，当前 ChatGPT 管理页需在新版服务部署后再 **Refresh tools**；实际网页文件读—写—回读仍未完成，LWB-002 与 LWB-041 继续 PARTIAL。LWB-045 的 packaged-runtime build evidence 仍绑定旧提交，需在干净新版源码上重建。工作树现有的用户本地 `启动命令.md` 与 debug 文档未纳入这些改动。
+
+## 2026-09-28：ChatGPT 工具刷新已确认；命令执行改为无硬时限
+
+- 用户在 ChatGPT Manage 页刷新已有连接工具后，确认新工具已出现；工具发现问题已解决，无需重建 MCP 或扩大 workspace grant。真实文件工具网页读写回读仍待验收。
+- 按用户明确选择，移除 `command_exec` 的进程、daemon IPC 服务端与客户端硬时限。普通 IPC 操作仍保留原超时；命令仍受 24 KiB 输出上限、授权撤销/工作区暂停/daemon 关闭终止约束。ChatGPT/MCP 调用方独立断开或停止等待不会自动终止本机命令，必须将未知结果视作可能仍在运行，并先检查工作区；同幂等键重放不会启动第二个进程。
+- 中英文 README、工具说明、Local Workspace skill、operator runbook、威胁模型及 ADR 已同步此语义；新增默认无执行时限和 IPC 普通超时不作用于 `command_exec` 的定向测试。完整 `npm run check` **PASS**：根测试 **1818 PASS / 15 SKIP / 0 FAIL**，Console **162/162 PASS**，类型检查、FsGuard（218 文件）及 secret scan 通过。LWB-002 / LWB-041 仍 PARTIAL，LWB-045 runtime 证据仍需从新源码重建。
