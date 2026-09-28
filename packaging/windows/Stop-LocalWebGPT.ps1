@@ -36,11 +36,11 @@ try {
   while ($reply.Length -lt 32) {
     $remainingMilliseconds = [int][Math]::Floor(($readDeadline - [DateTime]::UtcNow).TotalMilliseconds)
     if ($remainingMilliseconds -le 0) {
-      throw 'LocalWebGPT 未在 3 秒内确认停止请求；没有终止任何进程。'
+      throw 'LocalWebGPT 未在 3 秒内确认停止请求；没有强制终止任何进程。请检查启动终端和服务状态；若旧版服务仍运行，请在原启动终端按 Ctrl+C。'
     }
     $readTask = $pipeClient.ReadAsync($readBuffer, 0, 1)
     if (-not $readTask.Wait($remainingMilliseconds)) {
-      throw 'LocalWebGPT 未在 3 秒内确认停止请求；没有终止任何进程。'
+      throw 'LocalWebGPT 未在 3 秒内确认停止请求；没有强制终止任何进程。请检查启动终端和服务状态；若旧版服务仍运行，请在原启动终端按 Ctrl+C。'
     }
     $readCount = $readTask.Result
     if ($readCount -le 0 -or $readBuffer[0] -eq 10) { break }
@@ -48,7 +48,7 @@ try {
     if ($nextByte -ne 13) { [void]$reply.Append([char]$nextByte) }
   }
   if ($reply.ToString() -cne 'STOPPING') {
-    throw 'LocalWebGPT 未确认停止请求；没有尝试终止任何进程。'
+    throw 'LocalWebGPT 未返回 STOPPING 确认；没有强制终止任何进程。请检查服务版本；若旧版服务仍运行，请在原启动终端按 Ctrl+C。'
   }
 
   Write-Host 'LocalWebGPT 已接受停止请求。正在关闭隧道子进程和本地服务；请等待启动终端返回提示符。'

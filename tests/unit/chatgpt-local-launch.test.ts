@@ -96,6 +96,7 @@ describe('local Secure MCP Tunnel launch contract', () => {
     assert.match(stopScript, /LWB_STOP/);
     assert.match(stopScript, /ReadAsync/);
     assert.match(stopScript, /Wait\(\$remainingMilliseconds\)/);
+    assert.match(stopScript, /原启动终端按 Ctrl[+]C/);
     assert.doesNotMatch(stopScript, /ReadTimeout/);
     assert.doesNotMatch(stopScript, /Stop-Process|taskkill|Get-Process/);
     assert.match(runtimeBuilder, /Stop-LocalWebGPT\.ps1/);
