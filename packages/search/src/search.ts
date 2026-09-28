@@ -248,7 +248,9 @@ export async function textSearch(args: SearchArgs, deps: SearchDeps): Promise<Te
     resumeSkip = cursor.skip_matches;
   }
 
-  const deadline = now + limits.search_time_budget_ms;
+  // `args.now` is wall-clock epoch time for signed tickets; the budget clock is
+  // monotonic. Build the deadline from its own clock origin, never mix the two.
+  const deadline = deps.clock() + limits.search_time_budget_ms;
   const counters: SearchCounters = {
     matches: [],
     scanned_files: 0,
