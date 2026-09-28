@@ -91,7 +91,7 @@ Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
    | 列出目录/文件名 | `file_list` |
    | 读取文件内容 | `file_read` 及相关快照/错误详情 |
    | 搜索文本 | `text_search` |
-   | 读取 Git 状态与差异 | `git_status`、`git_diff`、`git_log` |
+| 读取 Git 状态与差异 | `git_status`、`git_diff` |
    | 创建/编辑/删除文件 | `file_create` / `file_edit` / `file_delete` 单次调用直接执行；删除由服务在本次调用内快照基线，无须先 `file_read`；多文件先 `change_prepare` 再 `change_apply` |
 
 每一项授权都只对该根生效；空选保存会撤销该根全部 ChatGPT 工具授权。实际调用还要求 ChatGPT 连接和工作区启用。读取、Git、文件修改分别由本页的目录授权控制；平台验收状态只作说明，不再作为隐藏的全局功能开关。授予“文件修改”即授权 ChatGPT 在该目录创建/编辑文本文件或删除普通文件并直接应用，不会逐次等待人工批准。删除会在本机内部先读取并保存完整快照，单文件上限 16 MiB。路径范围、对象身份与版本冲突检查、秘密路径拒绝、审计和受保护执行器仍然生效；不提供任意 Shell、目录外访问或自动 Git 提交/推送。

@@ -9,13 +9,13 @@
  *
  * ## 它**不是**模型可见的数据
  *
- * `reason` 是本机排障文本（例如 `READ_ENABLED_OFF`），只给适配器记日志用，
+ * `reason` 是本机排障文本（例如 `WORKSPACE_TOOL_NOT_GRANTED`），只给适配器记日志用，
  * **不进** `tools/list`、也不进任何工具结果。模型看到的只有
  * 「这个工具在不在清单里」这一件事。
  *
  * ## 为什么清单要由 daemon 回答
  *
- * 「此刻哪些工具可用」取决于本机状态（门禁、授权），适配器不知道这些。
+ * 「此刻哪些工具可用」取决于本机连接和逐工作区授权，适配器不知道这些。
  * 由适配器自己猜就等于在工具面上宣称一个未经验证的能力。
  * 理由的完整版写在 `apps/daemon/src/tools/catalog.ts` 的文件头。
  */
@@ -36,7 +36,7 @@ export interface ToolCatalogEntry {
   /**
    * 不可用的原因，供适配器记本地日志。
    *
-   * `null` 表示可用。它是一个**开放的短标签**（`READ_ENABLED_OFF` /
+   * `null` 表示可用。它是一个**开放的短标签**（`WORKSPACE_TOOL_NOT_GRANTED` /
    * `NOT_IMPLEMENTED` / …），因此这里只约束「是个非空串或 null」——
    * 把取值写死成枚举会让 daemon 每加一种原因都要改契约，
    * 而这份数据从不流向模型，收窄它的收益是零。

@@ -180,6 +180,22 @@ describe('工具清单（验收 1：无控制面方法）', () => {
     }
   });
 
+  it('工具清单只显示该连接已获授的工作区工具', async () => {
+    const restricted = await makeToolHarness({ gates: GATES_OFF });
+    try {
+      restricted.grant(ADAPTER_CONNECTION, restricted.workspace.id, ['read']);
+      const catalog = await catalogOf(restricted);
+      const available = catalog.tools.filter((entry) => entry.available).map((entry) => entry.name);
+      assert.deepEqual([...available].sort(), [
+        'bridge_status', 'change_get', 'change_list', 'file_read', 'workspace_list',
+      ]);
+      assert.equal(catalog.tools.find((entry) => entry.name === 'file_list')?.reason, 'WORKSPACE_TOOL_NOT_GRANTED');
+      assert.equal(catalog.tools.find((entry) => entry.name === 'file_delete')?.reason, 'WORKSPACE_TOOL_NOT_GRANTED');
+    } finally {
+      restricted.close();
+    }
+  });
+
   it('门禁全开时，可用的是全部已实现工具；未实现的理由是「没实现」而不是「开关关了」', async () => {
     const catalog = await catalogOf(h);
     const available = catalog.tools.filter((entry) => entry.available).map((entry) => entry.name);
@@ -399,7 +415,6 @@ describe('入参契约（验收 2：未知字段 / 无效枚举）', () => {
     assert.deepEqual(ticketed, ['change_apply', 'change_prepare', 'change_revert_prepare', 'file_edit']);
 
     assert.equal(ACTION_SPECS.change_apply.capability, 'propose');
-    assert.equal(ACTION_SPECS.change_apply.flag, 'direct_write_enabled');
     for (const action of Object.values(ACTION_SPECS)) {
       assert.equal(action.requires_approval, false, '逐次人工批准不是策略层的权限位');
     }

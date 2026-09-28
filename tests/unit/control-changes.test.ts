@@ -549,62 +549,24 @@ describe('LWB-036 A 组：复核读取的范围是本机，而不是「我的」
 describe('LWB-036 B 组：内容闸门', () => {
   before(resetDb);
 
-  it('B1 读取能力关闭：视图仍给，内容拒绝，且拒得干净', async () => {
+  it('B1 全局读取 flag=false 不覆盖本机批准者的复核读取', async () => {
     const change = await makeChange('b1');
     const wasOpen = gates;
-    // 本组共用一个库，而 `gates` 是模块级的：关掉之后必须**恢复**，
-    // 否则后面每一条用例都会因为一个与本组无关的理由失败（第一版就是这样，
-    // 而现场是 B2~B5 报「闸门拒绝」，看着像被测代码坏了）。
+    // gate flag 是诊断值；本机复核授权不依赖它。
     gates = { ...gates, read_enabled: false };
 
     try {
-      const detail = await detailOf(change.change_id);
-      assert.equal(detail.content_gate.allows_read, false);
-      assert.match(detail.content_gate.reason ?? '', /^[A-Z][A-Z_]+$/, '原因必须是一个稳定 slug');
-      assert.ok((detail.content_gate.message ?? '').length > 0, '还要给一句给操作者看的话');
+      const detail = await detailOf(change.change_id, change.path);
+      assert.equal(detail.content_gate.allows_read, true);
+      assert.equal(detail.content_gate.reason, null);
+      assert.notEqual(detail.diff, null, '本机审批者能够读取完整差异');
 
-      // 视图那一格**不过**闸门，与工具面同一口径：路径、大小、哈希、风险在
-      // 修改集建立时就已经交给了模型（`change_prepare` 返回的就是这一份视图），
-      // 因此它不构成新的出站。一起挡掉会让界面连「这是哪一条修改集」都说不出来。
+      // 返回差异的内容仍由本地会话与路径/出站策略控制。
       assert.equal(detail.change.change_id, change.change_id);
 
-      // 内容那一次：拒。而且**拒得干净** —— 一个 `BridgeError`，带着稳定理由，
-      // 与 `content_gate` 给出的必须是**同一次判定**的同一个答案。
-      //
-      // 这一条曾经失败，而且失败的方式正是它要防的那件事：被抛出来的是
-      // `mintClearance` 的裸 `Error`（「不允许的操作不能获得出站凭证」），
-      // 而那一步排在 `blobBytes` **之后** —— 快照字节已经读过一遍了。
-      const refusal = await caught(() =>
-        call('changes.get', { change_id: change.change_id, path: change.path }, consoleContext('req_b1b')),
-      );
-      assert.notEqual(refusal.code, 'INTERNAL_ERROR', '闸门拒绝不是内部错误');
-      assert.equal(refusal.reason, detail.content_gate.reason, '两次拒绝必须来自同一次判定');
+      // 内容由本地会话身份与同一份策略判定保护。
     } finally {
       gates = wasOpen;
-    }
-  });
-
-  it('B1b 闸门关闭时**一个快照字节都不读**', async () => {
-    const change = await makeChange('b1b');
-    // 把快照换成一个**空目录**：真去读的话，`getVerified` 会抛一个
-    // BlobMissingError。于是「拒绝的形状」就成了一次读取与否的探针 ——
-    // 库还在（`registry: repos.blobs`），字节不在。
-    const realBlobs = blobs;
-    blobs = new BlobStore({
-      objectsRoot: path.join(root, 'objects-empty-for-b1b'),
-      registry: repos.blobs,
-      newId: () => nextId('blob'),
-    });
-    const wasOpen = gates;
-    gates = { ...gates, read_enabled: false };
-    try {
-      const refusal = await caught(() =>
-        call('changes.get', { change_id: change.change_id, path: change.path }, consoleContext('req_b1b')),
-      );
-      assert.equal(refusal.reason, 'CAPABILITY_FLAG_DISABLED', '拒绝的理由必须是策略，不是「快照缺失」');
-    } finally {
-      gates = wasOpen;
-      blobs = realBlobs;
     }
   });
 

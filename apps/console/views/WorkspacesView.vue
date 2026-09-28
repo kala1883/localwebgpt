@@ -445,7 +445,7 @@ function cancelAccess(): void {
       </p>
       <p class="ws__dim" data-testid="capability-note">
         登记本身**不改动**那个目录里的任何文件，也不代表内容立刻会被读走 ——
-        {{ flags?.read_enabled === true ? '获授读取工具后即可读取。' : '本机读取功能状态未知。' }}
+        对应工具只有在该根保存 grant 且 ChatGPT 连接启用后才可调用。
       </p>
     </section>
 

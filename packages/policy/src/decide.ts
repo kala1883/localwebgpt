@@ -56,7 +56,6 @@ export type PolicyFailureReason =
   | 'CONNECTION_DISABLED'
   | 'CAPABILITY_NOT_GRANTED'
   | 'CONTROL_CAPABILITY_ON_MODEL_SURFACE'
-  | 'CAPABILITY_FLAG_DISABLED'
   // 工作区
   | 'WORKSPACE_NOT_GRANTED'
   | 'WORKSPACE_PAUSED'
@@ -132,8 +131,6 @@ export type EgressSurface = (typeof EGRESS_SURFACES)[number];
 interface ActionSpec {
   /** 该动作需要连接凭据里被授予的能力。 */
   readonly capability: CapabilityName;
-  /** 工作区层面必须为 true 的能力开关。 */
-  readonly flag: keyof CapabilityFlags;
   readonly surface: EgressSurface;
   /** 属于提议链路：只读模式关闭的是**整条**链路，不只是写入那一步。 */
   readonly in_propose_chain: boolean;
@@ -160,24 +157,24 @@ interface ActionSpec {
  * 内部生成，用于执行器去重与审计，不是第二个用户审批开关。
  */
 export const ACTION_SPECS: Readonly<Record<PolicyAction, ActionSpec>> = {
-  list: { capability: 'list', flag: 'read_enabled', surface: 'directory_listing', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  stat: { capability: 'read', flag: 'read_enabled', surface: 'file_read', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  read: { capability: 'read', flag: 'read_enabled', surface: 'file_read', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  search: { capability: 'search', flag: 'read_enabled', surface: 'search_snippet', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  git_status: { capability: 'git_read', flag: 'git_enabled', surface: 'git_diff', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  git_diff: { capability: 'git_read', flag: 'git_enabled', surface: 'git_diff', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  git_log: { capability: 'git_read', flag: 'git_enabled', surface: 'git_diff', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  snapshot_read: { capability: 'read', flag: 'read_enabled', surface: 'snapshot_read', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  error_detail: { capability: 'read', flag: 'read_enabled', surface: 'error_detail', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  list: { capability: 'list', surface: 'directory_listing', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  stat: { capability: 'read', surface: 'file_read', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  read: { capability: 'read', surface: 'file_read', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  search: { capability: 'search', surface: 'search_snippet', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  git_status: { capability: 'git_read', surface: 'git_diff', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  git_diff: { capability: 'git_read', surface: 'git_diff', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  git_log: { capability: 'git_read', surface: 'git_diff', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  snapshot_read: { capability: 'read', surface: 'snapshot_read', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  error_detail: { capability: 'read', surface: 'error_detail', in_propose_chain: false, requires_approval: false, requires_ticket: false },
   // 审计导出只给本地控制面：它天然包含跨工作区、跨连接的记录。
-  audit_export: { capability: 'control', flag: 'read_enabled', surface: 'audit_export', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  change_prepare: { capability: 'propose', flag: 'proposal_enabled', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
+  audit_export: { capability: 'control', surface: 'audit_export', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  change_prepare: { capability: 'propose', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
   // 创建不需要先读一个不存在的目标；daemon 仍会将当前工作区代次绑定进提案。
-  file_create: { capability: 'propose', flag: 'proposal_enabled', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: false },
+  file_create: { capability: 'propose', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: false },
   // 删除在本次调用内读取并快照基线，不要求额外的 file_read 票据。
-  file_delete: { capability: 'propose', flag: 'proposal_enabled', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: false },
-  change_revert_prepare: { capability: 'propose', flag: 'proposal_enabled', surface: 'snapshot_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
-  change_apply: { capability: 'propose', flag: 'direct_write_enabled', surface: 'change_receipt', in_propose_chain: true, requires_approval: false, requires_ticket: true },
+  file_delete: { capability: 'propose', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: false },
+  change_revert_prepare: { capability: 'propose', surface: 'snapshot_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
+  change_apply: { capability: 'propose', surface: 'change_receipt', in_propose_chain: true, requires_approval: false, requires_ticket: true },
 };
 
 // ---------------------------------------------------------------------------
@@ -369,16 +366,6 @@ function connectionFailures(req: PolicyRequest): PolicyFailure[] {
         detail: `模型侧连接的凭据包含控制面专属能力（${leaked.join('、')}）；该凭据配置本身无效。`,
       });
     }
-  }
-
-  const flag = ACTION_SPECS[req.action.action].flag;
-  if (!req.workspace.capabilities[flag]) {
-    out.push({
-      check: 'connection',
-      reason: 'CAPABILITY_FLAG_DISABLED',
-      error_code: 'POLICY_DENIED',
-      detail: `该工作区的 ${flag} 当前为关闭状态。`,
-    });
   }
 
   return out;

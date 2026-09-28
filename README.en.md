@@ -91,7 +91,7 @@ Open the local console using the one-time URL from the launcher and go to **Work
    | List directories/file names | `file_list` |
    | Read file contents | `file_read` and related snapshot/error details |
    | Search text | `text_search` |
-   | Read Git status and diffs | `git_status`, `git_diff`, `git_log` |
+   | Read Git status and diffs | `git_status`, `git_diff` |
    | Create/edit/delete files | `file_create` / `file_edit` / `file_delete` execute in one call; deletion snapshots the baseline locally and does not require a separate `file_read`; multi-file changes use `change_prepare` and `change_apply` |
 
 Each grant applies only to that root. Saving with no tools selected revokes that root's ChatGPT tool access. Calls require an enabled connection and active workspace. Read, Git, and file modification are controlled by the per-workspace grants on this page; platform acceptance status is informational, not a hidden global feature switch. Granting “File modifications” lets ChatGPT directly create/edit text files or delete ordinary files in that root without per-change approval. Deletion reads and snapshots the baseline locally in the same call (16 MiB per-file limit). Path scope, object identity/version checks, secret-path denials, snapshots, audit, and the protected writer remain active. There is no arbitrary shell, out-of-root access, or automatic Git commit/push.

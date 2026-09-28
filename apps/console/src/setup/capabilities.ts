@@ -194,7 +194,7 @@ export interface ExposureSummary {
   readonly removed: number;
   /** 有效逐目录 grant 中启用了提议能力的根数；不等同于当前可调用数。 */
   readonly proposal_granted: number;
-  /** 连接、工作区、grant 与相关全局能力门禁均满足的根数。 */
+  /** 连接启用且该根至少获授一种内容工具的根数。 */
   readonly accessible: number;
   readonly lines: readonly string[];
 }
@@ -209,7 +209,7 @@ export interface ExposureSummary {
  */
 export function exposureSummary(
   rows: readonly WorkspaceRow[],
-  flags: CapabilityFlags | null,
+  _flags: CapabilityFlags | null,
   workspaceAccess: readonly WorkspaceAccessRow[] = [],
   connectionEnabled: boolean | null = null,
 ): ExposureSummary {
@@ -222,30 +222,25 @@ export function exposureSummary(
       grant?.enabled === true && grant.capabilities.includes('propose');
   }).length;
   const accessible = live.filter((row) => {
-    if (!row.enabled || connectionEnabled !== true || flags === null) return false;
+    if (!row.enabled || connectionEnabled !== true) return false;
     const grant = accessByWorkspace.get(row.workspace_id);
     if (grant?.enabled !== true) return false;
     const hasFileReadTool = grant.capabilities.some((capability) =>
       capability === 'read' || capability === 'list' || capability === 'search',
     );
-    const canReadFiles = flags.read_enabled && hasFileReadTool;
-    const canReadGit = flags.git_enabled && grant.capabilities.includes('git_read');
-    const canPrepareChanges = flags.proposal_enabled && row.mode === 'read_propose_apply_with_local_approval' &&
+    const canReadFiles = hasFileReadTool;
+    const canReadGit = grant.capabilities.includes('git_read');
+    const canPrepareChanges = row.mode === 'read_propose_apply_with_local_approval' &&
       grant.capabilities.includes('propose');
     return canReadFiles || canReadGit || canPrepareChanges;
   }).length;
 
-  const readEnabled = flags?.read_enabled === true;
   const connectionLine = connectionEnabled === true
     ? 'ChatGPT 连接已启用。'
     : connectionEnabled === false
       ? 'ChatGPT 连接已停用。'
       : 'ChatGPT 连接状态无可信读数。';
-  const capabilityLine = readEnabled
-    ? `读取工具可用；具体目录仍须启用并获授读取工具。${connectionLine}`
-    : flags?.read_enabled === false
-      ? `本机读取功能当前不可用；目录授权不会改变这一服务状态。${connectionLine}`
-      : `读取工具状态未知。${connectionLine}`;
+  const capabilityLine = `目录工具由逐 workspace grant 控制；未授权的工具不会开放。${connectionLine}`;
 
   const headline =
     live.length === 0
@@ -254,11 +249,7 @@ export function exposureSummary(
         ? `已登记 ${String(live.length)} 个根，其中 ${String(accessible)} 个根当前具备有效的 ChatGPT 内容工具访问条件；只有实际调用时才会有内容出站。`
         : `已登记 ${String(live.length)} 个根，但当前没有根同时满足连接与目录授权；内容工具不可用。`;
 
-  const proposalLine = flags === null
-    ? `${String(proposalGranted)} 个启用根保存了文件修改授权；本机能力状态未知。`
-    : flags.proposal_enabled && flags.direct_write_enabled
-      ? `${String(proposalGranted)} 个启用根保存了文件修改授权；ChatGPT 可直接应用文本创建/编辑。`
-      : `${String(proposalGranted)} 个启用根保存了文件修改授权，但本机文件修改功能当前不可用。`;
+  const proposalLine = `${String(proposalGranted)} 个启用根已获文件修改授权；ChatGPT 可在这些根直接创建、编辑或删除普通文件。`;
 
   return {
     headline,

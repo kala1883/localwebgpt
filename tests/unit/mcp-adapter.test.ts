@@ -147,7 +147,7 @@ function catalogEnvelope(
   const tools: ToolCatalogEntry[] = TOOL_NAMES.map((name) => ({
     name,
     available: set.has(name),
-    reason: set.has(name) ? null : 'READ_ENABLED_OFF',
+    reason: set.has(name) ? null : 'WORKSPACE_TOOL_NOT_GRANTED',
   }));
   return okEnvelope({ tools: [...tools, ...extra] }, CATALOG_REQUEST_ID);
 }

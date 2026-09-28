@@ -50,8 +50,8 @@
  * ## 服务能力与目录 grant 分工
  *
  * `capability_flags` 由装配根给出，本层不自造、也不从请求参数或工作区行推导。
- * 这些字段表示 daemon 支持哪些操作；真正的数据范围和读写权限仍来自
- * 本次解析出的逐连接、逐工作区 grant。
+ * 它们只描述实现状态；真正的数据范围和动作权限来自本次解析出的逐连接、
+ * 逐工作区 grant，`recovery_required` 则是独立的本地恢复状态。
  */
 
 import { BridgeError, CAPABILITY_NAMES } from '@lwb/contracts';
@@ -186,9 +186,8 @@ export function grantedWorkspaceIds(repos: Repositories, connectionId: string): 
  * 盘符还在不在，由真正去读的那一次报出来（`workspaceList` 的注释里
  * 写了为什么不在清单里预先声明可达性）。
  *
- * 两处调用（连接级能力开关、工具清单）问的是同一个问题，因此由这**一处**
- * 回答：同一批事实算两遍，就有两次机会算出不同结果，而这两处
- * 恰好一个是「有什么工具」、一个是「工具说自己能做什么」。
+ * 工具清单和具体调用都以这份已授权 workspace 列表为边界，之后再按动作 grant
+ * 作细分；本函数不判断目录磁盘当前是否可达。
  */
 export function usableWorkspaces(repos: Repositories, connectionId: string): readonly WorkspaceRecord[] {
   const out: WorkspaceRecord[] = [];
@@ -337,12 +336,12 @@ function connectionViewFor(
  *
  * 控制台复核修改集（`../control/changes.ts`）要用**同一份**视图去判定，
  * 而「同一份」在这里不是风格问题：两份各自演化的投影会在某一天对同一个
- * 记录给出不同的 `paused` 或不同的能力开关，于是「模型看到这个工作区是
+ * 记录给出不同的 `paused` 或 `recovery_required`，于是「模型看到这个工作区是
  * 暂停的、控制台看到它是运行的」变成可能 —— 而那正是 LWB-034 花力气
  * 消除的那类分裂。
  *
  * 依赖从整个 `ToolAccessDeps` 收窄成 `capability_flags` 一个函数：
- * 本函数**只**用它。原来的签名让「这个投影需要 registry、budgets、now」
+ * 本函数只从中读取逐工作区的 `recovery_required`。原来的签名让「这个投影需要 registry、budgets、now」
  * 读起来像真的，而那是错觉 —— 一个看不到用处的依赖，迟早会有人
  * 顺手在里面用上，然后这个投影就不再是纯的了。
  */

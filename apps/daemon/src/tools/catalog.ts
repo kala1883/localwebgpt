@@ -11,38 +11,12 @@
  * 于是 `tools.catalog` 是一条 IPC 操作：适配器问 daemon「现在能挂哪些」，
  * 得到的名字集合与本地 `TOOLS` 取交集之后才出现在 `tools/list` 里。
  *
- * ## 「可用」的判据
- *
- * 三类，各自问的是能不能**真的做成那件事**：
- *
- *  - `bridge_status` / `workspace_list` / `change_list`：**连接级**，不读任何工作区内容。
- *    只要连接在册且启用就可用 —— 尤其是 `bridge_status`：它是回答
- *    「为什么我什么都做不了」的那一个，把它自己也关掉会得到一个
- *    说不上话的诊断工具。
- *  - 读取三件（`file_list` / `file_read` / `text_search`）：需要
- *    `read_enabled`，**并且**至少有一个可用工作区开着它。空集不算可用：
- *    没有任何工作区可读时挂出一个读取工具，模型只会拿到一串
- *    `WORKSPACE_NOT_GRANTED`。
- *  - Git 两件：同上，换 `git_enabled`。
- *  - 修改准备与执行：依赖可用工作区与目录 grant；具体读取/写入权限仍在
- *    `resolveWorkspaceAccess()` 中按该根逐次检查。
- *
- * 判据里**没有**「连接被授予了 read 能力」这一项：那是另一层
- * （`grants` 逐工作区），`decide()` 每次调用都会检查。清单说的是
- * 「本机现在允许这个动作吗」，而授权不足的工作区会被逐条拒绝 ——
- * 两件事分开之后，清单不会因为某个工作区的授权变化而抖动。
- *
- * **清单与判定不能给出两个答案**：`AVAILABILITY` 里每一行的 `flag`
- * 必须与 `ACTION_SPECS` 里同一个动作的 `flag` 相同。不同的话，工具会
- * 出现在 `tools/list` 里，而每一次调用都被判定拒绝在 `CAPABILITY_DISABLED`
- * 上 —— 一个「挂出来但不能用」的工具比一个不挂出来的工具更难排查。
- *
- * 平台验收签署不再充当隐藏的全局开关。工具可用性来自本地配置的连接与
- * 工作区 grant；每次调用还会重新验证具体动作、相对路径、根身份和恢复状态。
+ * 工具清单仅包含本连接至少有一个匹配的已启用 workspace/tool grant 的工具；
+ * 每次调用时策略层再针对指定工作区检查同一权限。平台验收和实现 flags 不参与授权。
  */
 
 import { TOOL_NAMES, isControlPlaneName, isImplementedToolName, isToolName } from '@lwb/contracts';
-import type { CapabilityFlags, ImplementedToolName, ToolName } from '@lwb/contracts';
+import type { CapabilityName, ImplementedToolName, ToolName } from '@lwb/contracts';
 
 import type { ToolHandlerDeps } from './handlers.ts';
 import { resolveConnection, usableWorkspaces } from './access.ts';
@@ -59,55 +33,45 @@ export interface CatalogEntry {
  * 每个**已实现**的工具的可用性规则。
  *
  * 写成 `Record<ImplementedToolName, …>` 而不是一张稀疏表：实现一个工具
- * 却忘了给它一条规则，是编译错误。规则只有两种，因为它们问的正是
- * 「要不要看工作区」这一个问题。
+ * 却忘了给它一条规则，是编译错误。
  */
 type AvailabilityRule =
   | { readonly kind: 'connection' }
-  | { readonly kind: 'workspace_flag'; readonly flag: keyof CapabilityFlags };
+  | { readonly kind: 'workspace_grant'; readonly capability: CapabilityName };
 
 const AVAILABILITY: Readonly<Record<ImplementedToolName, AvailabilityRule>> = {
   // 不读工作区内容：连接在册且启用即可用。
   bridge_status: { kind: 'connection' },
   workspace_list: { kind: 'connection' },
-  file_list: { kind: 'workspace_flag', flag: 'read_enabled' },
-  file_read: { kind: 'workspace_flag', flag: 'read_enabled' },
-  text_search: { kind: 'workspace_flag', flag: 'read_enabled' },
-  git_status: { kind: 'workspace_flag', flag: 'git_enabled' },
-  git_diff: { kind: 'workspace_flag', flag: 'git_enabled' },
-  // 提案类：会经受控句柄重读目标文件的基线，因此与读取同类，只是换一个开关。
-  change_prepare: { kind: 'workspace_flag', flag: 'proposal_enabled' },
-  file_create: { kind: 'workspace_flag', flag: 'proposal_enabled' },
-  file_edit: { kind: 'workspace_flag', flag: 'proposal_enabled' },
-  file_delete: { kind: 'workspace_flag', flag: 'proposal_enabled' },
-  // 它读的是快照库（受保护根之内，不是用户工作区），但仍需要该工作区的
-  // read grant；flag 只表示 daemon 支持该操作。
-  change_get: { kind: 'workspace_flag', flag: 'read_enabled' },
+  file_list: { kind: 'workspace_grant', capability: 'list' },
+  file_read: { kind: 'workspace_grant', capability: 'read' },
+  text_search: { kind: 'workspace_grant', capability: 'search' },
+  git_status: { kind: 'workspace_grant', capability: 'git_read' },
+  git_diff: { kind: 'workspace_grant', capability: 'git_read' },
+  change_prepare: { kind: 'workspace_grant', capability: 'propose' },
+  file_create: { kind: 'workspace_grant', capability: 'propose' },
+  file_edit: { kind: 'workspace_grant', capability: 'propose' },
+  file_delete: { kind: 'workspace_grant', capability: 'propose' },
+  // 它读的是快照库（受保护根之内，不是用户工作区），但仍需要该工作区的 read grant。
+  change_get: { kind: 'workspace_grant', capability: 'read' },
   // 不读任何工作区内容，只读本连接自己的状态库行 —— 与 `bridge_status`
   // 同类，因此是连接级。
   change_list: { kind: 'connection' },
-  // 写入（LWB-032）。开关是 `direct_write_enabled`，与
-  // `ACTION_SPECS.change_apply.flag` 是同一个 —— 这两处**必须**一致：
-  // 不一致时工具会挂出来而每次调用都被判成 `CAPABILITY_DISABLED`，
-  // 而模型读到的是一句「你的用法有问题」。
-  //
-  // 实际写权限仍在 `resolveWorkspaceAccess()` 里按该根的 propose grant 检查。
-  change_apply: { kind: 'workspace_flag', flag: 'direct_write_enabled' },
-  // 撤销**提议**：与 `change_prepare` 同一档（`proposal_enabled`），
-  // 理由写在 `handlers.ts` 的 `TOOL_POLICY_ACTIONS` 那一行。
-  change_revert_prepare: { kind: 'workspace_flag', flag: 'proposal_enabled' },
+  change_apply: { kind: 'workspace_grant', capability: 'propose' },
+  change_revert_prepare: { kind: 'workspace_grant', capability: 'propose' },
 };
 
 export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): readonly CatalogEntry[] {
   const connection = resolveConnection(context, deps);
-  const flags = deps.capability_flags;
-
-  // 「至少有一个可用工作区开着它」只算一次，而不是每个工具各遍历一遍：
-  // 同一批事实算两遍就有两次机会算出不同结果。
   const usable = usableWorkspaces(deps.repos, connection.id);
 
-  const anyWorkspaceHas = (flag: keyof CapabilityFlags): boolean =>
-    usable.some((workspace) => flags(workspace)[flag]);
+  const anyWorkspaceHas = (capability: CapabilityName): boolean =>
+    usable.some((workspace) => {
+      if (!workspace.enabled) return false;
+      if (capability === 'propose' && workspace.mode !== 'read_propose_apply_with_local_approval') return false;
+      const grant = deps.repos.grants.find(connection.id, workspace.id);
+      return grant?.enabled === true && grant.capabilities.includes(capability);
+    });
 
   return TOOL_NAMES.map<CatalogEntry>((name) => {
     if (!isImplementedToolName(name)) {
@@ -121,8 +85,8 @@ export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): read
 
     const rule = AVAILABILITY[name];
     if (rule.kind === 'connection') return { name, available: true, reason: null };
-    if (!anyWorkspaceHas(rule.flag)) {
-      return { name, available: false, reason: `${rule.flag.toUpperCase()}_OFF` };
+    if (!anyWorkspaceHas(rule.capability)) {
+      return { name, available: false, reason: 'WORKSPACE_TOOL_NOT_GRANTED' };
     }
     return { name, available: true, reason: null };
   });

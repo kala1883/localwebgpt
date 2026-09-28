@@ -127,7 +127,7 @@ describe('A 组 · 暴露摘要在最上面，且两句话都说（验收标准 
       headline.text(),
       '已登记 3 个根，但当前没有根同时满足连接与目录授权；内容工具不可用。',
     );
-    assert.match(wrapper.find('[data-testid="capability-note"]').text(), /本机读取功能状态未知/);
+    assert.match(wrapper.find('[data-testid="capability-note"]').text(), /该根保存 grant 且 ChatGPT 连接启用/);
   });
 
   it('A4 读取打开时通栏改成「读取能力打开中」，且摘要是三行', () => {
@@ -144,7 +144,7 @@ describe('A 组 · 暴露摘要在最上面，且两句话都说（验收标准 
 
     const lines = wrapper.findAll('[data-testid="exposure-line"]').map((line) => line.text());
     assert.equal(lines.length, 3);
-    assert.match(lines[0] ?? '', /读取工具可用/);
+    assert.match(lines[0] ?? '', /目录工具由逐 workspace grant 控制/);
     assert.match(lines[0] ?? '', /ChatGPT 连接已启用/);
     assert.match(lines[1] ?? '', /文件修改授权/);
     assert.match(lines[2] ?? '', /没有被移除的登记/);

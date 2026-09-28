@@ -760,7 +760,7 @@ describe('G 组 · 工作区', () => {
     assert.equal(off.registered, 2);
     assert.match(off.headline, /已登记 2 个根/);
     assert.match(off.headline, /没有根同时满足连接与目录授权/);
-    assert.match(off.lines[0] ?? '', /本机读取功能当前不可用/);
+    assert.match(off.lines[0] ?? '', /目录工具由逐 workspace grant 控制/);
 
     const on = exposureSummary(
       rows,
@@ -770,25 +770,24 @@ describe('G 组 · 工作区', () => {
     );
     assert.equal(on.accessible, 2);
     assert.match(on.headline, /2 个根当前具备有效的 ChatGPT 内容工具访问条件/);
-    assert.match(on.lines[0] ?? '', /读取工具可用/);
+    assert.match(on.lines[0] ?? '', /目录工具由逐 workspace grant 控制/);
   });
 
-  it('G4a 工作区提议模式与提议 grant 不得被误报成当前可用能力', () => {
+  it('G4a 工作区 propose grant 决定提议/写工具是否可用', () => {
     const row = workspace({ mode: 'read_propose_apply_with_local_approval' });
     const flags = { ...FLAGS_OFF, read_enabled: true };
     const access = [{ workspace_id: row.workspace_id, enabled: true, capabilities: ['propose'] as const }];
     const summary = exposureSummary([row], flags, access, true);
     assert.equal(summary.proposal_granted, 1);
-    assert.equal(summary.accessible, 0, '缺少 file list/read/search/git grant 时，不能说该根具备内容工具访问');
-    assert.match(summary.lines[1] ?? '', /本机文件修改功能当前不可用/);
+    assert.equal(summary.accessible, 1, '该根已获 propose grant，修改工具可用');
+    assert.match(summary.lines[1] ?? '', /1 个启用根已获文件修改授权/);
   });
 
   it('G5 一个都没登记时不留白，明说「没有任何本机内容暴露」', () => {
     const summary = exposureSummary([], null);
     assert.equal(summary.registered, 0);
     assert.match(summary.headline, /没有任何目录被登记/);
-    // 能力开关读不到时必须说「未知」，不能把未知伪装成关闭或通过。
-    assert.match(summary.lines[0] ?? '', /状态未知/);
+    assert.match(summary.lines[0] ?? '', /ChatGPT 连接状态无可信读数/);
   });
 
   it('G6 已移除的登记仍然列出来，且计入「另有多少个」', () => {

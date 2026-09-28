@@ -2047,3 +2047,9 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - LWB-045 构建证据：从干净主分支提交 `2b25ddd` 成功构建 Windows x64 runtime 到 `%TEMP%\LocalWebGPT-runtime-2b25ddd`；构建包含锁定依赖安装、Console production build、FsGuard 导入扫描、SQLite native smoke、tunnel-client/cloudflared/SQLite 哈希核对，以及 303 包 SPDX 与 9911 文件 payload fingerprint。`.env` 未打包。两项 npm 子依赖报告 Node engine warning（需较新的 22.x 补丁版本），但完整构建以退出码 0 完成；正式发布仍需版本升级评估。
 - `docs/release/sbom.json` 与 `build-record.md` 已更新为最新 packaged-runtime 证据；定向 release-evidence **3/3 PASS**，工作树 secret scan 通过。LWB-045 仍 PARTIAL：没有签名安装器、独立供应链审查或实际安装/升级验收。
 - 仍未完成：真实 ChatGPT 网页端工具发现/读写/删除验收、非实现者安全签署与完整 V1 发布。删除二进制、混合换行及超 2 MiB 文本暂不自动逆向重建；`change_revert_prepare` 对源修改集新建文件仍输出明确的本地删除动作；V1.1/V2 任务继续保留在原计划状态。这些不计为已通过。
+
+## 2026-09-28：合并旧 `feat/lwb-p0-p2` 的有效内容并统一按工作区授权
+
+- 旧分支与 `main` 从共同初始提交后分别演进，直接 merge 会以旧树覆盖/删除主线后续约 138 个文件变更；逐项核对后，旧分支没有 `main` 缺失的新文件。其根目录 `.env` Tunnel 启动器、中英文 ChatGPT 接入指南和秘密扫描均已包含在 `main`，且主线版本更新；删除恢复、安装包证据等后续功能也只在主线。
+- 已把执行期工具暴露与授权统一为连接启用 + workspace 启用 + 该根的具体 tool grant；全局能力 flag 不再重复裁定。G0/G2/G3/G4、兼容性与原生护栏签署状态仍如实显示为验收信息，不伪造通过，也不代替逐 workspace 授权。既有路径/根身份校验、秘密拒绝、快照、审计、受保护执行与紧急暂停保留。
+- 验证：完整 `npm run check` 通过，根测试 **1794 PASS / 13 SKIP / 0 FAIL**，Console **160/160 PASS**；根与 Console 类型检查、FsGuard 导入检查（216 文件）、工作树 secret scan 均通过。真实 ChatGPT 网页端刷新工具清单及读写回读仍未验收。

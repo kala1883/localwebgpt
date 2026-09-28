@@ -216,16 +216,14 @@ describe('策略：连接授权层', () => {
     assert.equal(decision.allow, true, `应允许，实际：${decision.primary?.reason ?? '无'}`);
   });
 
-  it('工作区能力开关关闭 → CAPABILITY_FLAG_DISABLED / POLICY_DENIED', () => {
+  it('全局 Git 能力读数不覆盖逐工作区工具 grant', () => {
     const decision = decide(request({ action: 'git_diff', capabilities: { git_enabled: false } }));
-    assert.equal(decision.primary?.reason, 'CAPABILITY_FLAG_DISABLED');
-    assert.equal(decision.primary?.error_code, 'POLICY_DENIED');
+    assert.equal(decision.allow, true, `workspace git_read grant should decide access: ${decision.primary?.reason}`);
   });
 
-  it('direct_write_enabled 默认关闭时不能应用修改', () => {
+  it('全局应用工具读数不覆盖逐工作区 grant', () => {
     const decision = decide(request({ action: 'change_apply', capabilities: { direct_write_enabled: false } }));
-    assert.equal(decision.primary?.reason, 'CAPABILITY_FLAG_DISABLED');
-    assert.equal(decision.allow, false);
+    assert.equal(decision.allow, true, `workspace propose grant should decide access: ${decision.primary?.reason}`);
   });
 });
 

@@ -156,10 +156,9 @@ function requireLocalConsole(context: RequestContext): string {
  * 一个字节都不碰；`read` 描述的是「读工作区里的文件」，那是另一件事。
  * 与 `change_revert_prepare` 选的是同一个面，理由也相同。
  *
- * 选它的一个后果必须写下：`ACTION_SPECS.snapshot_read` 的 `flag` 是
- * `read_enabled`，因此**工作区读取关闭时，控制台也拿不到差异**。
- * 这不是副作用，是正确行为：
- *  - 连接或该工作区没有读取授权时，本来就不该向本地复核页交出差异；
+ * 本地复核依赖已认证的控制台会话与该工作区的状态；平台/daemon 实现 flags
+ * 不参与这条判定。
+ *  - 本地会话没有读取能力时，不向复核页交出差异；
  *  - 工作区被暂停、或处于待人工恢复时，操作者看得到「为什么看不到」，
  *    而不是看到一份内容，这恰好是两个状态各自要防的事。
  * 于是「看不到内容」必须有**一个可以说出口的理由**，而那正是
@@ -211,7 +210,7 @@ export interface ChangeOperationDeps {
   readonly blobs: BlobStore;
   /** 出站预算。控制台会话按 `console:<session_id>` 各记一份。 */
   readonly budgets: EgressBudgetStore;
-  /** 工作区能力开关。与工具面**同一个**函数（`capabilityFlagsWith`）。 */
+  /** 恢复状态读数；全局实现能力 flags 不参与授权。 */
   readonly capability_flags: (workspace: WorkspaceRecord) => CapabilityFlags;
   /** 判定时刻（epoch ms）。省略取当前时间；测试与证据注入固定时刻。 */
   readonly now?: () => number;
@@ -224,7 +223,7 @@ export interface ChangeOperationDeps {
  * 一次复核判定。
  *
  * 判定是**纯函数**，输入是这一层装配出来的快照：工作区行（从状态库读）、
- * 能力开关（与工具面同一个函数）、以及一份**按本次复核收窄过**的连接视图。
+ * 恢复状态，以及一份**按本次复核收窄过**的连接视图。
  * 入参里没有任何字段能影响它 —— 模型参数、请求体、隧道身份都不参与。
  */
 function reviewDecision(
@@ -394,7 +393,7 @@ export function registerChangeOperations(
         const workspace = deps.repos.workspaces.findById(record.workspace_id);
         // 工作区行不见了（理论上不可能：`changesets.workspace_id` 是
         // `ON DELETE RESTRICT`，移除是软删除）。真发生了就不猜：
-        // 没有工作区行就没有能力开关，「能不能读」无从判定，
+          // 没有工作区行就无法核验工作区状态与恢复保护，「能不能读」无从判定，
         // 而按「能读」处理是唯一错得离谱的那个方向。
         if (workspace === null) {
           throw new BridgeError('INTERNAL_ERROR', '该修改集指向的工作区不存在；已拒绝复核读取。', {
