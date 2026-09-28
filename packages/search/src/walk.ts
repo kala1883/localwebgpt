@@ -108,6 +108,8 @@ export interface WalkOptions {
   readonly base_path: string;
   /** 目录询问次数上限；省略即 `DEFAULT_MAX_DIRECTORY_LISTINGS`。 */
   readonly max_directory_listings?: number;
+  /** Called between directory/list-entry steps so callers can enforce deadlines or cancellation. */
+  readonly should_stop?: () => boolean;
 }
 
 export interface WalkState extends WalkCounters {
@@ -117,6 +119,7 @@ export interface WalkState extends WalkCounters {
   readonly base_path: string;
   readonly max_depth: number;
   readonly listing_budget: number;
+  readonly should_stop?: () => boolean;
   listings: number;
 }
 
@@ -128,6 +131,7 @@ export function newWalkState(options: WalkOptions): WalkState {
     base_path: options.base_path,
     max_depth: options.max_depth,
     listing_budget: options.max_directory_listings ?? DEFAULT_MAX_DIRECTORY_LISTINGS,
+    ...(options.should_stop === undefined ? {} : { should_stop: options.should_stop }),
     listings: 0,
     files_seen: 0,
     files_offered: 0,
@@ -219,6 +223,7 @@ export async function walkCandidates(
   let after = resumeAfter ?? '';
 
   for (;;) {
+    if (state.should_stop?.() === true) return false;
     if (state.listings >= state.listing_budget) {
       state.listings_exhausted = true;
       return false;
@@ -237,10 +242,12 @@ export async function walkCandidates(
       state.skipped_subtrees.push({ path: dirPath, code: result.code });
       return false;
     }
+    if (state.should_stop?.() === true) return false;
 
     if (result.entries.length === 0) return false;
 
     for (const raw of result.entries) {
+      if (state.should_stop?.() === true) return false;
       after = raw.name;
       if (await consider(state, visitor, raw, entryDepth)) return true;
     }
@@ -284,6 +291,7 @@ export async function resumeWalk(
   visitor: WalkVisitor,
   resumePath: string,
 ): Promise<boolean> {
+  if (state.should_stop?.() === true) return false;
   const segments = segmentsOf(state.base_path, resumePath);
   const anchorExists = await anchorResolves(state, resumePath);
 
@@ -326,6 +334,7 @@ async function walkFromIncluding(
   let seen = false;
 
   for (;;) {
+    if (state.should_stop?.() === true) return { found: seen, stopped: true };
     if (state.listings >= state.listing_budget) {
       state.listings_exhausted = true;
       return { found: seen, stopped: true };
@@ -341,9 +350,11 @@ async function walkFromIncluding(
       state.skipped_subtrees.push({ path: dirPath, code: result.code });
       return { found: seen, stopped: true };
     }
+    if (state.should_stop?.() === true) return { found: seen, stopped: true };
     if (result.entries.length === 0) return { found: seen, stopped: false };
 
     for (const raw of result.entries) {
+      if (state.should_stop?.() === true) return { found: seen, stopped: true };
       after = raw.name;
       if (!seen && raw.name !== fromName) continue;
       seen = true;

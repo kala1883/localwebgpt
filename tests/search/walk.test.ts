@@ -27,6 +27,7 @@ const RULES = ALL_DEFAULT_RULES;
 interface CollectOptions {
   readonly max_depth?: number;
   readonly max_directory_listings?: number;
+  readonly should_stop?: () => boolean;
 }
 
 interface Collected {
@@ -55,6 +56,7 @@ function walkStateOf(ops: WinfsOps, options: CollectOptions = {}): WalkState {
     ...(options.max_directory_listings === undefined
       ? {}
       : { max_directory_listings: options.max_directory_listings }),
+    ...(options.should_stop === undefined ? {} : { should_stop: options.should_stop }),
   });
 }
 
@@ -223,6 +225,17 @@ describe('LWB-015 遍历：走不完的时候说清楚', () => {
     assert.equal(state.listings, 2);
     // 走了两个目录（根 + a），后面还有没走到的。
     assert.ok(paths.length < 3);
+  });
+
+  it('调用方停止信号在目录枚举批次之间生效，不误报 listing budget 用尽', async () => {
+    const tree = treeOf({ 'a.txt': fileOf('a'), 'b.txt': fileOf('b') });
+    let checks = 0;
+    const { paths, state, listed } = await collect(tree, { should_stop: () => checks++ >= 2 });
+
+    assert.deepEqual(paths, []);
+    assert.equal(state.listings, 1);
+    assert.equal(state.listings_exhausted, false);
+    assert.deepEqual(listed, ['']);
   });
 
   it('护栏每次被问的条目数不超过自己的硬上限', async () => {

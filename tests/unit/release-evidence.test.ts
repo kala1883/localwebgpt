@@ -7,7 +7,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { describe, it } from 'node:test';
 
-const releaseRoot = path.resolve(import.meta.dirname, '../../docs/release');
+const repoRoot = path.resolve(import.meta.dirname, '../..');
+const releaseRoot = path.join(repoRoot, 'docs/release');
 
 describe('LWB-045 release evidence artifacts', () => {
   it('contains a valid SPDX inventory for the locked dependency graph', () => {
@@ -48,8 +49,89 @@ describe('LWB-045 release evidence artifacts', () => {
     assert.doesNotMatch(record, /(?:^|\s)[A-Z]:\\Users\\/i);
   });
 
+  it('fingerprints a dirty source tree with a tracked file deletion and an untracked replacement', () => {
+    const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'lwb-release-source-migration-'));
+    const sourceRoot = path.join(fixtureRoot, 'source');
+    const runtimeRoot = path.join(fixtureRoot, 'runtime');
+    const outputDirectory = path.join(runtimeRoot, 'docs', 'release');
+    const trackedFile = path.join(sourceRoot, 'packaging', 'windows', 'old-launcher.ps1');
+    const replacementFile = path.join(sourceRoot, 'scripts', 'windows', 'launcher.ps1');
+    mkdirSync(path.dirname(trackedFile), { recursive: true });
+    mkdirSync(path.dirname(replacementFile), { recursive: true });
+    mkdirSync(runtimeRoot, { recursive: true });
+    writeFileSync(trackedFile, 'old launcher\n');
+
+    const runGit = (args: readonly string[]): void => {
+      const result = spawnSync('git', args, { cwd: sourceRoot, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+    };
+
+    try {
+      runGit(['init', '--quiet']);
+      runGit(['add', '--', 'packaging/windows/old-launcher.ps1']);
+      runGit([
+        '-c', 'user.name=LocalWebGPT test',
+        '-c', 'user.email=lwb-release-test@example.invalid',
+        'commit', '--quiet', '-m', 'fixture source',
+      ]);
+      rmSync(trackedFile);
+      writeFileSync(replacementFile, 'replacement launcher\n');
+
+      writeFileSync(
+        path.join(runtimeRoot, 'package.json'),
+        JSON.stringify({ name: 'lwb-runtime-fixture', version: '1.2.3', private: true }),
+      );
+      writeFileSync(
+        path.join(runtimeRoot, 'package-lock.json'),
+        JSON.stringify({
+          name: 'lwb-runtime-fixture',
+          version: '1.2.3',
+          lockfileVersion: 3,
+          requires: true,
+          packages: { '': { name: 'lwb-runtime-fixture', version: '1.2.3' } },
+        }),
+      );
+      writeFileSync(path.join(runtimeRoot, 'payload.txt'), 'runtime payload fixture\n');
+
+      const npmExecPath = process.env['npm_execpath'];
+      const viaNpmScript = typeof npmExecPath === 'string' && npmExecPath.length > 0;
+      const result = spawnSync(
+        viaNpmScript ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm',
+        viaNpmScript
+          ? [
+            npmExecPath!,
+            'run',
+            'release:evidence',
+            '--',
+            `--source-root=${sourceRoot}`,
+            `--runtime-root=${runtimeRoot}`,
+            `--output-dir=${outputDirectory}`,
+          ]
+          : [
+            'run',
+            'release:evidence',
+            '--',
+            `--source-root=${sourceRoot}`,
+            `--runtime-root=${runtimeRoot}`,
+            `--output-dir=${outputDirectory}`,
+          ],
+        {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          ...(!viaNpmScript && process.platform === 'win32' ? { shell: true } : {}),
+        },
+      );
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+
+      const record = readFileSync(path.join(outputDirectory, 'build-record.md'), 'utf8');
+      assert.match(record, /Source working tree: dirty/);
+      assert.match(record, /Source manifest SHA-256: `[0-9a-f]{64}` \(1 files;/);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it('build mode fingerprints a runtime payload and records pinned binary hashes', () => {
-    const repoRoot = path.resolve(import.meta.dirname, '../..');
     const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'lwb-release-runtime-'));
     const runtimeRoot = path.join(fixtureRoot, 'runtime');
     mkdirSync(runtimeRoot, { recursive: true });

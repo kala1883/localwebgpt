@@ -251,7 +251,9 @@ describe('LWB-015 提前停下时说清楚看到了多少', () => {
     // 已经走过了预算。
     let calls = 0;
     const { data } = await run(three(), { query: 'needle' }, {
-      clock: () => (calls++ === 0 ? NOW : NOW + 5000),
+      // 检查点：起始、目录批次返回、首条目、文件扫描前、文件扫描后；
+      // 第 6 次（第二条目之前）越过预算，证明已找到的首条仍会返回。
+      clock: () => (calls++ < 5 ? NOW : NOW + 5000),
       limits: { search_time_budget_ms: 1000 },
     });
 
@@ -263,6 +265,20 @@ describe('LWB-015 提前停下时说清楚看到了多少', () => {
     assert.deepEqual(searchBounds(data), ['PAGE_FULL', 'DEADLINE']);
     // 还能接着读：最后一条已返回的命中就是锚点。
     assert.notEqual(data.next_cursor, null);
+  });
+
+  it('目录枚举本身耗尽时间预算时也返回不完整结果，而不是拖到 IPC 超时', async () => {
+    let calls = 0;
+    const { data, calls: opsCalls } = await run(three(), { query: 'needle' }, {
+      clock: () => (calls++ < 2 ? NOW : NOW + 5000),
+      limits: { search_time_budget_ms: 1000 },
+    });
+
+    assert.deepEqual(data.matches, []);
+    assert.equal(data.deadline_exceeded, true);
+    assert.equal(data.scope.complete, false);
+    assert.match(data.incomplete_reason ?? '', /时间预算 1000 ms/);
+    assert.equal(opsCalls.read_paths.length, 0, '预算在首个目录批次后用尽，不应再打开候选文件');
   });
 
   it('字节预算：同样返回部分结果，同样不谎称完整', async () => {
@@ -287,8 +303,12 @@ describe('LWB-015 提前停下时说清楚看到了多少', () => {
   });
 
   it('中途被取消：返回已经找到的那部分', async () => {
-    let calls = 0;
-    const { data } = await run(three(), { query: 'needle' }, { is_cancelled: () => calls++ > 0 });
+    let checks = 0;
+    const { data } = await run(three(), { query: 'needle' }, {
+      // 时间/取消检查点：列表前、列表后、首条目、文件扫描前、扫描后；
+      // 第 6 次检查在第二条目之前取消，保留第一条命中。
+      is_cancelled: () => checks++ >= 5,
+    });
 
     assert.deepEqual(at(data.matches), ['a.txt:1']);
     assert.equal(data.cancelled, true);

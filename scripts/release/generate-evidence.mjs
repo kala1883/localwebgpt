@@ -80,23 +80,35 @@ function gitSourceState(sourceRoot) {
     .filter((entry) => entry.length > 0)
     .filter((entry) => !entry.replaceAll('\\', '/').startsWith(`${RELEASE_SUBDIR}/`));
 
+  let presentFileCount = 0;
   const entries = files.map((relativePath) => {
     const fullPath = path.resolve(sourceRoot, relativePath);
     const relativeCheck = path.relative(sourceRoot, fullPath);
     if (relativeCheck === '..' || relativeCheck.startsWith(`..${path.sep}`) || path.isAbsolute(relativeCheck)) {
       throw new Error('Git source manifest contains a path outside the source root.');
     }
-    const stat = lstatSync(fullPath);
-    const digest = stat.isSymbolicLink()
-      ? sha256(`symlink:${readlinkSync(fullPath)}`)
-      : sha256File(fullPath);
-    return `${relativePath.replaceAll('\\', '/')}\0${digest}\n`;
+    try {
+      const stat = lstatSync(fullPath);
+      const digest = stat.isSymbolicLink()
+        ? sha256(`symlink:${readlinkSync(fullPath)}`)
+        : sha256File(fullPath);
+      presentFileCount += 1;
+      return `${relativePath.replaceAll('\\', '/')}\0${digest}\n`;
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        // `git ls-files --cached` includes tracked files deleted in a dirty
+        // worktree. Bind the absence into the manifest instead of failing or
+        // silently treating the source tree as if the path never existed.
+        return `${relativePath.replaceAll('\\', '/')}\0<deleted-in-worktree>\n`;
+      }
+      throw error;
+    }
   });
 
   return {
     commit,
     dirty: status.length > 0,
-    fileCount: entries.length,
+    fileCount: presentFileCount,
     manifestSha256: sha256(entries.sort().join('')),
   };
 }

@@ -248,16 +248,6 @@ export async function textSearch(args: SearchArgs, deps: SearchDeps): Promise<Te
     resumeSkip = cursor.skip_matches;
   }
 
-  const state = newWalkState({
-    ops: deps.ops,
-    scope,
-    // 判定时用的规则表（含操作者覆盖），不是默认表。闸门拿到的是同一份。
-    rules: clearance.rules,
-    max_depth: limits.max_list_depth,
-    base_path: base.canonical,
-    max_directory_listings: limits.max_directory_listings,
-  });
-
   const deadline = now + limits.search_time_budget_ms;
   const counters: SearchCounters = {
     matches: [],
@@ -275,18 +265,35 @@ export async function textSearch(args: SearchArgs, deps: SearchDeps): Promise<Te
     truncated_by: null,
   };
 
-  /** 扫描一个候选文件。返回值 false 表示遍历该停了。 */
-  const offerFile = async (path: string): Promise<boolean> => {
-    // 预算与取消在**每个文件之前**判一次：读一个文件可能很久（受控句柄是
-    // 整文件读取），而「已经超时了还在读下一个」正是超时预算要防的事。
+  const shouldStop = (): boolean => {
+    if (counters.truncated_by === 'DEADLINE' || counters.truncated_by === 'CANCELLED') return true;
     if (deps.is_cancelled?.() === true) {
       counters.truncated_by = 'CANCELLED';
-      return false;
+      return true;
     }
     if (deps.clock() >= deadline) {
       counters.truncated_by = 'DEADLINE';
-      return false;
+      return true;
     }
+    return false;
+  };
+
+  const state = newWalkState({
+    ops: deps.ops,
+    scope,
+    // 判定时用的规则表（含操作者覆盖），不是默认表。闸门拿到的是同一份。
+    rules: clearance.rules,
+    max_depth: limits.max_list_depth,
+    base_path: base.canonical,
+    max_directory_listings: limits.max_directory_listings,
+    should_stop: shouldStop,
+  });
+
+  /** 扫描一个候选文件。返回值 false 表示遍历该停了。 */
+  const offerFile = async (path: string): Promise<boolean> => {
+    // walker 在每个目录询问、返回批次和条目之前都检查同一预算；这里再
+    // 检查一次，避免 visitor 入口与目录枚举之间开始下一次文件读取。
+    if (shouldStop()) return false;
 
     // glob 只筛**文件**，不剪**目录**：`*.ts` 不该让遍历跳过 `src/`。
     // 剪枝要靠「这个目录名匹配不上模式」来推断，而那在模式含 `**` 或
@@ -357,6 +364,9 @@ export async function textSearch(args: SearchArgs, deps: SearchDeps): Promise<Te
       counters.truncated_by = 'BYTE_BUDGET';
       return false;
     }
+    // 单个受控读取不可被本层中途打断；若它本身耗尽时间预算，保留本文件
+    // 已经核验的命中，但必须把结果标为不完整，不能返回 `complete=true`。
+    if (shouldStop()) return false;
     // 页满了**也要继续**，直到找到那条证据或者遍历走完。见文件头。
     // 下一轮 `remaining_matches` 为 0，因此不会再多出站任何片段。
     return counters.witness === null;
