@@ -26,7 +26,7 @@
 | ChatGPT 网页 MCP discovery、读取、写入与搜索 | PARTIAL | Manage 页 `Refresh tools` 后，Temporary Chat 中真实调用 `workspace_list`、`command_exec`、`file_create` → 磁盘 `file_read` → `file_edit` → 再次 `file_read`；写入均 `APPLIED`、`VERIFIED`，哈希与回读一致。专用验收文件仍等待用户确认删除。精确文件 glob 搜索通过；全根搜索经第一次修正后能返回不完整结果，但仍撞 64 MiB 字节预算，暴露出 epoch/monotonic 时钟混用；此时限已修正并通过全量回归，live tunnel 还未重启加载这一最终修正。冲突、拒绝、断连/重连、删除/恢复等真实网页场景仍未验收。详见 [`../evidence/platform-capability.md`](../evidence/platform-capability.md) §§12–13 与 [`../evidence/lwb-015-search-deadline.md`](../evidence/lwb-015-search-deadline.md)。 |
 | 独立安全审查 | NOT_RUN | `docs/evidence/security-review.md` 是实现者自查与自动回归，不是非实现者签署。 |
 | LWB-038 长时间配额/磁盘压力、LWB-039 睡眠唤醒、LWB-044 soak/冷缓存 | PARTIAL | 已有有界配额、模拟/定向 Windows 与基准证据；小时级 soak、睡眠唤醒和真冷缓存未跑。 |
-| Windows 安装、自动升级/卸载、代码签名 | PARTIAL | 已在本机从干净提交 `ed3e23a` 构建 Windows x64 runtime，生成 303 包 SPDX 与 9,894-file payload 指纹；`.env` 未打包。没有签名安装器、自动升级/卸载器或独立供应链签署；完整生成信息见 [`build-record.md`](build-record.md)。 |
+| Windows 安装、自动升级/卸载、代码签名 | PARTIAL | 已在本机从干净提交 `4888420` 构建 Windows x64 runtime，生成 303 包 SPDX 与 9,894-file payload 指纹；`.env` 未打包。没有签名安装器、自动升级/卸载器或独立供应链签署；完整生成信息见 [`build-record.md`](build-record.md)。 |
 | 公开插件分发 | OUT OF SCOPE | Secure MCP Tunnel 支持私有开发连接；公开插件需要稳定公网 HTTPS MCP endpoint 与单独提审，Tunnel 不满足公开分发要求。 |
 
 ## 操作入口
