@@ -39,7 +39,12 @@ kept as a path string, not interpreted by the daemon.
 | Audit ranges and redaction | `tests/unit/daemon-audit.test.ts` | Does not independently verify every production log sink/configuration |
 | UI rendering of hostile content | `apps/console/tests/diff-view.spec.ts`; full Console suite | Live browser/ChatGPT renderer path not tested |
 | Recovery/helper death | `tests/fault-injection/guard-death.test.ts` | Full independent crash/recovery review remains pending |
+| `command_exec` | `tests/windows/command-processes.test.ts`, `tests/windows/daemon-command-exec.test.ts`, workspace-grant/policy tests | Confirms grant boundary, timeout/output bounds, inherited-secret filtering, output screening, and pause/revocation stop; does **not** sandbox shell filesystem/network access or verify arbitrary command effects outside the workspace |
 | Build/update provenance | `docs/release/build-record.md`, `docs/release/sbom.json` | Formal Windows runtime build, independent supply-chain review and signature remain pending under LWB-045 |
+
+### 2026-09-28 follow-up: command execution
+
+`command_exec` was added after the original review run. Its grant/catalog/handler, bounded-process, output-filtering, revocation, pause and packaged-runtime tests pass. This verifies only the declared behavior; it does not make shell execution confined to the workspace and is not an independent review. The tool runs as the current Windows user, can access out-of-root resources and the network, and has no file-level rollback.
 
 ## Unresolved release risks / limitations
 
@@ -49,6 +54,10 @@ kept as a path string, not interpreted by the daemon.
 - File contents can contain prompt-injection instructions. The tool contract
   identifies disk data as untrusted; safety still depends on the consuming
   model and was not proved against a live account.
+- `command_exec` is an explicit high-risk capability, not a directory sandbox.
+  A granted shell runs with the current Windows user's permissions, can access
+  out-of-root files or the network, and bypasses the protected file writer and
+  snapshot rollback. Output scanning cannot prevent direct network exfiltration.
 - Unsaved editor buffers are outside the V1 disk-only source; the UI must not
   imply otherwise.
 - Platform acceptance fields are informational. Production access is governed

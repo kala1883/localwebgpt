@@ -2093,3 +2093,4 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 明确的安全边界：这是以运行 LocalWebGPT 的 Windows 用户权限运行任意 shell，不是 OS 沙箱；命令可以访问用户有权访问的其它路径、联网、绕过 FsGuard/快照回滚并留下部分副作用。超时、撤权、暂停或输出被拦时，先检查现场再考虑重试。ADR-005、双语 README、Console 与 operator runbook 已写明这一点。
 - 验证：command/policy/catalog/workspace-grant/MCP/Egress/audit 定向 **196/196 PASS**，命令与暂停 NTFS 专项 **89/89 PASS**；Console **162/162 PASS**。全仓 `npm run check` **PASS**：根测试 **1825 项 / 1810 PASS / 15 SKIP / 0 FAIL**，根与 Console 类型检查、FsGuard **218** 文件扫描及 secret scan 全通过。新增的一个 SKIP 是当前主机 `C:\Windows\System32\bash.exe` 的 WSL 启动器测试条件跳过；独立 Bash `echo` smoke 已通过。
 - 工具 E2E 在临时夹具目录验证；没有对用户真实工作区执行命令，ChatGPT 网页端刷新工具清单与真实会话验收仍未执行。
+- LWB-042 威胁模型与安全审查补记 T17：command_exec 可越出初始 cwd、联网并绕过 FsGuard；现有测试确认授权、输出、时限、撤权/暂停行为，不代表沙箱或独立安全签署。LWB-042 仍 PARTIAL。
