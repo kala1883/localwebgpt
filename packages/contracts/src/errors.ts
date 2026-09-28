@@ -75,7 +75,7 @@ export const BRIDGE_ERRORS = {
     code: 'PAUSED',
     category: 'business',
     autoRetry: 'never',
-    summary: '本地服务处于暂停状态，已阻断新读取与新应用。',
+    summary: '本地服务处于暂停状态，已阻断新读取、命令执行与新应用。',
   },
 
   // ---- 路径与文件形态 ----
@@ -248,6 +248,12 @@ export const BRIDGE_ERRORS = {
       '本地桥接服务不可达或未在时限内回应；**本次调用是否已执行未知**，' +
       '不得据此判断成功或失败。请确认本地 daemon 正在运行后重新调用。',
   },
+  COMMAND_SHELL_UNAVAILABLE: {
+    code: 'COMMAND_SHELL_UNAVAILABLE',
+    category: 'business',
+    autoRetry: 'never',
+    summary: '所选命令解释器在本机不可用；请安装或配置该 shell。',
+  },
 
   // ---- 协议层 ----
   INVALID_ARGUMENT: {
@@ -266,7 +272,7 @@ export const BRIDGE_ERRORS = {
     code: 'UNSUPPORTED_OPERATION',
     category: 'protocol',
     autoRetry: 'never',
-    summary: '该操作不在 V1 范围内（例如目录创建、重命名、删除、任意 Shell）。',
+    summary: '该操作不在当前版本的支持范围内。',
   },
   NOT_FOUND: {
     code: 'NOT_FOUND',

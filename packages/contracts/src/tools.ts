@@ -16,6 +16,7 @@ import { LIMITS } from './limits.ts';
 import type { FileListInput } from './list.ts';
 import type { FileReadInput } from './read.ts';
 import type { TextSearchInput } from './search.ts';
+import type { CommandExecInput } from './command.ts';
 import type { ShapeCheck } from './wire-shape.ts';
 
 export const TOOL_NAMES = [
@@ -34,6 +35,7 @@ export const TOOL_NAMES = [
   'change_list',
   'change_apply',
   'change_revert_prepare',
+  'command_exec',
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -291,6 +293,12 @@ const changeRevertPrepareInput = z.strictObject({
   idempotency_key: idempotencyKey,
 });
 
+const commandExecInput = z.strictObject({
+  workspace_id: workspaceId,
+  shell: z.enum(['cmd', 'powershell', 'bash']),
+  command: z.string().min(1).max(16_384).describe('要传给所选 shell 的命令文本；它会以本机用户权限执行。'),
+});
+
 export const TOOL_INPUT_SCHEMAS = {
   bridge_status: noInput,
   workspace_list: noInput,
@@ -307,6 +315,7 @@ export const TOOL_INPUT_SCHEMAS = {
   change_list: changeListInput,
   change_apply: changeApplyInput,
   change_revert_prepare: changeRevertPrepareInput,
+  command_exec: commandExecInput,
 };
 // 这里刻意**不写** `satisfies Record<ToolName, z.ZodObject<z.ZodRawShape>>`：
 // 那个写法会把每一项的上下文类型定成被抹平的 `z.ZodObject<z.ZodRawShape>`，
@@ -336,6 +345,7 @@ interface ToolInputContracts {
   readonly change_list: ChangeListInput;
   readonly change_apply: ChangeApplyInput;
   readonly change_revert_prepare: ChangeRevertPrepareInput;
+  readonly command_exec: CommandExecInput;
 }
 
 /**
@@ -387,6 +397,7 @@ export const INPUT_CONTRACT_WITNESS: AllInputChecks = {
   change_list: true,
   change_apply: true,
   change_revert_prepare: true,
+  command_exec: true,
 };
 void INPUT_CONTRACT_WITNESS;
 
@@ -544,6 +555,14 @@ export const TOOLS: readonly ToolDefinition[] = [
       'V1 不支持自动删除由插件创建的文件。',
     inputSchema: TOOL_INPUT_SCHEMAS.change_revert_prepare,
     annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  {
+    name: 'command_exec',
+    title: '在授权工作区执行命令',
+    description:
+      '在指定的已授权目录根下启动 cmd、PowerShell 或 Bash 命令。需要该工作区单独授予“命令执行”权限，且工作区必须为可写模式。命令以运行 LocalWebGPT 的本机用户身份执行，可读写该用户有权访问的其他路径，也可能联网；工作目录不是沙箱。仅向可信连接和可信工作区授予此权限。每次最长运行 25 秒，输出有大小限制；命令超时或被停止时可能已产生部分副作用，工具不会自动回滚。',
+    inputSchema: TOOL_INPUT_SCHEMAS.command_exec,
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
 ];
 

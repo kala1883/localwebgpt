@@ -59,6 +59,7 @@ const ACCESS_OPTIONS: readonly {
   { capability: 'search', label: '搜索文本', tools: 'text_search' },
   { capability: 'git_read', label: '读取 Git 状态与差异', tools: 'git_status、git_diff' },
   { capability: 'propose', label: '文件修改（直接写入）', tools: 'file_create、file_delete、change_prepare、change_apply、change_revert_prepare；file_edit 还需读取授权' },
+  { capability: 'command_exec', label: '命令执行（高风险）', tools: 'command_exec：cmd、PowerShell、Bash' },
 ];
 
 const props = withDefaults(
@@ -497,20 +498,23 @@ function cancelAccess(): void {
             </button>
             <div v-if="accessDraft?.workspace_id === row.workspace_id" class="ws__access-editor" :data-testid="`access-editor-${row.workspace_id}`">
               <p class="ws__risk">
-                只对上面这个目录生效。勾选“文件修改”代表允许 ChatGPT 在此目录直接创建/删除普通文件并应用修改集，不再逐次等待批准；编辑已有文件还需同时授予“读取文件内容”。取消勾选并保存即可撤销。其他目录不受影响。
+                只对上面这个目录生效。勾选“文件修改”代表允许 ChatGPT 在此目录直接创建/删除普通文件并应用修改集，不再逐次等待批准；编辑已有文件还需同时授予“读取文件内容”。“命令执行”会以运行 LocalWebGPT 的本机用户身份运行任意所选 shell；目录只是起始工作目录，命令仍可访问该用户有权访问的其他路径并可联网，不是沙箱。命令可能修改/删除文件且不会由受保护文件执行器回滚。只对可信连接与可信目录授予。取消勾选并保存即可撤销。其他目录不受影响。
               </p>
               <label v-for="option in ACCESS_OPTIONS" :key="option.capability" class="ws__choice ws__access-option">
                 <input
                   type="checkbox"
                   :checked="accessDraft.capabilities.includes(option.capability)"
-                  :disabled="option.capability === 'propose' && row.mode === 'read_only'"
+                  :disabled="((option.capability === 'propose' || option.capability === 'command_exec') && row.mode === 'read_only') || (option.capability === 'command_exec' && row.kind !== 'directory')"
                   :data-testid="`access-${row.workspace_id}-${option.capability}`"
                   @change="toggleAccess(option.capability, $event)"
                 />
                 <span><strong>{{ option.label }}</strong> <code>{{ option.tools }}</code></span>
               </label>
               <p v-if="row.mode === 'read_only'" class="ws__dim" data-testid="propose-mode-note">
-                此根登记为只读，不能授权文件修改。
+                此根登记为只读，不能授权文件修改或命令执行。
+              </p>
+              <p v-if="row.kind !== 'directory'" class="ws__dim" data-testid="command-mode-note">
+                命令执行仅支持目录工作区。
               </p>
               <div class="ws__actions">
                 <button type="button" :disabled="!canAct(row)" :data-testid="`save-access-${row.workspace_id}`" @click="saveAccess">保存目录授权</button>

@@ -9,7 +9,7 @@ import type { OperationDefinition, OperationRegistry, RequestContext } from '@lw
 import type { Repositories } from '@lwb/persistence';
 import { WORKSPACES_MANAGE_CAPABILITY, originOf } from './workspaces.ts';
 
-export const MODEL_WORKSPACE_CAPABILITIES = ['read', 'list', 'search', 'git_read', 'propose'] as const;
+export const MODEL_WORKSPACE_CAPABILITIES = ['read', 'list', 'search', 'git_read', 'propose', 'command_exec'] as const;
 export type ModelWorkspaceCapability = (typeof MODEL_WORKSPACE_CAPABILITIES)[number];
 
 export interface WorkspaceAccessOperationsDeps {
@@ -107,8 +107,11 @@ export function registerWorkspaceAccessOperations(
         if (workspace.removed_at !== null) {
           throw new BridgeError('WORKSPACE_NOT_GRANTED', '已移除的工作区不能重新授予 ChatGPT。');
         }
-        if (workspace.mode === 'read_only' && capabilities.includes('propose')) {
-          throw new BridgeError('INVALID_ARGUMENT', '只读工作区不能授予修改提议能力。');
+        if (workspace.mode === 'read_only' && capabilities.some((capability) => capability === 'propose' || capability === 'command_exec')) {
+          throw new BridgeError('INVALID_ARGUMENT', '只读工作区不能授予文件修改或命令执行能力。');
+        }
+        if (workspace.kind !== 'directory' && capabilities.includes('command_exec')) {
+          throw new BridgeError('INVALID_ARGUMENT', '命令执行只能授予目录工作区，不能授予单文件工作区。');
         }
 
         const previous = deps.repos.grants.find(connection.id, workspace.id);

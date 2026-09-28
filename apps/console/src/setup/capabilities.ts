@@ -111,7 +111,7 @@ export function modeOffers(
       label: '读取 + 修改',
       risk:
         '勾选“文件修改”后，ChatGPT 可在此授权目录内直接创建/删除普通文件并应用修改集，不会逐次等待本机批准；编辑已有文件还需同时授予“读取文件内容”。' +
-        '每次写入仍检查路径、冲突并保留恢复快照；不提供任意命令执行或目录外访问。' +
+        '普通文件写入仍检查路径、冲突并保留恢复快照。命令执行不随文件修改授权开放，须单独勾选高风险授权。' +
         (write.direct_write ? '' : `（${write.reasons.join('')}）`),
       requires_ack: true,
     },
@@ -230,9 +230,11 @@ export function exposureSummary(
     );
     const canReadFiles = hasFileReadTool;
     const canReadGit = grant.capabilities.includes('git_read');
+    const canRunCommands = row.kind === 'directory' &&
+      row.mode === 'read_propose_apply_with_local_approval' && grant.capabilities.includes('command_exec');
     const canPrepareChanges = row.mode === 'read_propose_apply_with_local_approval' &&
       grant.capabilities.includes('propose');
-    return canReadFiles || canReadGit || canPrepareChanges;
+    return canReadFiles || canReadGit || canPrepareChanges || canRunCommands;
   }).length;
 
   const connectionLine = connectionEnabled === true

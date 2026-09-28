@@ -67,6 +67,7 @@ import type {
 } from './change.ts';
 import { CHANGE_STATE_LABELS } from './change.ts';
 import type { ToolName } from './tools.ts';
+import type { CommandExecData } from './command.ts';
 import type { WorkspaceKind, WorkspaceMode } from './version.ts';
 
 // ---------------------------------------------------------------------------
@@ -650,12 +651,26 @@ checkShape<ChangeRevertPrepareData, typeof changeRevertPrepareDataSchema>(true);
 
 export const CHANGE_REVERT_PREPARE_OUTPUT = okEnvelopeOf(changeRevertPrepareDataSchema);
 
+const commandExecDataSchema = z.strictObject({
+  shell: z.enum(['cmd', 'powershell', 'bash']),
+  exit_code: z.number().int().nullable(),
+  duration_ms: z.number().int().nonnegative(),
+  timed_out: z.boolean(),
+  output_truncated: z.boolean(),
+  output_withheld: z.boolean(),
+  stdout: z.string(),
+  stderr: z.string(),
+});
+checkShape<CommandExecData, typeof commandExecDataSchema>(true);
+
+export const COMMAND_EXEC_OUTPUT = okEnvelopeOf(commandExecDataSchema);
+
 // ---------------------------------------------------------------------------
 // 汇总
 // ---------------------------------------------------------------------------
 
 /**
- * **已实现**的工具名。`TOOL_NAMES`（`tools.ts`）是全部 15 个工具的
+ * **已实现**的工具名。`TOOL_NAMES`（`tools.ts`）是全部 16 个工具的
  * **名字**来源，这一张是**已有实现与输出契约**的那一部分。
  *
  * 单列一张而不是用 `Partial<Record<ToolName, …>>`，是为了让「实现了一个工具
@@ -665,16 +680,14 @@ export const CHANGE_REVERT_PREPARE_OUTPUT = okEnvelopeOf(changeRevertPrepareData
  *
  * 提议链路工具（`change_prepare` / `change_get` / `change_list`）
  * 在 LWB-025 进来，写入那两个（`change_apply` / `change_revert_prepare`）
- * 在 LWB-032 进来；`file_create` / `file_edit` / `file_delete` 是单文件入口扩展 —— 到此 `TOOL_NAMES` 的 15 个工具**全部**有了实现与输出
- * 契约。
+ * 在 LWB-032 进来；`file_create` / `file_edit` / `file_delete` 是单文件入口扩展；`command_exec` 是显式授权的高风险子进程入口 —— 到此 `TOOL_NAMES` 的 16 个工具**全部**有了实现与输出契约。
  *
  * ## 「全都在表里」不等于「模型能用」
  *
  * 名字在这里只说明「本机有代码能回答它」。真正的可用性由工具清单
- * （`apps/daemon/src/tools/catalog.ts`）按能力开关逐条裁定，而生产装配下
- * 四个开关全关 ⇒ 清单里仍然只有那三条只读状态库的工具。
- * `change_apply` 因此**挂不出来**，即使它已经有了实现 ——
- * 这正是 §5.1「不可用的能力不得在工具描述里被暗示为可用」的落点。
+ * （`apps/daemon/src/tools/catalog.ts`）按连接状态与 workspace/tool grant 逐条裁定；
+ * 验收 flag 是诊断信息，不是第二套权限开关。未获任何 workspace 工具 grant 时，
+ * 工具面仍只有三条连接级工具。
  */
 export const IMPLEMENTED_TOOL_NAMES = [
   'bridge_status',
@@ -692,6 +705,7 @@ export const IMPLEMENTED_TOOL_NAMES = [
   'change_list',
   'change_apply',
   'change_revert_prepare',
+  'command_exec',
 ] as const;
 
 export type ImplementedToolName = (typeof IMPLEMENTED_TOOL_NAMES)[number];
@@ -717,6 +731,7 @@ export const TOOL_OUTPUT_SCHEMAS: Readonly<Record<ImplementedToolName, z.ZodObje
   change_list: CHANGE_LIST_OUTPUT,
   change_apply: CHANGE_APPLY_OUTPUT,
   change_revert_prepare: CHANGE_REVERT_PREPARE_OUTPUT,
+  command_exec: COMMAND_EXEC_OUTPUT,
 };
 
 export function outputSchemaOf(name: ToolName): z.ZodObject<z.ZodRawShape> | undefined {

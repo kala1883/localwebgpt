@@ -126,7 +126,7 @@ function factsOf(reading: PauseStatusReading, fresh: Freshness, observedAt: stri
   facts.push(
     reading.paused
       ? `服务处于暂停状态${reading.paused_at === null ? '（这一份读数里没有暂停时刻）' : `，上次暂停于 ${reading.paused_at}`}。` +
-          '暂停只阻断新的读取与新应用，**不撤销已经交出去的内容**。'
+          '暂停会阻断新的读取、命令执行与应用，**不撤销已经交出去的内容**。'
       : '服务当前没有暂停，新调用会被正常处理。',
   );
 
@@ -302,7 +302,7 @@ export function pauseOutcomeReport(outcome: PauseOutcomeReading): PauseOutcomeRe
         ? '按键已送达，但之后的状态没有读到。'
         : outcome.already
           ? '服务本来就在暂停中。'
-          : '已暂停：新的读取与新应用都被阻断；已经交出去的内容收不回来。';
+          : '已暂停：新的读取、命令执行与新应用都被阻断；已经交出去的内容收不回来。';
 
   return { severity, headline, lines };
 }

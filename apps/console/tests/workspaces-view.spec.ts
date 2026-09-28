@@ -506,6 +506,7 @@ describe('C 组 · 逐行动作', () => {
     assert.equal((wrapper.find('[data-testid="access-ws_1-read"]').element as HTMLInputElement).checked, true);
     assert.equal((wrapper.find('[data-testid="access-ws_1-search"]').element as HTMLInputElement).checked, false);
     assert.equal(wrapper.find('[data-testid="access-ws_1-propose"]').attributes('disabled') !== undefined, true);
+    assert.equal(wrapper.find('[data-testid="access-ws_1-command_exec"]').attributes('disabled') !== undefined, true);
     assert.equal(wrapper.find('[data-testid="propose-mode-note"]').exists(), true);
 
     await wrapper.find('[data-testid="access-ws_1-git_read"]').setValue(true);
@@ -526,5 +527,27 @@ describe('C 组 · 逐行动作', () => {
     await wrapper.find('[data-testid="access-ws_1-read"]').setValue(false);
     await wrapper.find('[data-testid="save-access-ws_1"]').trigger('click');
     assert.deepEqual(wrapper.emitted('set-access')?.[0]?.[0], { workspace_id: 'ws_1', capabilities: [] });
+  });
+
+  it('C11 命令执行是独立高风险 grant：可写目录可选，单文件根不可选', async () => {
+    const wrapper = mountView({
+      session: SESSION,
+      workspaces: [
+        workspace({ workspace_id: 'ws_dir', mode: 'read_propose_apply_with_local_approval' }),
+        workspace({ workspace_id: 'ws_file', kind: 'file', mode: 'read_propose_apply_with_local_approval' }),
+      ],
+    });
+    await wrapper.find('[data-testid="configure-access-ws_dir"]').trigger('click');
+    assert.equal(disabled(wrapper, 'access-ws_dir-command_exec'), false);
+    assert.match(wrapper.find('[data-testid="access-editor-ws_dir"]').text(), /不是沙箱/);
+    await wrapper.find('[data-testid="access-ws_dir-command_exec"]').setValue(true);
+    await wrapper.find('[data-testid="save-access-ws_dir"]').trigger('click');
+    assert.deepEqual(wrapper.emitted('set-access')?.[0]?.[0], {
+      workspace_id: 'ws_dir',
+      capabilities: ['command_exec'],
+    });
+
+    await wrapper.find('[data-testid="configure-access-ws_file"]').trigger('click');
+    assert.equal(disabled(wrapper, 'access-ws_file-command_exec'), true);
   });
 });

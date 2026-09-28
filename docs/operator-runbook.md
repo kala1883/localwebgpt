@@ -78,10 +78,10 @@ Invoke-WebRequest http://127.0.0.1:8080/readyz
 
 1. 通常先登记一个**专用测试目录**（例如 `D:\LWB-Test`）。若你明确选择 `C:\` / `D:\` 这样的卷根，权限范围就是该卷内的所有可访问路径，会覆盖该卷上的窄目录授权。
 2. 对刚创建的 ChatGPT 连接勾选所需工具：读取、搜索、Git 只读、文件修改。只开实际需要的项。
-3. 保存授权。每个目录的工具 grant 是实际权限来源；`file_create` / `file_edit` / `file_delete` 在同一 MCP 调用内直接执行，多文件修改用 `change_prepare` → `change_apply`，都不再要求每次操作去 Console 点击批准。删除只需路径；daemon 在本次调用内保存完整基线快照（单文件上限 16 MiB）。
+3. 保存授权。每个目录的工具 grant 是实际权限来源；`file_create` / `file_edit` / `file_delete` 在同一 MCP 调用内直接执行，多文件修改用 `change_prepare` → `change_apply`，都不再要求每次操作去 Console 点击批准。删除只需路径；daemon 在本次调用内保存完整基线快照（单文件上限 16 MiB）。`command_exec` 是另一个独立的高风险 grant，只能授予可写目录根。
 4. 删除/撤销 workspace grant 或暂停连接后，再次调用应被拒绝。出现不确定结果时先查 Console 的更改/恢复页，不要盲目重试写入。
 
-当前 MCP 不提供任意 Shell、Git commit/push 或工作区外路径访问。`file_delete` 可删除普通文件，但秘密/凭据硬拒绝路径、多硬链接对象及越出授权根的路径仍拒绝；关键路径拒绝、冲突检查、快照、审计、回读校验与紧急暂停仍保留。
+`command_exec` 支持 `cmd`、PowerShell 和 Bash，以运行 LocalWebGPT 的本机用户权限启动。它只把授权目录设为初始工作目录，并不构成沙箱：命令可能访问其他可访问路径、联网、绕过文件护栏且留下无法自动回滚的部分副作用。每次最多运行 25 秒，输出限量并做秘密/绝对路径筛查；只在一次性测试目录使用，并且只授予可信连接。虽然没有专用 Git 写工具，shell 仍可运行 `git commit` / `git push` 等任意命令；不要把工具列表误当成 shell 内部能力白名单。普通 `file_delete` 仍拒绝秘密/凭据硬拒绝路径、多硬链接对象及越出授权根的路径；这些文件工具的冲突检查、快照、审计、回读校验与紧急暂停继续生效。
 
 ## 6. 建议的网页验收顺序
 

@@ -465,7 +465,7 @@ describe('D 组 · 暂停与恢复', () => {
     assert.match(text, /chg_0002/, '事实 2：排队中的授权');
     assert.match(text, /op_0009/, '事实 3：待恢复');
     assert.match(text, /收不回来.*7 条/, '事实 4：已经出去的内容');
-    assert.match(text, /暂停只阻断新的读取与新应用/, '事实 5 的语义边界');
+    assert.match(text, /暂停会阻断新的读取、命令执行与应用/, '事实 5 的语义边界');
     assert.equal(view.facts.length, 5, '五条各占一行，一条都不合并');
   });
 

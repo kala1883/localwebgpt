@@ -3,7 +3,7 @@
  *
  * ## 为什么清单要由 daemon 决定，而不是适配器写死
  *
- * 适配器手上有全部 14 个工具的定义（`@lwb/contracts` 的 `TOOLS`），
+ * 适配器手上有全部 16 个工具的定义（`@lwb/contracts` 的 `TOOLS`），
  * 它完全可以自己挂出去。但「这个工具此刻可用吗」是**本机状态**：
  * 它取决于连接启停、工作区 grant 与恢复状态。适配器不知道这些，
  * 猜一个就等于在工具面上宣称一个未经授权的能力。
@@ -38,7 +38,7 @@ export interface CatalogEntry {
  */
 type AvailabilityRule =
   | { readonly kind: 'connection' }
-  | { readonly kind: 'workspace_grant'; readonly capabilities: readonly CapabilityName[] };
+  | { readonly kind: 'workspace_grant'; readonly capabilities: readonly CapabilityName[]; readonly directory_only?: boolean };
 
 const AVAILABILITY: Readonly<Record<ImplementedToolName, AvailabilityRule>> = {
   // 不读工作区内容：连接在册且启用即可用。
@@ -62,25 +62,30 @@ const AVAILABILITY: Readonly<Record<ImplementedToolName, AvailabilityRule>> = {
   change_list: { kind: 'connection' },
   change_apply: { kind: 'workspace_grant', capabilities: ['propose'] },
   change_revert_prepare: { kind: 'workspace_grant', capabilities: ['propose'] },
+  command_exec: { kind: 'workspace_grant', capabilities: ['command_exec'], directory_only: true },
 };
 
 export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): readonly CatalogEntry[] {
   const connection = resolveConnection(context, deps);
   const usable = usableWorkspaces(deps.repos, connection.id);
 
-  const anyWorkspaceHas = (capabilities: readonly CapabilityName[]): boolean =>
+  const anyWorkspaceHas = (capabilities: readonly CapabilityName[], directoryOnly: boolean): boolean =>
     usable.some((workspace) => {
       if (!workspace.enabled) return false;
-      if (capabilities.includes('propose') && workspace.mode !== 'read_propose_apply_with_local_approval') return false;
+      if (directoryOnly && workspace.kind !== 'directory') return false;
+      if (
+        (capabilities.includes('propose') || capabilities.includes('command_exec')) &&
+        workspace.mode !== 'read_propose_apply_with_local_approval'
+      ) return false;
       const grant = deps.repos.grants.find(connection.id, workspace.id);
       return grant?.enabled === true && capabilities.every((capability) => grant.capabilities.includes(capability));
     });
 
   return TOOL_NAMES.map<CatalogEntry>((name) => {
     if (!isImplementedToolName(name)) {
-      // LWB-032 之后 `TOOL_NAMES` 的 14 个工具**全部**有实现，因此这条
+      // 当前 `TOOL_NAMES` 的 16 个工具**全部**有实现，因此这条
       // 分支今天到不了。留着它是因为它守的是一件会再发生的事：`TOOL_NAMES`
-      // 是契约里那份「工具全集」，将来加第十三个名字时，它会先以
+      // 是契约里那份「工具全集」，将来新增一个名字时，它会先以
       // `NOT_IMPLEMENTED` 出现在清单里 —— 如实列成不可用比让它凭空消失
       // 更好排查，而且「不可用」不会让模型以为自己能用。
       return { name, available: false, reason: 'NOT_IMPLEMENTED' };
@@ -88,7 +93,7 @@ export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): read
 
     const rule = AVAILABILITY[name];
     if (rule.kind === 'connection') return { name, available: true, reason: null };
-    if (!anyWorkspaceHas(rule.capabilities)) {
+    if (!anyWorkspaceHas(rule.capabilities, rule.directory_only ?? false)) {
       return { name, available: false, reason: 'WORKSPACE_TOOL_NOT_GRANTED' };
     }
     return { name, available: true, reason: null };

@@ -48,6 +48,7 @@ import type {
   ChangeListData,
   ChangePrepareInput,
   ChangePrepareData,
+  CommandExecInput,
   ChangeRevertPrepareData,
   Envelope,
   FileListData,
@@ -91,10 +92,12 @@ import { textSearch } from '@lwb/search';
 import type { SearchLimits } from '@lwb/search';
 import { classifyFile } from '@lwb/policy';
 import type { FileRule, PolicyAction } from '@lwb/policy';
+import { emitContent, mintClearance } from '@lwb/egress';
 import type { WinfsOps } from '@lwb/winfs';
 import type { RequestContext } from '@lwb/ipc';
 import type { ConcurrencyGate, LimitTable } from '@lwb/limits';
 import type { ConnectionRecord, WorkspaceRecord } from '@lwb/persistence';
+import type { CommandProcessManager, CommandProcessResult } from '../lifecycle/command-processes.ts';
 
 import { capabilityFlagsFrom, limitationsOf } from '../gates.ts';
 import type { PlatformGates } from '../gates.ts';
@@ -161,6 +164,8 @@ export interface ToolLimits {
 }
 
 export interface ToolHandlerDeps extends ToolAccessDeps {
+  /** Present in production; owns shell children and reaps them during orderly shutdown. */
+  readonly command_processes?: CommandProcessManager;
   /** 受控句柄后端（生产上是 `@lwb/winfs`）。 */
   readonly ops: WinfsOps;
   /**
@@ -384,6 +389,7 @@ export const TOOL_POLICY_ACTIONS = {
   // 撤销**提议**：与 `change_prepare` 一样由该 workspace 的 propose grant 授权；
   // 它只生成逆向修改集，不直接写用户文件。
   change_revert_prepare: 'change_revert_prepare',
+  command_exec: 'command_exec',
 } satisfies Readonly<Record<ImplementedToolName, PolicyAction | null>>;
 
 // ---------------------------------------------------------------------------
@@ -616,6 +622,187 @@ async function gitDiffTool(input: unknown, context: RequestContext, deps: ToolHa
         ...(deps.limits?.git === undefined ? {} : { limits: deps.limits.git }),
       },
     );
+  });
+}
+
+type CommandCancellationCode =
+  | 'CONNECTION_DISABLED'
+  | 'WORKSPACE_NOT_GRANTED'
+  | 'WORKSPACE_GENERATION_CHANGED'
+  | 'POLICY_DENIED'
+  | 'PAUSED'
+  | 'RECOVERY_REQUIRED'
+  | 'STORAGE_UNAVAILABLE';
+
+const POSIX_ABSOLUTE_PATH_SHAPE = /(?:^|[\s"'`=])\/(?:[A-Za-z0-9._~+-]+\/)*[A-Za-z0-9._~+-]+/;
+
+function commandOutputIsSafe(text: string): boolean {
+  return isSafeForModel(text) && !POSIX_ABSOLUTE_PATH_SHAPE.test(text);
+}
+
+function commandCancellationCode(
+  deps: ToolHandlerDeps,
+  connectionId: string,
+  workspaceId: string,
+  generation: number,
+): CommandCancellationCode | null {
+  try {
+    if (deps.status().paused()) return 'PAUSED';
+    const connection = deps.repos.connections.findById(connectionId);
+    if (connection === null || !connection.enabled) return 'CONNECTION_DISABLED';
+    const grant = deps.repos.grants.find(connectionId, workspaceId);
+    if (grant === null || !grant.enabled || !grant.capabilities.includes('command_exec')) {
+      return 'WORKSPACE_NOT_GRANTED';
+    }
+    const workspace = deps.repos.workspaces.findById(workspaceId);
+    if (workspace === null || workspace.removed_at !== null || !workspace.enabled) return 'WORKSPACE_NOT_GRANTED';
+    if (workspace.generation !== generation) return 'WORKSPACE_GENERATION_CHANGED';
+    if (workspace.mode !== 'read_propose_apply_with_local_approval') return 'POLICY_DENIED';
+    if (deps.capability_flags(workspace).recovery_required) return 'RECOVERY_REQUIRED';
+    return null;
+  } catch {
+    return 'STORAGE_UNAVAILABLE';
+  }
+}
+
+function commandCancellationError(code: CommandCancellationCode, mayHaveChangedFiles: boolean): BridgeError {
+  const partial = mayHaveChangedFiles
+    ? '命令可能已经执行了一部分并产生副作用；请先检查工作区现状，不会自动回滚。'
+    : '命令尚未启动。';
+  switch (code) {
+    case 'CONNECTION_DISABLED':
+      return new BridgeError('CONNECTION_DISABLED', `连接已停用，命令已停止。${partial}`);
+    case 'WORKSPACE_NOT_GRANTED':
+      return new BridgeError('WORKSPACE_NOT_GRANTED', `工作区授权已撤销或停用，命令已停止。${partial}`);
+    case 'WORKSPACE_GENERATION_CHANGED':
+      return new BridgeError('WORKSPACE_GENERATION_CHANGED', `工作区授权状态已变化，命令已停止。${partial}`);
+    case 'POLICY_DENIED':
+      return new BridgeError('POLICY_DENIED', `工作区已改为只读模式，命令已停止。${partial}`);
+    case 'PAUSED':
+      return new BridgeError('PAUSED', `本地服务已暂停，命令已停止。${partial}`);
+    case 'RECOVERY_REQUIRED':
+      return new BridgeError('RECOVERY_REQUIRED', `工作区需要先完成恢复，命令已停止。${partial}`);
+    case 'STORAGE_UNAVAILABLE':
+      return new BridgeError('STORAGE_UNAVAILABLE', `授权状态无法复核，命令已停止。${partial}`);
+  }
+}
+
+async function commandExecTool(
+  input: unknown,
+  context: RequestContext,
+  deps: ToolHandlerDeps,
+): Promise<Envelope<import('@lwb/contracts').CommandExecData>> {
+  return await asEnvelope(context, async () => {
+    const parsed = parseInput('command_exec', input) as CommandExecInput;
+    const access = await resolveWorkspaceAccess(
+      { workspace_id: parsed.workspace_id, action: TOOL_POLICY_ACTIONS.command_exec, path: '' },
+      context,
+      deps,
+    );
+    if (access.workspace.kind !== 'directory') {
+      throw new BridgeError('POLICY_DENIED', '命令只能在已授权的目录工作区执行；单文件工作区不支持。');
+    }
+    const processes = deps.command_processes;
+    if (processes === undefined) {
+      throw new BridgeError('INTERNAL_ERROR', '本地命令执行器未在服务装配中启用。');
+    }
+
+    const cancellation = new AbortController();
+    let cancellationCode: CommandCancellationCode | null = null;
+    const checkAuthorization = (): void => {
+      if (cancellationCode !== null) return;
+      cancellationCode = commandCancellationCode(
+        deps,
+        access.connection.id,
+        access.workspace.id,
+        access.workspace.generation,
+      );
+      if (cancellationCode !== null) cancellation.abort();
+    };
+    const authorizationWatch = setInterval(checkAuthorization, 100);
+    checkAuthorization();
+
+    let result: CommandProcessResult;
+    try {
+      result = await processes.run({
+        shell: parsed.shell,
+        command: parsed.command,
+        cwd: access.workspace.canonical_root,
+        signal: cancellation.signal,
+      });
+    } finally {
+      clearInterval(authorizationWatch);
+    }
+
+    if (cancellationCode !== null) {
+      throw commandCancellationError(cancellationCode, result.started);
+    }
+    if (result.cancelled) {
+      throw new BridgeError(
+        'SERVICE_UNAVAILABLE',
+        `本地服务正在退出，命令已停止。${result.started ? '命令可能已经产生部分副作用；请先检查工作区，不会自动回滚。' : '命令尚未启动。'}`,
+      );
+    }
+    if (!result.started) {
+      throw new BridgeError('COMMAND_SHELL_UNAVAILABLE', '所选命令解释器无法启动；请确认本机已安装该 shell。');
+    }
+
+    // Command output is arbitrary process output, not a file-read result. Hide
+    // the whole response if it contains an absolute local path or a high-confidence secret.
+    const outputWithheld = !commandOutputIsSafe(`${result.stdout}\n${result.stderr}`);
+    const safeStdout = outputWithheld ? '[命令输出含本机路径或凭证，已整段隐藏。]' : result.stdout;
+    const safeStderr = outputWithheld ? '' : result.stderr;
+    const clearance = mintClearance(access.decision, {
+      connection_id: access.connection.id,
+      generation: access.scope.generation,
+    });
+    let separator = '\n<LWB_STDERR>\n';
+    while (safeStdout.includes(separator) || safeStderr.includes(separator)) separator += '<x>';
+    let emission: ReturnType<typeof emitContent>;
+    try {
+      emission = emitContent(
+        clearance,
+        { path: '', content: `${safeStdout}${separator}${safeStderr}` },
+        access.budget,
+      );
+    } catch (cause) {
+      if (!(cause instanceof BridgeError) || (cause.code !== 'EGRESS_BUDGET_EXCEEDED' && cause.code !== 'SECRET_DETECTED')) {
+        throw cause;
+      }
+      throw new BridgeError(
+        cause.code,
+        `命令已经启动，但其输出因${cause.code === 'SECRET_DETECTED' ? '秘密筛查' : '出站预算'}未发送；` +
+          '命令可能已产生部分副作用，请先检查工作区，再决定是否重试。',
+      );
+    }
+    const separatorAt = emission.content.indexOf(separator);
+    if (separatorAt < 0) {
+      throw new BridgeError(
+        'INTERNAL_ERROR',
+        '命令已经运行，但无法拆分其标准输出与错误输出；命令可能已产生副作用，请检查工作区。',
+      );
+    }
+
+    // Revoke/cancel if permissions changed just after the polling tick. The outer
+    // guard also rechecks connection/workspace state immediately before return.
+    const finalCancellation = commandCancellationCode(
+      deps,
+      access.connection.id,
+      access.workspace.id,
+      access.workspace.generation,
+    );
+    if (finalCancellation !== null) throw commandCancellationError(finalCancellation, true);
+
+    return {
+      shell: parsed.shell,
+      exit_code: result.exit_code,
+      duration_ms: result.duration_ms,
+      timed_out: result.timed_out,
+      output_truncated: result.output_truncated,
+      output_withheld: outputWithheld || emission.redacted,
+      stdout: emission.content.slice(0, separatorAt),
+      stderr: emission.content.slice(separatorAt + separator.length),
+    };
   });
 }
 
@@ -1183,7 +1370,7 @@ export type ToolHandler = (
 ) => Promise<Envelope<unknown>>;
 
 /**
- * **全部十四个**工具。**与 `IMPLEMENTED_TOOL_NAMES` 逐字对应**，
+ * **全部十六个**工具。**与 `IMPLEMENTED_TOOL_NAMES` 逐字对应**，
  * 而后者是输出 schema 那张表的键 —— 少一个处理器或漏一个 schema
  * 都会在下面的 `TOOL_HANDLERS` 上编译失败。
  *
@@ -1207,4 +1394,5 @@ export const TOOL_HANDLERS = {
   change_list: changeList,
   change_apply: changeApply,
   change_revert_prepare: changeRevertPrepare,
+  command_exec: commandExecTool,
 } satisfies Readonly<Record<ImplementedToolName, ToolHandler>>;

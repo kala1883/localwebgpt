@@ -320,6 +320,7 @@ const NOT_READ_ONLY: Readonly<Partial<Record<ToolName, string>>> = {
   file_delete: '在已授权目录内由本机快照基线并直接删除普通文件',
   change_revert_prepare: '不改文件，但会建立一份新的修改集与快照',
   change_apply: '按工作区文件修改 grant 应用已准备的修改集',
+  command_exec: '运行任意 shell 命令，以本机用户权限执行，可能改写文件或联网',
 };
 
 describe('工具清单（tools/list）', () => {
@@ -626,6 +627,7 @@ describe('tools/call 转发（真 daemon 操作表 + 真客户端）', () => {
       file_delete: '单文件删除会直接删除文件',
       change_apply: '要真的写进用户文件',
       change_revert_prepare: '入参只能来自一次已应用且已终结的修改集',
+      command_exec: '直接运行本机 shell，不能在夹具仓库桩中假装覆盖',
     };
     assert.deepEqual(
       [...covered].sort(),

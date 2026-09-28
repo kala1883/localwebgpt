@@ -62,7 +62,7 @@ export function limitationsOf(
 ): readonly string[] {
   const out: string[] = [];
   if (pause?.paused === true) {
-    out.push('本地服务已暂停：新的读取与应用会被阻断，直到本地操作者恢复服务。');
+    out.push('本地服务已暂停：新的读取、命令执行与应用会被阻断，直到本地操作者恢复服务。');
     if (pause.stopping.length > 0) out.push(`仍有 ${String(pause.stopping.length)} 个写入正在安全停止。`);
     if (pause.unrevoked_change_sets.length > 0) out.push(`仍有 ${String(pause.unrevoked_change_sets.length)} 个待处理修改集未作废。`);
   }

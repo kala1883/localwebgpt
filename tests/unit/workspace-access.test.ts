@@ -17,7 +17,10 @@ after(() => {
   for (const opened of openedDatabases) closeDatabase(opened.db);
 });
 
-function setup(mode: 'read_only' | 'read_propose_apply_with_local_approval' = 'read_only') {
+function setup(
+  mode: 'read_only' | 'read_propose_apply_with_local_approval' = 'read_only',
+  kind: 'directory' | 'file' = 'directory',
+) {
   const opened = openDatabase({ path: ':memory:' });
   openedDatabases.push(opened);
   const repos = new Repositories(opened.db);
@@ -31,7 +34,7 @@ function setup(mode: 'read_only' | 'read_propose_apply_with_local_approval' = 'r
   repos.workspaces.create({
     id: WORKSPACE_ID,
     alias: '仅测试目录',
-    kind: 'directory',
+    kind,
     canonical_root: 'D:\\test\\project',
     volume_id: 'volume-test',
     root_file_id: 'file-test',
@@ -95,7 +98,7 @@ describe('逐工作区 ChatGPT 工具授权', () => {
   it('能力闭集只允许模型 MCP 权限，拒绝重复项和控制/应用能力', async () => {
     const { operations } = setup('read_propose_apply_with_local_approval');
     const set = operation(operations, 'workspaces.access.set');
-    assert.deepEqual(MODEL_WORKSPACE_CAPABILITIES, ['read', 'list', 'search', 'git_read', 'propose']);
+    assert.deepEqual(MODEL_WORKSPACE_CAPABILITIES, ['read', 'list', 'search', 'git_read', 'propose', 'command_exec']);
     for (const capabilities of [
       ['apply'],
       ['control'],
@@ -110,11 +113,15 @@ describe('逐工作区 ChatGPT 工具授权', () => {
     }
   });
 
-  it('只读工作区不能获授修改提议，已移除工作区也不能重新授权', async () => {
+  it('只读或单文件工作区不能获授命令执行，已移除工作区也不能重新授权', async () => {
     const { repos, operations } = setup();
     const set = operation(operations, 'workspaces.access.set');
     await expectBridgeCode(
       () => set.handler({ workspace_id: WORKSPACE_ID, capabilities: ['propose'] }, context('console')),
+      'INVALID_ARGUMENT',
+    );
+    await expectBridgeCode(
+      () => set.handler({ workspace_id: WORKSPACE_ID, capabilities: ['command_exec'] }, context('console')),
       'INVALID_ARGUMENT',
     );
     repos.workspaces.markRemoved(WORKSPACE_ID);
@@ -122,6 +129,26 @@ describe('逐工作区 ChatGPT 工具授权', () => {
       () => set.handler({ workspace_id: WORKSPACE_ID, capabilities: ['read'] }, context('console')),
       'WORKSPACE_NOT_GRANTED',
     );
+
+    const singleFile = setup('read_propose_apply_with_local_approval', 'file');
+    await expectBridgeCode(
+      () => operation(singleFile.operations, 'workspaces.access.set').handler(
+        { workspace_id: WORKSPACE_ID, capabilities: ['command_exec'] },
+        context('console'),
+      ),
+      'INVALID_ARGUMENT',
+    );
+  });
+
+  it('可写目录可单独授予 command_exec 而不授予文件读取', async () => {
+    const { repos, operations } = setup('read_propose_apply_with_local_approval');
+    const result = await operation(operations, 'workspaces.access.set').handler(
+      { workspace_id: WORKSPACE_ID, capabilities: ['command_exec'] },
+      context('console'),
+    ) as { readonly capabilities: readonly string[] };
+    assert.deepEqual(result.capabilities, ['command_exec']);
+    assert.equal(repos.grants.hasCapability(CONNECTION_ID, WORKSPACE_ID, 'read'), false);
+    assert.equal(repos.grants.hasCapability(CONNECTION_ID, WORKSPACE_ID, 'command_exec'), true);
   });
 
   it('MCP 适配器即使直接调用控制 handler 也无权读取或修改授权', async () => {

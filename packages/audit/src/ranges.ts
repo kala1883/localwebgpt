@@ -19,6 +19,8 @@
  *  - `text_search` 扫过的文件远多于命中的文件，这里只记**命中的**；
  *  - 被策略拒绝、被秘密筛查拦下的文件如果出现在结果里（例如 `git_status`
  *    的 `excluded`），会被记下来，因为**路径确实出站了**；
+ *  - `command_exec` 只记授权工作区根（初始 cwd）；shell 可能触碰其它路径，
+ *    本表不声称知道命令进程实际读写过的完整文件集合；
  *  - daemon 内部读过又没送出去的字节，这张表不声称知道。
  *
  * 最后一条尤其重要：一张自称「本进程碰过的全部文件」的表会在**每一次**
@@ -230,6 +232,9 @@ export const FILE_ACCESS_EXTRACTORS = {
   // 撤销提议：路径有**两个来源**，`local_actions` 那一个不能漏 ——
   // 见 `revertPreparePathsOf` 的说明。
   change_revert_prepare: (data) => revertPreparePathsOf(data),
+  // A shell may touch arbitrary files, so the precise set is unknowable from
+  // its response. Record only the authorized root as the initial execution scope.
+  command_exec: () => [fileRow('')],
 } satisfies Readonly<Record<ImplementedToolName, FileAccessExtractor>>;
 
 /**
@@ -345,6 +350,7 @@ export function extractFileAccess(tool: ImplementedToolName, data: unknown): rea
 export function targetFileAccess(tool: ImplementedToolName, input: unknown): readonly FileAccessRow[] {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return [];
   const record = input as Record<string, unknown>;
+  if (tool === 'command_exec') return [{ path: '', start_line: null, end_line: null, delivered: false }];
   if (tool === 'change_prepare') return claimedItemPaths(record['items']);
   const raw = record['path'];
   // `undefined` = 该工具的 path 是可选的且没给（默认工作区根）；
@@ -362,7 +368,7 @@ export function targetFileAccess(tool: ImplementedToolName, input: unknown): rea
 
 /** 该工具的入参里是否有 `path` 字段（决定「没给 path」是否等价于「工作区根」）。 */
 function hasPathField(tool: ImplementedToolName): boolean {
-  return tool === 'file_list' || tool === 'text_search' || tool === 'git_status';
+  return tool === 'file_list' || tool === 'text_search' || tool === 'git_status' || tool === 'command_exec';
 }
 
 /**

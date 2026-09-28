@@ -159,6 +159,7 @@ describe('策略：允许路径', () => {
     const search = decide(request({ action: 'search' }));
     assert.equal(read.obligations.secret_mode, 'redact');
     assert.equal(search.obligations.secret_mode, 'block');
+    assert.equal(decide(request({ action: 'command_exec', granted_capabilities: ['command_exec'] })).obligations.secret_mode, 'block');
   });
 
   it('出站义务里**没有**可关闭秘密筛查的开关', () => {
@@ -209,6 +210,13 @@ describe('策略：连接授权层', () => {
     assert.equal(noGrant.primary?.reason, 'CAPABILITY_NOT_GRANTED');
   });
 
+  it('命令执行使用独立的 command_exec grant，不复用文件修改 grant', () => {
+    const commandGrant = decide(request({ action: 'command_exec', granted_capabilities: ['command_exec'] }));
+    const fileWriteGrantOnly = decide(request({ action: 'command_exec', granted_capabilities: ['propose'] }));
+    assert.equal(commandGrant.allow, true);
+    assert.equal(fileWriteGrantOnly.primary?.reason, 'CAPABILITY_NOT_GRANTED');
+  });
+
   it('本地控制面持有 control 是允许的', () => {
     const decision = decide(
       request({ action: 'audit_export', audience: 'local_console', granted_capabilities: ['control'] }),
@@ -246,6 +254,7 @@ describe('策略：工作区层', () => {
 
   it('只读模式下写入动作被拒，读取动作仍允许', () => {
     assert.equal(reasonOf(request({ action: 'change_prepare', mode: 'read_only' })), 'WORKSPACE_MODE_READ_ONLY');
+    assert.equal(reasonOf(request({ action: 'command_exec', granted_capabilities: ['command_exec'], mode: 'read_only' })), 'WORKSPACE_MODE_READ_ONLY');
     assert.equal(reasonOf(request({ action: 'read', mode: 'read_only' })), 'ALLOWED');
   });
 

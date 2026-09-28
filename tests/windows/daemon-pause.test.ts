@@ -459,7 +459,7 @@ describeWindows('LWB-034 真 NTFS：安全暂停与紧急停用', () => {
       '停用后的读取',
     );
     assert.equal(blockedRead.error.code, 'PAUSED', '暂停期间的新读取必须被挡在门口');
-    assert.match(blockedRead.error.message, /已阻断新读取与新应用/, blockedRead.error.message);
+    assert.match(blockedRead.error.message, /已阻断读取、命令执行与应用/, blockedRead.error.message);
     assert.equal(
       (consoleFace.call('service.pause_status') as { unrecallable_file_rows: number }).unrecallable_file_rows,
       unrecoverableBefore,

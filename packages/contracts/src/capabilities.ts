@@ -32,6 +32,7 @@ export const CAPABILITY_NAMES = [
   'list',
   'git_read',
   'propose',
+  'command_exec',
   'apply',
   'control', // 仅本地控制面；MCP 适配器永远不应持有
 ] as const;

@@ -2085,3 +2085,11 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 保留 v8 `service_pause` SQL 的有意缩进变更；checksum 升级为带算法域标记的 v2 语义哈希，规范化引号外空白与注释，同时保留字符串及引用标识符内部字节。纯格式重排不改变 checksum，SQL 内容变化仍不匹配。
 - 兼容旧数据库的原始文本哈希：按当前源码接受未改写迁移的旧哈希，并显式登记 v8 原始发布 checksum `72ad9e20…aaaeae7`；旧库无需就地改写 `schema_migrations`。未知 checksum 继续 fail-closed。
 - 定向数据库升级/持久化测试 **49/49 PASS**；全仓 `npm run check` **PASS**：根测试 **1811 项 / 1797 PASS / 14 SKIP / 0 FAIL**，Console **161/161 PASS**，根与 Console 类型检查、FsGuard 216 文件扫描、secret scan 全通过。所有数据库测试均使用临时测试库，未触碰用户状态库。
+
+## 2026-09-28：新增逐工作区命令执行工具
+
+- 新增 MCP `command_exec`，shell 为 `cmd`、PowerShell、Bash；需独立的 `command_exec` workspace grant，且仅适用于可写的目录工作区。此 grant 不会暗含文件读取或普通文件修改权限。Console 已提供单独高风险勾选项，并禁止只读/单文件工作区勾选。
+- 进程从授权目录根启动，最长 25 秒、stdout/stderr 合计最多 24 KiB；不继承 daemon 的 API/Tunnel/IPC 凭据环境变量。授权撤销、工作区变化、全局暂停会停止进程；有序 daemon 退出会回收登记的命令子进程。输出经出站预算与秘密/绝对路径筛查；审计只记 workspace 根作为初始执行范围，不假称知道 shell 实际触碰的所有文件。
+- 明确的安全边界：这是以运行 LocalWebGPT 的 Windows 用户权限运行任意 shell，不是 OS 沙箱；命令可以访问用户有权访问的其它路径、联网、绕过 FsGuard/快照回滚并留下部分副作用。超时、撤权、暂停或输出被拦时，先检查现场再考虑重试。ADR-005、双语 README、Console 与 operator runbook 已写明这一点。
+- 验证：command/policy/catalog/workspace-grant/MCP/Egress/audit 定向 **196/196 PASS**，命令与暂停 NTFS 专项 **89/89 PASS**；Console **162/162 PASS**。全仓 `npm run check` **PASS**：根测试 **1825 项 / 1810 PASS / 15 SKIP / 0 FAIL**，根与 Console 类型检查、FsGuard **218** 文件扫描及 secret scan 全通过。新增的一个 SKIP 是当前主机 `C:\Windows\System32\bash.exe` 的 WSL 启动器测试条件跳过；独立 Bash `echo` smoke 已通过。
+- 工具 E2E 在临时夹具目录验证；没有对用户真实工作区执行命令，ChatGPT 网页端刷新工具清单与真实会话验收仍未执行。

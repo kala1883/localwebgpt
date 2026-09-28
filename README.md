@@ -94,12 +94,15 @@ Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
    | 读取 Git 状态与差异 | `git_status`、`git_diff` |
    | 创建/删除/应用修改集 | `file_create` / `file_delete` / `change_prepare` / `change_apply`，单次调用按 workspace 文件修改 grant 执行；删除在本机先快照，无须先 `file_read` |
    | 编辑既有文件 | `file_edit`；同一 workspace 必须同时获授“读取文件内容”和“文件修改” |
+   | 执行命令（高风险） | `command_exec`；独立授权，支持 `cmd`、PowerShell、Bash |
 
-每一项授权都只对该根生效；空选保存会撤销该根全部 ChatGPT 工具授权。实际调用还要求 ChatGPT 连接和工作区启用。读取、Git、文件修改分别由本页的目录授权控制；平台验收状态只作说明，不再作为隐藏的全局功能开关。获授“文件修改”即允许在该目录直接创建/删除普通文件并应用修改集，不会逐次等待人工批准。编辑既有文件（包括 `file_edit` 和 `change_prepare` 中的编辑项）还需读取 grant，以取得最新哈希和 `read_token`；工具清单不会在缺少任一授权时暴露 `file_edit`。删除会在本机内部先读取并保存完整快照，单文件上限 16 MiB。路径范围、对象身份与版本冲突检查、秘密路径拒绝、审计和受保护执行器仍然生效；不提供任意 Shell、目录外访问或自动 Git 提交/推送。
+每一项授权都只对该根生效；空选保存会撤销该根全部 ChatGPT 工具授权。实际调用还要求 ChatGPT 连接和工作区启用。读取、Git、文件修改和命令执行分别由本页的目录授权控制；平台验收状态只作说明，不再作为隐藏的全局功能开关。获授“文件修改”即允许在该目录直接创建/删除普通文件并应用修改集，不会逐次等待人工批准。编辑既有文件（包括 `file_edit` 和 `change_prepare` 中的编辑项）还需读取 grant，以取得最新哈希和 `read_token`；工具清单不会在缺少任一授权时暴露 `file_edit`。删除会在本机内部先读取并保存完整快照，单文件上限 16 MiB。
+
+`command_exec` 是与“文件修改”分开的高风险授权：只适用于可写的目录工作区，单次最多运行 25 秒，输出有上限并经过秘密/本机绝对路径筛查。它以运行 LocalWebGPT 的 Windows 用户身份启动所选 shell；登记目录只作为**初始工作目录，不是沙箱**。命令仍可能访问该用户有权限的其他路径、联网，并绕过受保护文件执行器、逐文件冲突核对和快照回滚；超时、撤权或暂停时可能留下部分副作用。它也可以运行 `git commit` / `git push`、包安装等 shell 命令；这些没有独立 MCP 工具或额外语义保护。只向可信连接授予，并仅在专用测试目录验收。普通文件工具原有的路径范围、对象身份与版本冲突检查、秘密路径拒绝、审计和受保护执行器仍然生效。
 
 ## 6. 建议验收顺序与常见故障
 
-先确认 Tunnel 进程在线，再依次调用 `bridge_status` → `workspace_list` → 对测试根执行 `file_list` / `file_read` / `text_search`。在本地控制台对**专用临时 Git 目录**授予“文件修改”后，测试 `file_create` / `file_edit` 并独立回读；删除测试直接调用 `file_delete` 并确认目标消失。多文件修改用 `change_prepare` 再 `change_apply`。不要用真实个人目录做首次写入/删除测试。
+先确认 Tunnel 进程在线，再依次调用 `bridge_status` → `workspace_list` → 对测试根执行 `file_list` / `file_read` / `text_search`。在本地控制台对**专用临时目录**授予所需工具后，测试 `file_create` / `file_edit` 并独立回读；删除测试直接调用 `file_delete` 并确认目标消失。多文件修改用 `change_prepare` 再 `change_apply`。命令执行须另行勾选 `command_exec`，先用 `Write-Output` / `echo` 等无副作用命令验证 shell、工作目录和回执，再测试撤权/暂停停止；不要让首次命令测试读写个人目录或运行安装/删除命令。
 
 - 创建 App 报 424 / 无法获取工具列表：检查本机控制台的 ChatGPT 连接是否已启用、启动脚本是否仍在运行、`tunnel-client` 是否健康。
 - Tunnel 下拉框为空：核对 Platform 组织/ChatGPT 工作区关联及创建者的 `Tunnels Read + Use`。

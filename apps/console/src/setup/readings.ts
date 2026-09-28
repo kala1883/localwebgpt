@@ -28,7 +28,7 @@
 
 import type { CapabilityFlags } from '@lwb/contracts';
 
-export const MODEL_WORKSPACE_CAPABILITIES = ['read', 'list', 'search', 'git_read', 'propose'] as const;
+export const MODEL_WORKSPACE_CAPABILITIES = ['read', 'list', 'search', 'git_read', 'propose', 'command_exec'] as const;
 export type ModelWorkspaceCapability = (typeof MODEL_WORKSPACE_CAPABILITIES)[number];
 
 /**

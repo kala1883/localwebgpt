@@ -14,7 +14,7 @@
  * ## 顺序，以及每一步为什么在这个位置
  *
  * ```
- * 1. 全局暂停     → 工作区类调用直接拒绝（不取位置、不碰磁盘）
+ * 1. 全局暂停     → 工作区类调用直接拒绝（不取位置、不执行命令）
  * 2. 取并发位置   → 只在工作区类调用上；满了就等，等不到就是「未执行」
  * 3. 记下前像     → 连接与工作区的 enabled / generation（各一次主键查）
  * 4. 处理器       → 它自己完成授权链、读取、出站记账（不抛，只回信封）
@@ -67,10 +67,10 @@ import { requestIdOf } from './handlers.ts';
 import type { ToolHandler, ToolHandlerDeps } from './handlers.ts';
 
 /**
- * 需要**工作区**才能完成的工具。
+ * 需要**工作区**才能完成、并共享暂停/并发/返回前复查的工具。
  *
- * 与其余工具的区别是实质性的：这些调用会经过受控句柄后端读磁盘，
- * 而并发限额保护的正是那件事（内存、磁盘、唯一的护栏进程）。
+ * 文件工具经过受控句柄后端；`command_exec` 则启动一个限时 shell 子进程。
+ * 并发闸门与紧急暂停保护整个 workspace 操作面，而不只是 Win32 文件句柄。
  *
  * `bridge_status` 与 `workspace_list` 不在其中是刻意的，理由有两条：
  * 它们只读状态库，不占用被保护的那种资源；更重要的是 `bridge_status`
@@ -112,6 +112,9 @@ export const WORKSPACE_TOOL_NAMES = [
   // 与工作区绑定（方案 §9.3）。本层是纵深的一层，不是唯一的一层。
   'change_apply',
   'change_revert_prepare',
+  // 命令执行不走 FsGuard，但以授权 workspace 为 cwd；暂停、撤权与并发上限
+  // 必须覆盖它，且输出审计只记录根范围，不声称知道 shell 实际读写的文件集合。
+  'command_exec',
 ] as const satisfies readonly ImplementedToolName[];
 
 /**
@@ -292,7 +295,7 @@ async function runGuarded(
           requestId,
           'CONCURRENCY_LIMIT_EXCEEDED',
           `并发额度已满（本次限 ${outcome.limit}），等待 ${outcome.waited_ms} 毫秒后仍未取得位置；` +
-            '本次调用未执行，没有读取任何文件。',
+            '本次调用未执行，没有读取或修改工作区。',
         ),
       });
     }
@@ -353,7 +356,7 @@ async function runGuarded(
     // 而后者才是此刻的实情。
     const withheld =
       (leased ? pauseWithheld(deps) : null) ??
-      recheck(guard.repos, connectionId, workspaceId, before);
+      recheck(guard.repos, operation, connectionId, workspaceId, before);
     if (withheld !== null) {
       // 成功的结果被**撤回**。它读了文件、也记了出站账，但模型拿不到。
       // 审计里这些行必须是 `delivered=false`：内容没有出去，但**读了** ——
@@ -496,7 +499,7 @@ function pauseGate(deps: ToolHandlerDeps, phase: 'before' | 'after'): PauseGate 
     reason: 'GLOBAL_PAUSE',
     message:
       phase === 'before'
-        ? '本地服务处于暂停状态，已阻断新读取与新应用。'
+        ? '本地服务处于暂停状态，已阻断读取、命令执行与应用。'
         : '本地服务在本次调用进行中被紧急停用；本次结果未发送。',
   };
 }
@@ -546,6 +549,7 @@ function pauseWithheld(deps: ToolHandlerDeps): Withheld | null {
  */
 function recheck(
   repos: Repositories,
+  operation: string,
   connectionId: string,
   workspaceId: string | null,
   before: AccessFacts,
@@ -574,6 +578,12 @@ function recheck(
       code: 'WORKSPACE_GENERATION_CHANGED',
       message: '该工作区的代次在本次调用期间发生变化；本次结果未发送。',
     };
+  }
+  if (operation === 'command_exec' && workspaceId !== null) {
+    const grant = repos.grants.find(connectionId, workspaceId);
+    if (grant === null || !grant.enabled || !grant.capabilities.includes('command_exec')) {
+      return { code: 'WORKSPACE_NOT_GRANTED', message: '命令执行授权已撤销；本次结果未发送。' };
+    }
   }
   return null;
 }

@@ -55,6 +55,7 @@ import {
 } from '@lwb/workspaces';
 
 import { capabilityFlagsWith } from '../../apps/daemon/src/gates.ts';
+import { CommandProcessManager } from '../../apps/daemon/src/lifecycle/command-processes.ts';
 import type { PlatformGates } from '../../apps/daemon/src/gates.ts';
 import { createToolSurface } from '../../apps/daemon/src/tools/index.ts';
 import type { ToolHandlerDeps, ToolLimits, ToolSurfaceFacts } from '../../apps/daemon/src/tools/index.ts';
@@ -504,7 +505,7 @@ export async function makeToolHarness(options: ToolHarnessOptions = {}): Promise
     origin: 'local_console',
   });
 
-  const capabilities = ['read', 'list', 'search', 'git_read', 'propose'];
+  const capabilities = ['read', 'list', 'search', 'git_read', 'propose', 'command_exec'];
   repos.grants.put({
     id: 'grant-adapter',
     connection_id: ADAPTER_CONNECTION,
@@ -621,6 +622,7 @@ export async function makeToolHarness(options: ToolHarnessOptions = {}): Promise
         ? options.coordinator({ repos, ops, blobs, now: anchoredNow, stop: () => pauseService.stopSignal() })
         : options.coordinator;
 
+  const commandProcesses = new CommandProcessManager();
   const deps: ToolHandlerDeps = {
     repos,
     registry,
@@ -636,6 +638,7 @@ export async function makeToolHarness(options: ToolHarnessOptions = {}): Promise
     now: toolNow,
     ops,
     coordinator,
+    command_processes: commandProcesses,
     ...(options.apply_options === undefined ? {} : { apply_options: options.apply_options }),
     authority: createReadTicketAuthority({ key: KEY }),
     clock: options.search_clock ?? toolNow,

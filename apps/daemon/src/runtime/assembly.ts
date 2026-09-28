@@ -110,6 +110,7 @@ import { BRIDGE_GATES, capabilityFlagsFrom, capabilityFlagsWith, limitationsOf }
 import type { PlatformGates } from '../gates.ts';
 import { createToolSurface } from '../tools/index.ts';
 import type { ToolSurfaceFacts } from '../tools/index.ts';
+import { CommandProcessManager } from '../lifecycle/command-processes.ts';
 import { backupDatabaseBeforeMigration, closeDatabase, openDatabase, Repositories } from '@lwb/persistence';
 import {
   CredentialStore,
@@ -616,6 +617,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
       now: Date.now,
     });
 
+    const commandProcesses = new CommandProcessManager();
+    stack.push('工作区命令进程', () => commandProcesses.terminateAll());
+
     const surface = createToolSurface({
       repos,
       registry,
@@ -632,6 +636,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
       now: Date.now,
       ops: guard,
       coordinator,
+      command_processes: commandProcesses,
       // 等待预算用默认值（15 秒，见 `DEFAULT_APPLY_WAIT_MS`）：它的依据是
       // IPC 服务端 30 秒的请求上限，而那个数字是**传输层的事实**，
       // 不是本机策略，因此不在这里另配一个。

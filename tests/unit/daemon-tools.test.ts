@@ -41,6 +41,7 @@ import {
 } from '@lwb/contracts';
 import type {
   BridgeStatusData,
+  CommandExecData,
   Envelope,
   FileListData,
   FileReadData,
@@ -214,6 +215,27 @@ describe('工具清单（验收 1：无控制面方法）', () => {
     }
   });
 
+  it('command_exec 必须由独立 grant 显式开放，且只对目录工作区开放', async () => {
+    const directory = await makeToolHarness({ gates: GATES_OFF });
+    try {
+      directory.grant(ADAPTER_CONNECTION, directory.workspace.id, ['command_exec']);
+      const catalog = await catalogOf(directory);
+      const available = catalog.tools.filter((entry) => entry.available).map((entry) => entry.name);
+      assert.ok(available.includes('command_exec'));
+      assert.ok(!available.includes('file_read'), 'command grant 不得暗含读取权限');
+    } finally {
+      directory.close();
+    }
+
+    const singleFile = await makeToolHarness({ gates: GATES_OFF, kind: 'file' });
+    try {
+      const catalog = await catalogOf(singleFile);
+      assert.equal(catalog.tools.find((entry) => entry.name === 'command_exec')?.available, false);
+    } finally {
+      singleFile.close();
+    }
+  });
+
   it('门禁全开时，可用的是全部已实现工具；未实现的理由是「没实现」而不是「开关关了」', async () => {
     const catalog = await catalogOf(h);
     const available = catalog.tools.filter((entry) => entry.available).map((entry) => entry.name);
@@ -341,6 +363,7 @@ const ARGUMENTED_TOOLS: readonly (readonly [string, Record<string, unknown>])[] 
   ['text_search', { workspace_id: 'ws-any', query: 'x' }],
   ['git_status', { workspace_id: 'ws-any' }],
   ['git_diff', { workspace_id: 'ws-any', path: 'README.md' }],
+  ['command_exec', { workspace_id: 'ws-any', shell: 'powershell', command: 'Write-Output test' }],
   ['file_create', {
     workspace_id: 'ws-any', idempotency_key: 'idem-test-create', summary: 'create',
     path: 'new.txt', content: 'text', newline: 'lf', bom: false,
@@ -392,6 +415,7 @@ describe('入参契约（验收 2：未知字段 / 无效枚举）', () => {
     const cases: readonly (readonly [string, Record<string, unknown>])[] = [
       ['git_diff', { workspace_id: 'w', path: 'a.ts', comparison: 'HEAD~1' }],
       ['git_diff', { workspace_id: 'w', path: 'a.ts', comparison: 'worktree_vs_index' }],
+      ['command_exec', { workspace_id: 'w', shell: 'pwsh', command: 'Get-Location' }],
       ['file_list', { workspace_id: 'w', depth: 9 }],
       ['file_list', { workspace_id: 'w', max_entries: 0 }],
       ['file_read', { workspace_id: 'w', path: 'a.ts', start_line: 0 }],
@@ -870,6 +894,27 @@ describe('结果契约（夹具仓库）', () => {
       await callTool(h, 'git_diff', { workspace_id: h.workspace.id, path: 'secrets/.env' }),
     ).error;
     assert.equal(error.code, 'POLICY_DENIED');
+  });
+
+  it('command_exec 只需该 workspace 的独立授权，并从该目录根启动 shell', async () => {
+    h.grant(ADAPTER_CONNECTION, h.workspace.id, ['command_exec']);
+    const catalog = await catalogOf(h);
+    const available = catalog.tools.filter((entry) => entry.available).map((entry) => entry.name);
+    assert.ok(available.includes('command_exec'));
+    assert.ok(!available.includes('file_read'), 'command grant 不等同于文件读取 grant');
+
+    const envelope = await callTool(h, 'command_exec', {
+      workspace_id: h.workspace.id,
+      shell: 'powershell',
+      command: "Write-Output 'LWB_COMMAND_EXEC_OK'",
+    });
+    assert.equal(envelope.ok, true, `命令应成功返回结构化结果：${JSON.stringify(envelope)}`);
+    assertConforms('command_exec', envelope);
+    const result = dataOf<CommandExecData>(envelope as Envelope<CommandExecData>);
+    assert.equal(result.exit_code, 0);
+    assert.match(result.stdout, /LWB_COMMAND_EXEC_OK/);
+    assert.equal(result.output_withheld, false);
+    assertNoAbsolutePath(result, 'command_exec');
   });
 
   it('撤销目录 read grant 后，读取在判定层被拒绝', async () => {

@@ -14,6 +14,7 @@
 | [002](002-writer-semantics.md) | 写入语义与 Windows 文件系统护栏实现方式 | 已决定，附实测证据 | LWB-003、LWB-010 | 写入是 `guarded_inplace`（同句柄截断重写），不是原子替换 |
 | [003](003-protocol-and-trust.md) | 协议、依赖锁定与信任边界 | 已决定，附证据缺口 | LWB-004 | 五个信任边界；私有单用户连接**不**等于可区分对话；身份来自通道 |
 | [004](004-workspace-grants-and-direct-file-tools.md) | 逐工作区授权与直接文件工具 | 已决定 | LWB-002、LWB-032、LWB-035 | 移除外部签署作为全局运行门禁；单文件工具一次调用直接写入，多文件无需逐次人工批准 |
+| [005](005-workspace-command-execution.md) | 逐工作区命令执行授权 | 已决定 | command_exec | shell 是高权限工具；单独 grant、可写目录根、限时/限输出；工作目录不是 OS 沙箱 |
 
 ## 相关文档
 
@@ -41,3 +42,4 @@
 | 001 | 操作者不接受 §3 的排除项，或验收负责人指定后要求调整范围 |
 | 002 | 原生工具链可用（Rust/MSVC/Windows SDK），或需要针对 FAT32/ReFS 支持 |
 | 003 | 真实隧道验证后发现协议修订与 SDK 1.30.1 不兼容，或账号接入方式发生变化 |
+| 005 | 引入真正按 workspace 限制的 OS sandbox，或 command_exec 的实际权限超过操作者可接受范围 |

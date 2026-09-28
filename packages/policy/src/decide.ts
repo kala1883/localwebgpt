@@ -103,6 +103,7 @@ export const POLICY_ACTIONS = [
   'file_delete',
   'change_revert_prepare',
   'change_apply',
+  'command_exec',
 ] as const;
 
 export type PolicyAction = (typeof POLICY_ACTIONS)[number];
@@ -124,6 +125,7 @@ export const EGRESS_SURFACES = [
   'audit_export',
   'directory_listing',
   'change_receipt',
+  'command_output',
 ] as const;
 
 export type EgressSurface = (typeof EGRESS_SURFACES)[number];
@@ -132,8 +134,8 @@ interface ActionSpec {
   /** 该动作需要连接凭据里被授予的能力。 */
   readonly capability: CapabilityName;
   readonly surface: EgressSurface;
-  /** 属于提议链路：只读模式关闭的是**整条**链路，不只是写入那一步。 */
-  readonly in_propose_chain: boolean;
+  /** 该动作可能修改工作区；只读模式不能授予它。 */
+  readonly requires_write_mode: boolean;
   /** Legacy metadata only; no model action requires a separate local approval. */
   readonly requires_approval: boolean;
   /** 必须绑定一次具体的票据代次。提议与写入都要，纯读取不需要。 */
@@ -157,24 +159,26 @@ interface ActionSpec {
  * 内部生成，用于执行器去重与审计，不是第二个用户审批开关。
  */
 export const ACTION_SPECS: Readonly<Record<PolicyAction, ActionSpec>> = {
-  list: { capability: 'list', surface: 'directory_listing', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  stat: { capability: 'read', surface: 'file_read', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  read: { capability: 'read', surface: 'file_read', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  search: { capability: 'search', surface: 'search_snippet', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  git_status: { capability: 'git_read', surface: 'git_diff', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  git_diff: { capability: 'git_read', surface: 'git_diff', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  git_log: { capability: 'git_read', surface: 'git_diff', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  snapshot_read: { capability: 'read', surface: 'snapshot_read', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  error_detail: { capability: 'read', surface: 'error_detail', in_propose_chain: false, requires_approval: false, requires_ticket: false },
+  list: { capability: 'list', surface: 'directory_listing', requires_write_mode: false, requires_approval: false, requires_ticket: false },
+  stat: { capability: 'read', surface: 'file_read', requires_write_mode: false, requires_approval: false, requires_ticket: false },
+  read: { capability: 'read', surface: 'file_read', requires_write_mode: false, requires_approval: false, requires_ticket: false },
+  search: { capability: 'search', surface: 'search_snippet', requires_write_mode: false, requires_approval: false, requires_ticket: false },
+  git_status: { capability: 'git_read', surface: 'git_diff', requires_write_mode: false, requires_approval: false, requires_ticket: false },
+  git_diff: { capability: 'git_read', surface: 'git_diff', requires_write_mode: false, requires_approval: false, requires_ticket: false },
+  git_log: { capability: 'git_read', surface: 'git_diff', requires_write_mode: false, requires_approval: false, requires_ticket: false },
+  snapshot_read: { capability: 'read', surface: 'snapshot_read', requires_write_mode: false, requires_approval: false, requires_ticket: false },
+  error_detail: { capability: 'read', surface: 'error_detail', requires_write_mode: false, requires_approval: false, requires_ticket: false },
   // 审计导出只给本地控制面：它天然包含跨工作区、跨连接的记录。
-  audit_export: { capability: 'control', surface: 'audit_export', in_propose_chain: false, requires_approval: false, requires_ticket: false },
-  change_prepare: { capability: 'propose', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
+  audit_export: { capability: 'control', surface: 'audit_export', requires_write_mode: false, requires_approval: false, requires_ticket: false },
+  change_prepare: { capability: 'propose', surface: 'file_read', requires_write_mode: true, requires_approval: false, requires_ticket: true },
   // 创建不需要先读一个不存在的目标；daemon 仍会将当前工作区代次绑定进提案。
-  file_create: { capability: 'propose', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: false },
+  file_create: { capability: 'propose', surface: 'file_read', requires_write_mode: true, requires_approval: false, requires_ticket: false },
   // 删除在本次调用内读取并快照基线，不要求额外的 file_read 票据。
-  file_delete: { capability: 'propose', surface: 'file_read', in_propose_chain: true, requires_approval: false, requires_ticket: false },
-  change_revert_prepare: { capability: 'propose', surface: 'snapshot_read', in_propose_chain: true, requires_approval: false, requires_ticket: true },
-  change_apply: { capability: 'propose', surface: 'change_receipt', in_propose_chain: true, requires_approval: false, requires_ticket: true },
+  file_delete: { capability: 'propose', surface: 'file_read', requires_write_mode: true, requires_approval: false, requires_ticket: false },
+  change_revert_prepare: { capability: 'propose', surface: 'snapshot_read', requires_write_mode: true, requires_approval: false, requires_ticket: true },
+  change_apply: { capability: 'propose', surface: 'change_receipt', requires_write_mode: true, requires_approval: false, requires_ticket: true },
+  // A granted shell can make arbitrary changes, so it is available only in writable mode.
+  command_exec: { capability: 'command_exec', surface: 'command_output', requires_write_mode: true, requires_approval: false, requires_ticket: false },
 };
 
 // ---------------------------------------------------------------------------
@@ -213,7 +217,7 @@ export interface WorkspaceView {
   readonly current_policy_version: number;
   readonly root_volume_id: string;
   readonly root_file_id: string;
-  /** 操作者暂停该工作区。暂停阻断新读取与新应用。 */
+  /** 操作者暂停该工作区。暂停阻断读取、命令执行与应用。 */
   readonly paused: boolean;
 }
 
@@ -390,7 +394,7 @@ function workspaceFailures(req: PolicyRequest): PolicyFailure[] {
       check: 'workspace',
       reason: 'WORKSPACE_PAUSED',
       error_code: 'PAUSED',
-      detail: '该工作区已被本地操作者暂停，已阻断新读取与新应用。',
+      detail: '该工作区已被本地操作者暂停，已阻断读取、命令执行与应用。',
     });
   }
 
@@ -403,7 +407,7 @@ function workspaceFailures(req: PolicyRequest): PolicyFailure[] {
     });
   }
 
-  if (spec.in_propose_chain && ws.mode !== 'read_propose_apply_with_local_approval') {
+  if (spec.requires_write_mode && ws.mode !== 'read_propose_apply_with_local_approval') {
     out.push({
       check: 'workspace',
       reason: 'WORKSPACE_MODE_READ_ONLY',

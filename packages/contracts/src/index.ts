@@ -16,6 +16,7 @@ export * from './glob.ts';
 export * from './hash.ts';
 export * from './version.ts';
 export * from './capabilities.ts';
+export * from './command.ts';
 export * from './control.ts';
 export * from './status.ts';
 export * from './read.ts';
