@@ -30,6 +30,8 @@
  * 校验失败的回答只关于**调用方自己发来的那份参数**，不含任何本机事实。
  */
 
+import { createHash, randomUUID } from 'node:crypto';
+
 import {
   BridgeError,
   CONTRACT_VERSION,
@@ -707,6 +709,35 @@ async function commandExecTool(
       throw new BridgeError('INTERNAL_ERROR', '本地命令执行器未在服务装配中启用。');
     }
 
+    const requestHash = createHash('sha256')
+      .update(JSON.stringify([access.workspace.id, parsed.shell, parsed.command]), 'utf8')
+      .digest('hex');
+    const idempotency = deps.repos.idempotency.begin({
+      id: `idem_command_${randomUUID()}`,
+      principal_id: access.connection.principal_id,
+      tool: 'command_exec',
+      key: parsed.idempotency_key,
+      request_hash: requestHash,
+    });
+    if (idempotency.kind === 'conflict') {
+      throw new BridgeError(
+        'IDEMPOTENCY_CONFLICT',
+        '这个幂等键已用于另一条命令或工作区；本次没有启动进程。为新的用户意图生成新键。',
+      );
+    }
+    if (idempotency.kind === 'replay') {
+      const priorState = idempotency.record.result_ref;
+      const detail = priorState === 'not_started'
+        ? '先前同键请求未能启动 shell。'
+        : priorState === 'started'
+          ? '先前同键请求已启动 shell，可能产生过副作用。'
+          : '先前同键请求仍在执行或结果未知。';
+      throw new BridgeError(
+        'COMMAND_REPLAY_SUPPRESSED',
+        `${detail}本次没有启动第二个进程；检查工作区现状后再决定下一步。不得换新键盲目重跑。`,
+      );
+    }
+
     const cancellation = new AbortController();
     let cancellationCode: CommandCancellationCode | null = null;
     const checkAuthorization = (): void => {
@@ -730,6 +761,15 @@ async function commandExecTool(
         cwd: access.workspace.canonical_root,
         signal: cancellation.signal,
       });
+      // Persist only whether a process started, never its stdout/stderr. A replay
+      // must not repeat an arbitrary shell command whose first response may have
+      // been lost or whose side effects cannot be rolled back.
+      deps.repos.idempotency.complete(
+        access.connection.principal_id,
+        'command_exec',
+        parsed.idempotency_key,
+        result.started ? 'started' : 'not_started',
+      );
     } finally {
       clearInterval(authorizationWatch);
     }

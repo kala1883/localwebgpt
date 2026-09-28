@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import type { CommandExecData } from '@lwb/contracts';
+import type { CommandExecData, Envelope } from '@lwb/contracts';
 import { ADAPTER_CONNECTION, GATES_ON, callTool, dataOf, errorOf, makeToolHarness } from '../tools/harness.ts';
 import { TESTREPO_DIR } from '../fixtures/index.ts';
 import { fileIdOf, makeFixtureOps } from '../tools/fixture-ops.ts';
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function makeFixtureToolHarness(options: { readonly paused?: () => boolean } = {}) {
+async function makeFixtureToolHarness(options: { readonly paused?: () => boolean; readonly root?: string } = {}) {
+  const root = options.root ?? TESTREPO_DIR;
   return await makeToolHarness({
-    root: TESTREPO_DIR,
-    root_file_id: fileIdOf(TESTREPO_DIR),
+    root,
+    root_file_id: fileIdOf(root),
     ops: makeFixtureOps(),
     gates: GATES_ON,
     ...(options.paused === undefined ? {} : { paused: options.paused }),
@@ -32,6 +36,7 @@ describe('command_exec MCP tool', () => {
 
       const result = dataOf<CommandExecData>(await callTool(harness, 'command_exec', {
         workspace_id: harness.workspace.id,
+        idempotency_key: 'idem-command-run-test-0001',
         shell: 'powershell',
         command: "if (Test-Path 'README.md') { Write-Output 'LWB_COMMAND_TOOL_OK' } else { exit 8 }",
       }));
@@ -53,6 +58,7 @@ describe('command_exec MCP tool', () => {
     try {
       const result = dataOf<CommandExecData>(await callTool(harness, 'command_exec', {
         workspace_id: harness.workspace.id,
+        idempotency_key: 'idem-command-filter-test-0001',
         shell: 'powershell',
         command: "Write-Output 'C:\\private\\outside.txt'; Write-Output '/home/mj/private.txt'",
       }));
@@ -70,6 +76,7 @@ describe('command_exec MCP tool', () => {
     try {
       const running = callTool(harness, 'command_exec', {
         workspace_id: harness.workspace.id,
+        idempotency_key: 'idem-command-revoked-test-0001',
         shell: 'powershell',
         command: 'Start-Sleep -Seconds 30',
       });
@@ -93,6 +100,7 @@ describe('command_exec MCP tool', () => {
     try {
       const running = callTool(harness, 'command_exec', {
         workspace_id: harness.workspace.id,
+        idempotency_key: 'idem-command-paused-test-0001',
         shell: 'powershell',
         command: 'Start-Sleep -Seconds 30',
       });
@@ -103,6 +111,50 @@ describe('command_exec MCP tool', () => {
       assert.match(error.message, /可能已经执行了一部分/);
     } finally {
       harness.close();
+    }
+  });
+
+  it('同一幂等键重放或换命令都不会启动第二个进程', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'lwb-command-idempotency-'));
+    const harness = await makeFixtureToolHarness({ root });
+    const idempotencyKey = 'idem-command-exactly-once-2026-09-28';
+    const markerPath = path.join(root, 'run-count.txt');
+    const command = "Add-Content -LiteralPath 'run-count.txt' -Value 'run'; Write-Output 'LWB_RUN_ONCE'";
+    try {
+      harness.grant(ADAPTER_CONNECTION, harness.workspace.id, ['command_exec']);
+      const input = {
+        workspace_id: harness.workspace.id,
+        idempotency_key: idempotencyKey,
+        shell: 'powershell' as const,
+        command,
+      };
+      const concurrent = await Promise.all([
+        callTool(harness, 'command_exec', input),
+        callTool(harness, 'command_exec', input),
+      ]);
+      const firstEnvelope = concurrent.find((envelope) => envelope.ok);
+      const replayEnvelope = concurrent.find((envelope) => !envelope.ok);
+      assert.ok(firstEnvelope, 'one same-key call must own the process start');
+      assert.ok(replayEnvelope, 'the concurrent same-key replay must be rejected');
+      assert.equal(replayEnvelope.error.code, 'COMMAND_REPLAY_SUPPRESSED');
+      const first = dataOf<CommandExecData>(firstEnvelope as Envelope<CommandExecData>);
+      assert.equal(first.exit_code, 0);
+      assert.equal(first.stdout.trim(), 'LWB_RUN_ONCE');
+
+      const replay = errorOf(await callTool(harness, 'command_exec', input), '完成后的同键重放必须被抑制').error;
+      assert.equal(replay.code, 'COMMAND_REPLAY_SUPPRESSED');
+
+      const conflict = errorOf(
+        await callTool(harness, 'command_exec', { ...input, command: "Add-Content -LiteralPath 'run-count.txt' -Value 'conflict'" }),
+        '同键不同命令必须冲突',
+      ).error;
+      assert.equal(conflict.code, 'IDEMPOTENCY_CONFLICT');
+
+      const executions = (await readFile(markerPath, 'utf8')).split(/\r?\n/u).filter(Boolean);
+      assert.deepEqual(executions, ['run'], 'the shell process must start exactly once for a stable idempotency key');
+    } finally {
+      harness.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     }
   });
 });

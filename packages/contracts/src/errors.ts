@@ -254,6 +254,13 @@ export const BRIDGE_ERRORS = {
     autoRetry: 'never',
     summary: '所选命令解释器在本机不可用；请安装或配置该 shell。',
   },
+  COMMAND_REPLAY_SUPPRESSED: {
+    code: 'COMMAND_REPLAY_SUPPRESSED',
+    category: 'business',
+    autoRetry: 'never',
+    summary:
+      '同一幂等键已有命令执行记录；本次没有启动第二个进程。先检查原执行结果或工作区现状，不要换新键盲目重试。',
+  },
 
   // ---- 协议层 ----
   INVALID_ARGUMENT: {

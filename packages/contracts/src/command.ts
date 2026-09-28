@@ -4,6 +4,8 @@ export type CommandShell = (typeof COMMAND_SHELLS)[number];
 
 export interface CommandExecInput {
   readonly workspace_id: string;
+  /** Stable per intended execution; exact retries must reuse the same key. */
+  readonly idempotency_key: string;
   readonly shell: CommandShell;
   readonly command: string;
 }

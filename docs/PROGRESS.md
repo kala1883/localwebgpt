@@ -2120,3 +2120,17 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 - 在现有 Local Workspace Bridge Manage 页底部执行 **Refresh tools** 后，通过 ChatGPT Temporary chat 实际调用 `workspace_list` 与 `command_exec`。`workspace_list` 找到已启用的 `maas_business`；PowerShell `Write-Output 'LWB_COMMAND_OK'` 返回退出码 0 与预期 stdout。Console 显示该 workspace 持有独立 `command_exec` grant，`本项目目录` 未获此 grant，未扩大权限。
 - 本机只读审计查询显示这一个用户请求期间有两个不同 `workspace_list` request ID（`req_49`、`req_50`）和两个不同 `command_exec` request ID（`req_51`、`req_52`），均为 allow。因审计不存命令正文与逐次输出，重复 `command_exec` 的具体参数无法从审计单独证实；此 smoke 使用的是无文件副作用命令。需保留该重复调用现象，不把 ChatGPT 最终摘要里的两种工具误作总共两次调用。
 - 此实测证明了 Manage 刷新后工具可见且命令能力能实际启动进程，不等于完整 V1 验收。LWB-002 仍 PARTIAL：未完成真实网页文件读取、写入、回读；LWB-041 仍 PARTIAL：编辑/冲突/拒绝/超时/重连等评测矩阵未完成。证据补记于 `docs/evidence/platform-capability.md` §12。
+
+## 2026-09-28：命令工具同键重放抑制
+
+- 根据真实网页调用审计中同一用户消息出现多个 `command_exec` request ID 的观察，为命令工具增加必填稳定 `idempotency_key`。状态库以 `(principal_id, tool, key)` 唯一索引原子占位，指纹绑定 workspace、shell 和命令；同键相同请求不再启动第二个进程，同键不同参数报 `IDEMPOTENCY_CONFLICT`。回放错误 `COMMAND_REPLAY_SUPPRESSED` 的 `autoRetry` 为 `never`。
+- 幂等记录只存请求哈希和启动状态，不存命令正文或 shell 输出。保护范围是同键重试；换一个新键会形成新执行，不声称语义 exactly-once。每个命令会新增一条受保护状态记录；本轮没有实现该表的保留期/回收策略，LWB-038 仍需覆盖其长期增长。
+- Windows 隔离工作区测试并发发出两个同键调用：只有一行执行标记，另一请求被抑制；同键改参数冲突，文件仍只有一行。命令专项 **5/5 PASS**；完整 `npm run check` **PASS**：根 **1831 项 / 1816 PASS / 15 SKIP / 0 FAIL**，Console **162/162 PASS**，根/Console 类型检查、FsGuard（218 文件）和 secrets scan 通过。
+- ChatGPT 工具 schema 已变化，部署新版后需重新 Refresh tools；网页文件读—写—回读验收仍未完成。LWB-002、LWB-041 继续 PARTIAL。
+
+## 2026-09-28：为 `command_exec` 增加持久同键重放抑制
+
+- 真实 smoke 审计显示同一会话短时间内出现重复命令工具调用。`command_exec` 契约现要求稳定 `idempotency_key`，daemon 以 `(principal_id, tool, key)` 和 workspace/shell/command 的 SHA-256 指纹进行原子占位；重放不启动新进程，键被不同请求复用则冲突。状态库只留哈希与是否启动标记，不留命令正文或 shell 输出。
+- 新增 `COMMAND_REPLAY_SUPPRESSED`（`autoRetry=never`）；输出丢失时不能自动重跑。保护只覆盖**同键**重试：模型若为同一用户意图另造新键，仍会被视为新执行，因此对未知结果仍须先检查现场，不能宣称 exactly-once。
+- 验证：`npm run check` 通过，主测试 **1816 PASS / 15 SKIP / 0 FAIL**，Console **162/162 PASS**；定向 Windows 命令测试 **5/5**、命令工具/对话评测/幂等相关单测 **79/79** 通过；根与 Console 类型检查、FsGuard（218 文件）及 secrets scan 通过。
+- 工具输入 schema 已变化，当前 ChatGPT 管理页需在新版服务部署后再 **Refresh tools**；实际网页文件读—写—回读仍未完成，LWB-002 与 LWB-041 继续 PARTIAL。LWB-045 的 packaged-runtime build evidence 仍绑定旧提交，需在干净新版源码上重建。工作树现有的用户本地 `启动命令.md` 与 debug 文档未纳入这些改动。

@@ -295,6 +295,9 @@ const changeRevertPrepareInput = z.strictObject({
 
 const commandExecInput = z.strictObject({
   workspace_id: workspaceId,
+  idempotency_key: idempotencyKey.describe(
+    '同一条用户意图只生成一个键；重试必须复用原键。不得用新键重跑结果未知的命令。',
+  ),
   shell: z.enum(['cmd', 'powershell', 'bash']),
   command: z.string().min(1).max(16_384).describe('要传给所选 shell 的命令文本；它会以本机用户权限执行。'),
 });
@@ -560,7 +563,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'command_exec',
     title: '在授权工作区执行命令',
     description:
-      '在指定的已授权目录根下启动 cmd、PowerShell 或 Bash 命令。需要该工作区单独授予“命令执行”权限，且工作区必须为可写模式。命令以运行 LocalWebGPT 的本机用户身份执行，可读写该用户有权访问的其他路径，也可能联网；工作目录不是沙箱。仅向可信连接和可信工作区授予此权限。每次最长运行 25 秒，输出有大小限制；命令超时或被停止时可能已产生部分副作用，工具不会自动回滚。',
+      '在指定的已授权目录根下启动 cmd、PowerShell 或 Bash 命令。需要该工作区单独授予“命令执行”权限，且工作区必须为可写模式。命令以运行 LocalWebGPT 的本机用户身份执行，可读写该用户有权访问的其他路径，也可能联网；工作目录不是沙箱。仅向可信连接和可信工作区授予此权限。每次最长运行 25 秒，输出有大小限制；命令超时或被停止时可能已产生部分副作用，工具不会自动回滚。每条用户意图必须提供稳定的 idempotency_key；重试须复用原键。相同键不会启动第二个进程；若返回 COMMAND_REPLAY_SUPPRESSED，检查原执行状态，不要换新键盲目重跑。',
     inputSchema: TOOL_INPUT_SCHEMAS.command_exec,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },

@@ -84,10 +84,13 @@ describe('ChatGPT conversation evaluation set', () => {
     const granted = suite.cases.find((testCase) => testCase.id === 'explicit-command-with-command-grant');
     const denied = suite.cases.find((testCase) => testCase.id === 'command-grant-required-for-shell');
     const timeout = suite.cases.find((testCase) => testCase.id === 'command-timeout-is-not-safe-to-replay');
-    assert.ok(granted && denied && timeout);
+    const replay = suite.cases.find((testCase) => testCase.id === 'command-same-key-replay-suppressed');
+    assert.ok(granted && denied && timeout && replay);
     assert.deepEqual(granted.expected_tool_sequence, ['command_exec']);
     assert.ok(denied.must_not_call.includes('command_exec'));
     assert.ok(timeout.must_not_call.includes('command_exec'));
+    assert.ok(replay.must_not_call.includes('command_exec'));
+    assert.ok(replay.assertions.some((assertion) => assertion.includes('Do not mint a new idempotency_key')));
     assert.ok(granted.assertions.some((assertion) => assertion.includes('Do not claim the workspace root is a sandbox')));
   });
 });

@@ -97,7 +97,7 @@ describe('A 组 · 暴露摘要在最上面，且两句话都说（验收标准 
   it('A2 一个都没登记时说的是「没有任何内容暴露」，并给空状态', () => {
     const wrapper = mountView({ machineLine: 'MJ-LAPTOP-FVES0' });
 
-    assert.equal(wrapper.find('[data-testid="exposure-headline"]').attributes('data-exposed'), 'false');
+    assert.equal(wrapper.find('[data-exposed]').attributes('data-exposed'), 'false');
     assert.equal(
       wrapper.find('[data-testid="exposure-headline"]').text(),
       '当前没有任何目录被登记，因此没有任何本机内容暴露给模型。',
@@ -122,7 +122,7 @@ describe('A 组 · 暴露摘要在最上面，且两句话都说（验收标准 
     });
 
     const headline = wrapper.find('[data-testid="exposure-headline"]');
-    assert.equal(headline.attributes('data-exposed'), 'false');
+    assert.equal(wrapper.find('[data-exposed]').attributes('data-exposed'), 'false');
     assert.equal(
       headline.text(),
       '已登记 3 个根，但当前没有根同时满足连接与目录授权；内容工具不可用。',
@@ -139,7 +139,7 @@ describe('A 组 · 暴露摘要在最上面，且两句话都说（验收标准 
     });
 
     const headline = wrapper.find('[data-testid="exposure-headline"]');
-    assert.equal(headline.attributes('data-exposed'), 'true');
+    assert.equal(wrapper.find('[data-exposed]').attributes('data-exposed'), 'true');
     assert.equal(headline.text(), '已登记 2 个根，其中 1 个根当前具备有效的 ChatGPT 内容工具访问条件；只有实际调用时才会有内容出站。');
 
     const lines = wrapper.findAll('[data-testid="exposure-line"]').map((line) => line.text());

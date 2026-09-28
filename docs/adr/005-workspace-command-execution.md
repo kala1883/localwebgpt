@@ -23,6 +23,24 @@
 
 用户明确要求在已授权目录执行常见命令，并以 workspace/tool grant 作为授权来源。工程不把仅设置 cwd 说成安全隔离；风险由独立、醒目的命令 grant 暴露给本地操作者。它不会改变普通文件工具的 FsGuard、秘密路径、冲突校验和快照语义。
 
+## 2026-09-28 补充：命令调用的同键重放
+
+真实网页 smoke 的只读审计观察到，同一用户消息触发了多个独立 `command_exec` request ID。为降低传输重试或调用重放造成重复副作用的风险，命令工具现要求 `idempotency_key`，并复用受保护状态库的幂等记录：
+
+- 请求指纹绑定 `(workspace_id, shell, command)`；同键不同指纹返回 `IDEMPOTENCY_CONFLICT`。同键重放在进程启动前被拦截，返回 `COMMAND_REPLAY_SUPPRESSED`。
+- 状态库只保留请求哈希和 `started` / `not_started` 标记，不保存命令文本、stdout 或 stderr。若执行后输出交付失败，同键重试仍不会重新启动命令；操作者/模型应先检查工作区状态。
+- 此保证是**每个幂等键至多启动一个进程**，不是语义 exactly-once：调用方若为重复意图另造新键，仍会被视作新执行。命令 grant 仍是唯一授权来源；幂等键不增加审批步骤，也不构成命令沙箱。
+
+## 2026-09-28 补充：同键命令重放抑制
+
+真实 ChatGPT smoke 中，一条用户请求在审计里出现了两个不同的 `command_exec` request ID。为降低网络重试或调用重放造成重复副作用的风险，工具现在要求调用方提供稳定的 `idempotency_key`：
+
+- 键作用域为 `(principal_id, tool, key)`；请求指纹覆盖 workspace、shell 与命令文本，但只将 SHA-256 和执行状态写入受保护状态库，不保存命令正文或 stdout/stderr。
+- 同一键/同一请求首次调用后才启动进程；同键重放返回 `COMMAND_REPLAY_SUPPRESSED` 且不启动第二个进程。同键不同请求返回 `IDEMPOTENCY_CONFLICT`。
+- 若第一次执行结果丢失，系统不重放命令输出。调用方必须检查工作区状态；不得为了重跑同一意图而换一个键。**不同幂等键代表新的执行**，因此模型若为重复调用另造新键，服务端无法推断二者是同一意图。
+
+幂等键是重放保护，不是命令沙箱、逐次审批或对任意 shell 的 exactly-once 语义；命令仍只在显式 workspace grant 下运行，且可能触及初始 cwd 之外的路径。
+
 ## 应重新决定的条件
 
 若产品要求命令**严格不能访问 workspace 之外**、不能联网或不能启动任意进程，则当前实现不满足；需要真正的 Windows AppContainer/Job Object 沙箱后再开放，或移除此工具。仅增加命令 allowlist 文案不能把它变成沙箱。

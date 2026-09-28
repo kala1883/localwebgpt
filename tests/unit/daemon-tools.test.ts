@@ -363,7 +363,9 @@ const ARGUMENTED_TOOLS: readonly (readonly [string, Record<string, unknown>])[] 
   ['text_search', { workspace_id: 'ws-any', query: 'x' }],
   ['git_status', { workspace_id: 'ws-any' }],
   ['git_diff', { workspace_id: 'ws-any', path: 'README.md' }],
-  ['command_exec', { workspace_id: 'ws-any', shell: 'powershell', command: 'Write-Output test' }],
+  ['command_exec', {
+    workspace_id: 'ws-any', idempotency_key: 'idem-test-command-1', shell: 'powershell', command: 'Write-Output test',
+  }],
   ['file_create', {
     workspace_id: 'ws-any', idempotency_key: 'idem-test-create', summary: 'create',
     path: 'new.txt', content: 'text', newline: 'lf', bom: false,
@@ -415,7 +417,9 @@ describe('入参契约（验收 2：未知字段 / 无效枚举）', () => {
     const cases: readonly (readonly [string, Record<string, unknown>])[] = [
       ['git_diff', { workspace_id: 'w', path: 'a.ts', comparison: 'HEAD~1' }],
       ['git_diff', { workspace_id: 'w', path: 'a.ts', comparison: 'worktree_vs_index' }],
-      ['command_exec', { workspace_id: 'w', shell: 'pwsh', command: 'Get-Location' }],
+      ['command_exec', {
+        workspace_id: 'w', idempotency_key: 'idem-invalid-shell-command', shell: 'pwsh', command: 'Get-Location',
+      }],
       ['file_list', { workspace_id: 'w', depth: 9 }],
       ['file_list', { workspace_id: 'w', max_entries: 0 }],
       ['file_read', { workspace_id: 'w', path: 'a.ts', start_line: 0 }],
@@ -905,6 +909,7 @@ describe('结果契约（夹具仓库）', () => {
 
     const envelope = await callTool(h, 'command_exec', {
       workspace_id: h.workspace.id,
+      idempotency_key: 'idem-daemon-tools-command-exec',
       shell: 'powershell',
       command: "Write-Output 'LWB_COMMAND_EXEC_OK'",
     });
