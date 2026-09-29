@@ -56,8 +56,8 @@ npm ci
 
 ```powershell
 Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
-.\packaging\windows\Start-LocalWebGPT.ps1 -ValidateOnly
-.\packaging\windows\Start-LocalWebGPT.ps1
+.\scripts\windows\Start-LocalWebGPT.ps1 -ValidateOnly
+.\scripts\windows\Start-LocalWebGPT.ps1
 ```
 
 验证成功应显示 `Project-root .env is valid; credential values were not displayed.` 且不显示密钥。启动脚本会启动本机 daemon，并打印一个**一次性、本机控制台链接**。在浏览器打开终端给出的完整链接（不要分享链接，它含临时授权令牌），进入 **ChatGPT 连接**，阅读确认项并点击 **在本机启用 ChatGPT 连接**。这只启用连接级工具发现，不会授权任何目录。确认后脚本继续运行 Tunnel doctor 并启动 `tunnel-client`；等终端报告检查通过、隧道运行正常后再创建 ChatGPT App。
@@ -66,7 +66,7 @@ Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
 
 若 PowerShell 找不到 Node/npm，先安装符合要求的 Node.js 并重开终端。`.env` 检查失败时按错误提示修正字段名/格式；脚本不会回显密钥。
 
-停止服务时，另开一个 PowerShell 窗口运行源码目录的 `.\packaging\windows\Stop-LocalWebGPT.ps1`（打包 runtime 根目录为 `.\Stop-LocalWebGPT.ps1`），然后等待启动窗口返回提示符。该命令只发固定的本机停止请求，不按 PID 结束进程；它会等在途操作完成后再关闭 daemon。
+停止服务时，另开一个 PowerShell 窗口运行源码目录的 `.\scripts\windows\Stop-LocalWebGPT.ps1`（打包 runtime 根目录为 `.\Stop-LocalWebGPT.ps1`），然后等待启动窗口返回提示符。该命令只发固定的本机停止请求，不按 PID 结束进程；它会等在途操作完成后再关闭 daemon。
 
 ## 4. 在 ChatGPT 网页创建 MCP App
 

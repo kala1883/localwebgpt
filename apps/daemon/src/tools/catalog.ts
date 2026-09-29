@@ -18,6 +18,7 @@
 
 import { TOOL_NAMES, isControlPlaneName, isImplementedToolName, isToolName } from '@lwb/contracts';
 import type { CapabilityName, ImplementedToolName, ToolName } from '@lwb/contracts';
+import type { GrantRecord, WorkspaceRecord } from '@lwb/persistence';
 
 import type { ToolHandlerDeps } from './handlers.ts';
 import { resolveConnection, usableWorkspaces } from './access.ts';
@@ -65,21 +66,35 @@ const AVAILABILITY: Readonly<Record<ImplementedToolName, AvailabilityRule>> = {
   command_exec: { kind: 'workspace_grant', capabilities: ['command_exec'], directory_only: true },
 };
 
+/** 计算单个工作区可挂给 MCP 的 workspace-scoped 工具，不跨根合并 grant。 */
+export function grantedToolsForWorkspace(
+  workspace: WorkspaceRecord,
+  grant: GrantRecord | null,
+): readonly ToolName[] {
+  if (!workspace.enabled || workspace.removed_at !== null || grant === null || !grant.enabled) return [];
+
+  return TOOL_NAMES.filter((name): name is ImplementedToolName => {
+    if (!isImplementedToolName(name)) return false;
+    const rule = AVAILABILITY[name];
+    if (rule.kind === 'connection') return false;
+    if (rule.directory_only && workspace.kind !== 'directory') return false;
+    if (
+      (rule.capabilities.includes('propose') || rule.capabilities.includes('command_exec')) &&
+      workspace.mode !== 'read_propose_apply_with_local_approval'
+    ) return false;
+    return rule.capabilities.every((capability) => grant.capabilities.includes(capability));
+  });
+}
+
 export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): readonly CatalogEntry[] {
   const connection = resolveConnection(context, deps);
   const usable = usableWorkspaces(deps.repos, connection.id);
-
-  const anyWorkspaceHas = (capabilities: readonly CapabilityName[], directoryOnly: boolean): boolean =>
-    usable.some((workspace) => {
-      if (!workspace.enabled) return false;
-      if (directoryOnly && workspace.kind !== 'directory') return false;
-      if (
-        (capabilities.includes('propose') || capabilities.includes('command_exec')) &&
-        workspace.mode !== 'read_propose_apply_with_local_approval'
-      ) return false;
-      const grant = deps.repos.grants.find(connection.id, workspace.id);
-      return grant?.enabled === true && capabilities.every((capability) => grant.capabilities.includes(capability));
-    });
+  const toolsByWorkspace = new Map(
+    usable.map((workspace) => [
+      workspace.id,
+      new Set(grantedToolsForWorkspace(workspace, deps.repos.grants.find(connection.id, workspace.id))),
+    ]),
+  );
 
   return TOOL_NAMES.map<CatalogEntry>((name) => {
     if (!isImplementedToolName(name)) {
@@ -93,7 +108,7 @@ export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): read
 
     const rule = AVAILABILITY[name];
     if (rule.kind === 'connection') return { name, available: true, reason: null };
-    if (!anyWorkspaceHas(rule.capabilities, rule.directory_only ?? false)) {
+    if (!usable.some((workspace) => toolsByWorkspace.get(workspace.id)?.has(name) === true)) {
       return { name, available: false, reason: 'WORKSPACE_TOOL_NOT_GRANTED' };
     }
     return { name, available: true, reason: null };

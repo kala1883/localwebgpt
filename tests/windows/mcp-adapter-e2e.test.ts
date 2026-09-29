@@ -290,12 +290,40 @@ describeWindows('端到端（真进程 + 真命名管道 + 夹具仓库）', () 
     assert.ok(!stderr.includes(ADAPTER_SECRET), 'stderr 不得出现凭证');
   });
 
-  it('tools/list：七个工具，一个控制面方法都没有', async () => {
+  it('bridge_status：MCP structuredContent 透传 daemon 的 build_id', async () => {
+    const result = await client.callTool({ name: 'bridge_status', arguments: {} });
+    const envelope = structuredOf<{ build_id?: string; server_version: string }>(result);
+    assert.equal(envelope.data.build_id, 'test-build-id');
+    assert.equal(envelope.data.server_version, '0.1.0-test');
+  });
+
+  it('tools/list：返回完整工具定义，写工具必填字段与说明都跨进程透传', async () => {
     const listed = await client.listTools();
     assert.deepEqual(
       listed.tools.map((tool) => tool.name),
       [...IMPLEMENTED_TOOL_NAMES],
     );
+
+    for (const name of ['file_create', 'file_edit', 'file_delete'] as const) {
+      const tool = listed.tools.find((candidate) => candidate.name === name);
+      assert.ok(tool, `${name} must be present in tools/list`);
+      assert.ok(tool.description?.includes('必须提供 summary 和 idempotency_key'));
+      const schema = tool.inputSchema as unknown as {
+        readonly required?: readonly string[];
+        readonly properties?: Readonly<Record<string, { readonly description?: string }>>;
+      };
+      for (const field of ['workspace_id', 'idempotency_key', 'summary', 'path']) {
+        assert.ok(schema.required?.includes(field), `${name}.${field} must be required in MCP schema`);
+      }
+      assert.ok(schema.properties?.['summary']?.description?.includes('必填字段'));
+      assert.ok(schema.properties?.['idempotency_key']?.description?.includes('必填幂等键'));
+    }
+
+    const command = listed.tools.find((candidate) => candidate.name === 'command_exec');
+    assert.ok(command, 'command_exec must be present in tools/list');
+    assert.ok(command.description?.includes('每条用户意图必须提供稳定的 idempotency_key'));
+    const commandSchema = command.inputSchema as unknown as { readonly required?: readonly string[] };
+    assert.ok(commandSchema.required?.includes('idempotency_key'));
   });
 
   it('file_read：跨进程读到的字节与夹具清单一致', async () => {
@@ -329,6 +357,23 @@ describeWindows('端到端（真进程 + 真命名管道 + 夹具仓库）', () 
     });
     const error = failureOf(result);
     assert.equal(error.code, 'WORKSPACE_NOT_GRANTED');
+  });
+
+  it('workspace_list 经真实 MCP 进程返回逐工作区 granted_tools，不跨根合并', async () => {
+    harness.grant(ADAPTER_CONNECTION, harness.workspace.id, ['read', 'list']);
+    harness.grant(ADAPTER_CONNECTION, harness.otherWorkspace.id, ['command_exec']);
+
+    const result = await client.callTool({ name: 'workspace_list', arguments: {} });
+    const envelope = structuredOf<{
+      workspaces: readonly {
+        workspace_id: string;
+        granted_tools: readonly string[];
+      }[];
+    }>(result);
+    const byId = new Map(envelope.data.workspaces.map((workspace) => [workspace.workspace_id, workspace]));
+
+    assert.deepEqual(byId.get(harness.workspace.id)?.granted_tools, ['file_list', 'file_read', 'change_get']);
+    assert.deepEqual(byId.get(harness.otherWorkspace.id)?.granted_tools, ['command_exec']);
   });
 
   it('未知工具名：协议错误，不是工具结果', async () => {

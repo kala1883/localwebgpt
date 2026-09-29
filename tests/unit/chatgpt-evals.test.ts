@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { TOOL_NAMES } from '@lwb/contracts';
+import { TOOL_NAMES, TOOLS_BY_NAME } from '@lwb/contracts';
 
 interface EvalCase {
   readonly id: string;
@@ -23,6 +23,8 @@ interface EvalSuite {
 
 const suitePath = path.resolve(import.meta.dirname, '../evals/chatgpt/cases.json');
 const suite = JSON.parse(readFileSync(suitePath, 'utf8')) as EvalSuite;
+const skillPath = path.resolve(import.meta.dirname, '../../plugin/skills/local-workspace/SKILL.md');
+const skill = readFileSync(skillPath, 'utf8');
 
 describe('ChatGPT conversation evaluation set', () => {
   it('is an explicitly unrun, well-formed suite with unique cases', () => {
@@ -61,6 +63,8 @@ describe('ChatGPT conversation evaluation set', () => {
     assert.equal(create.category, 'direct_write');
     assert.deepEqual(create.expected_tool_sequence, ['file_create']);
     assert.ok(create.must_not_call.includes('change_apply'));
+    assert.ok(create.assertions.some((assertion) => assertion.includes('required summary')));
+    assert.ok(create.assertions.some((assertion) => assertion.includes('idempotency_key')));
     assert.ok(create.assertions.some((assertion) => assertion.includes('state=APPLIED')));
   });
 
@@ -70,7 +74,37 @@ describe('ChatGPT conversation evaluation set', () => {
     assert.equal(edit.category, 'direct_write');
     assert.deepEqual(edit.expected_tool_sequence, ['file_edit']);
     assert.ok(edit.must_not_call.includes('change_apply'));
+    assert.ok(edit.assertions.some((assertion) => assertion.includes('required summary')));
+    assert.ok(edit.assertions.some((assertion) => assertion.includes('idempotency_key')));
     assert.ok(edit.assertions.some((assertion) => assertion.includes('state=APPLIED')));
+  });
+
+  it('expects explicit file_delete calls to include stable required metadata', () => {
+    const deletion = suite.cases.find((testCase) => testCase.id === 'delete-file-within-workspace-grant');
+    assert.ok(deletion);
+    assert.equal(deletion.category, 'direct_write');
+    assert.deepEqual(deletion.expected_tool_sequence, ['file_delete']);
+    assert.ok(deletion.assertions.some((assertion) => assertion.includes('required summary')));
+    assert.ok(deletion.assertions.some((assertion) => assertion.includes('idempotency_key')));
+    assert.ok(deletion.assertions.some((assertion) => assertion.includes('file state=VERIFIED')));
+  });
+
+  it('makes required write metadata explicit in the live tool descriptions', () => {
+    for (const name of ['file_create', 'file_edit', 'file_delete'] as const) {
+      const description = TOOLS_BY_NAME.get(name)?.description ?? '';
+      assert.ok(
+        description.includes('必须提供 summary 和 idempotency_key'),
+        `${name} must tell the model both write metadata fields are mandatory`,
+      );
+      assert.ok(description.includes('精确重试复用原键'), `${name} must explain stable-key retries`);
+    }
+  });
+
+  it('teaches the Local Workspace skill to supply required write metadata and safe retries', () => {
+    assert.match(skill, /Every direct `file_create`, `file_edit`, or `file_delete` call must include both required fields/);
+    assert.match(skill, /a concise `summary` and an `idempotency_key`/);
+    assert.match(skill, /an exact retry must reuse that key/i);
+    assert.match(skill, /If the connector returns a parameter-schema error.*treat it as no write/s);
   });
 
   it('uses prepare/apply for multi-file writes without per-change approval', () => {

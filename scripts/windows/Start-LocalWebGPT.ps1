@@ -9,14 +9,13 @@ if (-not $IsWindows) {
   throw 'LocalWebGPT Secure MCP Tunnel startup is supported on Windows only.'
 }
 $null = Get-Command node -ErrorAction Stop
-$null = Get-Command npm -ErrorAction Stop
 
 $runtimeRoot = $null
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'package.json') -PathType Leaf) {
   # Installed runtime: the launcher is copied to the runtime root.
   $runtimeRoot = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 } else {
-  # Source checkout: the script lives under packaging/windows.
+  # Source checkout: the script lives under scripts/windows.
   $sourceRoot = Join-Path $PSScriptRoot '..\..'
   if (Test-Path -LiteralPath (Join-Path $sourceRoot 'package.json') -PathType Leaf) {
     $runtimeRoot = (Resolve-Path -LiteralPath $sourceRoot).Path
@@ -24,6 +23,35 @@ if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'package.json') -PathType Le
 }
 if ($null -eq $runtimeRoot) {
   throw 'Cannot locate a LocalWebGPT package.json next to this launcher.'
+}
+$runtimeMarker = Join-Path $runtimeRoot '.lwb-runtime-package'
+$isPackagedRuntime = Test-Path -LiteralPath $runtimeMarker -PathType Leaf
+$buildId = 'source-checkout'
+if ($isPackagedRuntime) {
+  $consoleIndex = Join-Path $runtimeRoot 'apps\console\dist\index.html'
+  if (-not (Test-Path -LiteralPath $consoleIndex -PathType Leaf)) {
+    throw 'The packaged Console build is missing; rebuild the runtime before starting it.'
+  }
+  $buildInfoPath = Join-Path $runtimeRoot '.lwb-build-info.json'
+  if (-not (Test-Path -LiteralPath $buildInfoPath -PathType Leaf)) {
+    throw 'The packaged build identity is missing; rebuild the runtime before starting it.'
+  }
+  try {
+    $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    throw 'The packaged build identity is invalid; rebuild the runtime before starting it.'
+  }
+  $manifestFingerprint = [string]$buildInfo.source_manifest_sha256
+  if ($buildInfo.schema_version -ne 1 -or
+      $manifestFingerprint -notmatch '^[0-9a-f]{64}$' -or
+      [string]$buildInfo.build_id -cne "sha256:$manifestFingerprint") {
+    throw 'The packaged build identity failed validation; rebuild the runtime before starting it.'
+  }
+  $buildId = [string]$buildInfo.build_id
+} else {
+  # Source checkouts rebuild the UI on each start; packaged runtimes already
+  # contain the validated production bundle and intentionally omit Vite.
+  $null = Get-Command npm -ErrorAction Stop
 }
 
 $dotenvPath = Join-Path $runtimeRoot '.env'
@@ -34,6 +62,7 @@ $snapshotQuota = ''
 $previousTunnelId = $env:CONTROL_PLANE_TUNNEL_ID
 $previousApiKey = $env:CONTROL_PLANE_API_KEY
 $previousSnapshotQuota = $env:LWB_SNAPSHOT_STORE_MAX_BYTES
+$previousBuildId = $env:LWB_BUILD_ID
 $exitCode = 1
 $locationPushed = $false
 try {
@@ -114,20 +143,29 @@ try {
   $locationPushed = $true
   $env:CONTROL_PLANE_TUNNEL_ID = $tunnelId
   $env:CONTROL_PLANE_API_KEY = $apiKey
+  $env:LWB_BUILD_ID = $buildId
   if ($snapshotQuota.Length -gt 0) { $env:LWB_SNAPSHOT_STORE_MAX_BYTES = $snapshotQuota }
 
   # The Node launcher starts the daemon, prints a one-time local console URL,
   # and waits for the operator's audited connection-enable action before it
-  # runs doctor or starts tunnel-client.
-  npm run chatgpt:local
+  # runs doctor or starts tunnel-client. Avoid npm lifecycle scripts in the
+  # packaged runtime: its UI was built during packaging and devDependencies
+  # (including Vite) were pruned afterwards.
+  if ($isPackagedRuntime) {
+    & node --import tsx apps/daemon/src/lifecycle/chatgpt-local.ts
+  } else {
+    npm run chatgpt:local
+  }
   $exitCode = $LASTEXITCODE
 } finally {
   $env:CONTROL_PLANE_TUNNEL_ID = $previousTunnelId
   $env:CONTROL_PLANE_API_KEY = $previousApiKey
   $env:LWB_SNAPSHOT_STORE_MAX_BYTES = $previousSnapshotQuota
+  $env:LWB_BUILD_ID = $previousBuildId
   $tunnelId = ''
   $apiKey = ''
   $snapshotQuota = ''
+  $buildId = ''
   $rawLine = ''
   $line = ''
   $assignment = $null

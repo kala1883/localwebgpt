@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -22,7 +22,7 @@ import {
 describe('local Secure MCP Tunnel launch contract', () => {
   it('loads tunnel credentials from the root .env without prompting or echoing values', () => {
     const launcher = readFileSync(
-      new URL('../../packaging/windows/Start-LocalWebGPT.ps1', import.meta.url),
+      new URL('../../scripts/windows/Start-LocalWebGPT.ps1', import.meta.url),
       'utf8',
     );
 
@@ -33,6 +33,11 @@ describe('local Secure MCP Tunnel launch contract', () => {
     assert.match(launcher, /CONTROL_PLANE_API_KEY/);
     assert.match(launcher, /snapshot_store_max_bytes/);
     assert.match(launcher, /LWB_SNAPSHOT_STORE_MAX_BYTES/);
+    assert.match(launcher, /\.lwb-runtime-package/);
+    assert.match(launcher, /\.lwb-build-info\.json/);
+    assert.match(launcher, /LWB_BUILD_ID/);
+    assert.match(launcher, /if \(\$isPackagedRuntime\)[\s\S]*?node --import tsx apps\/daemon\/src\/lifecycle\/chatgpt-local\.ts/);
+    assert.match(launcher, /else \{\s*npm run chatgpt:local\s*\}/);
     assert.match(launcher, /\[switch\]\$ValidateOnly/);
     assert.doesNotMatch(launcher, /Read-Host/);
     assert.match(launcher, /values were not displayed/i);
@@ -48,7 +53,7 @@ describe('local Secure MCP Tunnel launch contract', () => {
     try {
       const script = path.join(root, 'Start-LocalWebGPT.ps1');
       const sourceScript = fileURLToPath(
-        new URL('../../packaging/windows/Start-LocalWebGPT.ps1', import.meta.url),
+        new URL('../../scripts/windows/Start-LocalWebGPT.ps1', import.meta.url),
       );
       await copyFile(sourceScript, script);
       await writeFile(path.join(root, 'package.json'), '{"name":"lwb-validate-only"}\n', 'utf8');
@@ -82,13 +87,103 @@ describe('local Secure MCP Tunnel launch contract', () => {
     }
   });
 
+  it('validates packaged build identity without requiring npm or launching the daemon', async (context) => {
+    if (process.platform !== 'win32') {
+      context.skip('Packaged PowerShell launcher validation is Windows-only.');
+      return;
+    }
+
+    const root = await mkdtemp(path.join(tmpdir(), 'lwb-build-id-launch-'));
+    const secretSentinel = 'not-a-real-runtime-key-build-id-test';
+    try {
+      const launcher = path.join(root, 'Start-LocalWebGPT.ps1');
+      const sourceLauncher = fileURLToPath(
+        new URL('../../scripts/windows/Start-LocalWebGPT.ps1', import.meta.url),
+      );
+      await copyFile(sourceLauncher, launcher);
+      await writeFile(path.join(root, 'package.json'), '{"name":"lwb-runtime-fixture"}\n', 'utf8');
+      await writeFile(path.join(root, '.lwb-runtime-package'), 'format=1\n', 'ascii');
+      await mkdir(path.join(root, 'apps', 'console', 'dist'), { recursive: true });
+      await writeFile(path.join(root, 'apps', 'console', 'dist', 'index.html'), '<!doctype html>\n', 'utf8');
+      const fingerprint = 'a'.repeat(64);
+      const buildInfoPath = path.join(root, '.lwb-build-info.json');
+      await writeFile(buildInfoPath, JSON.stringify({
+        schema_version: 1,
+        build_id: `sha256:${fingerprint}`,
+        source_manifest_sha256: fingerprint,
+        source_commit: 'fixture-commit',
+      }), 'utf8');
+      const safeTunnelId = 'tunnel_0123456789abcdef0123456789abcdef';
+      const envPath = path.join(root, '.env');
+      await writeFile(envPath, `tunnel_id=${safeTunnelId}\nruntime_API_key=${secretSentinel}\n`, 'utf8');
+
+      const runValidateOnly = () => spawnSync(
+        'pwsh.exe',
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', launcher, '-ValidateOnly'],
+        {
+          cwd: root,
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 10_000,
+          env: { ...process.env, PATHEXT: '.EXE;.COM' },
+        },
+      );
+
+      const valid = runValidateOnly();
+      assert.equal(valid.status, 0, valid.stderr);
+      assert.ok(valid.stdout.includes('valid'));
+      assert.equal(`${valid.stdout}${valid.stderr}`.includes(secretSentinel), false);
+
+      await writeFile(buildInfoPath, JSON.stringify({
+        schema_version: 1,
+        build_id: `sha256:${'b'.repeat(64)}`,
+        source_manifest_sha256: fingerprint,
+        source_commit: 'fixture-commit',
+      }), 'utf8');
+      const invalid = runValidateOnly();
+      assert.notEqual(invalid.status, 0, 'mismatched source fingerprint must refuse startup');
+      assert.ok(`${invalid.stdout}${invalid.stderr}`.includes('build identity failed validation'));
+      assert.equal(`${invalid.stdout}${invalid.stderr}`.includes(secretSentinel), false);
+
+      await writeFile(buildInfoPath, JSON.stringify({
+        schema_version: 1,
+        build_id: `sha256:${fingerprint}`,
+        source_manifest_sha256: fingerprint,
+        source_commit: 'fixture-commit',
+      }), 'utf8');
+      const fakeBin = path.join(root, 'fake-bin');
+      await mkdir(fakeBin);
+      await writeFile(
+        path.join(fakeBin, 'node.cmd'),
+        '@echo off\r\necho LWB_BUILD_ID=%LWB_BUILD_ID%\r\nexit /b 0\r\n',
+        'ascii',
+      );
+      const launched = spawnSync('pwsh.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', launcher], {
+        cwd: root,
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          PATH: `${fakeBin};${process.env['PATH'] ?? ''}`,
+          PATHEXT: '.CMD;.EXE;.COM',
+        },
+      });
+      assert.equal(launched.status, 0, launched.stderr);
+      assert.ok(launched.stdout.includes(`LWB_BUILD_ID=sha256:${fingerprint}`), launched.stdout);
+      assert.equal(`${launched.stdout}${launched.stderr}`.includes(secretSentinel), false);
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+
   it('ships a scoped stop command that uses the named pipe, not process-name or PID killing', () => {
     const stopScript = readFileSync(
-      new URL('../../packaging/windows/Stop-LocalWebGPT.ps1', import.meta.url),
+      new URL('../../scripts/windows/Stop-LocalWebGPT.ps1', import.meta.url),
       'utf8',
     );
     const runtimeBuilder = readFileSync(
-      new URL('../../packaging/windows/build-runtime.ps1', import.meta.url),
+      new URL('../../deployment/windows/build-runtime.ps1', import.meta.url),
       'utf8',
     );
 
@@ -104,29 +199,47 @@ describe('local Secure MCP Tunnel launch contract', () => {
 
   it('ships an explicit guarded runtime uninstaller with the Windows package', () => {
     const uninstallScript = readFileSync(
-      new URL('../../packaging/windows/Uninstall-LocalWebGPT.ps1', import.meta.url),
+      new URL('../../scripts/windows/Uninstall-LocalWebGPT.ps1', import.meta.url),
       'utf8',
     );
     const runtimeBuilder = readFileSync(
-      new URL('../../packaging/windows/build-runtime.ps1', import.meta.url),
+      new URL('../../deployment/windows/build-runtime.ps1', import.meta.url),
       'utf8',
     );
 
     assert.match(uninstallScript, /ConfirmTargetRuntimeStopped/);
     assert.match(uninstallScript, /canonical_root/);
     assert.match(uninstallScript, /Test-PathsOverlap/);
-    assert.match(uninstallScript, /Remove-TreeWithoutFollowingLinks/);
+    assert.match(uninstallScript, /FILE_FLAG_OPEN_REPARSE_POINT/);
+    assert.match(uninstallScript, /SetFileInformationByHandle/);
+    assert.match(uninstallScript, /OpenEntry\(\$Path\)/);
+    assert.doesNotMatch(uninstallScript, /Remove-TreeWithoutFollowingLinks/);
     assert.match(uninstallScript, /SupportsShouldProcess/);
     assert.match(runtimeBuilder, /Uninstall-LocalWebGPT\.ps1/);
   });
 
   it('records an SPDX SBOM and hashes the packaged Windows binaries', () => {
     const runtimeBuilder = readFileSync(
-      new URL('../../packaging/windows/build-runtime.ps1', import.meta.url),
+      new URL('../../deployment/windows/build-runtime.ps1', import.meta.url),
       'utf8',
     );
+    const sbomGenerator = readFileSync(
+      new URL('../../scripts/release/generate-evidence.mjs', import.meta.url),
+      'utf8',
+    );
+    const runtimePackage = JSON.parse(
+      readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+    ) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
 
     assert.match(runtimeBuilder, /npm run release:evidence/);
+    assert.match(runtimeBuilder, /npm prune --omit=dev/);
+    assert.match(runtimeBuilder, /Runtime TypeScript module smoke/);
+    assert.match(runtimeBuilder, /Remove-Item -LiteralPath \$resolvedTestsRoot -Recurse -Force/);
+    assert.match(sbomGenerator, /'--omit=dev'/);
+    assert.match(sbomGenerator, /writePackagedBuildInfo/);
+    assert.match(sbomGenerator, /\.lwb-build-info\.json/);
+    assert.equal(runtimePackage.dependencies.tsx, '4.23.15');
+    assert.equal(runtimePackage.devDependencies.tsx, undefined);
     assert.match(runtimeBuilder, /--tunnel-archive-sha256=/);
     assert.match(runtimeBuilder, /--tunnel-client-sha256=/);
     assert.match(runtimeBuilder, /--cloudflared-sha256=/);

@@ -35,6 +35,7 @@
  */
 
 import { z } from 'zod';
+import { TOOL_NAMES } from './tools.ts';
 
 import { BRIDGE_ERROR_CODES } from './errors.ts';
 import type { BridgeErrorCode, BridgeErrorPayload } from './errors.ts';
@@ -164,6 +165,7 @@ checkShape<ErrEnvelope, typeof ERROR_ENVELOPE>(true);
 const bridgeStatusDataSchema = z.strictObject({
   connection_alias: z.string(),
   server_version: z.string(),
+  build_id: z.string().min(1).optional(),
   protocol_version: z.string(),
   contract_version: z.string(),
   capabilities: capabilityFlagsSchema,
@@ -195,6 +197,7 @@ const workspaceSummarySchema = z.strictObject({
   mode: workspaceModeSchema,
   enabled: z.boolean(),
   capabilities: capabilityFlagsSchema,
+  granted_tools: z.array(z.enum(TOOL_NAMES)),
   generation: z.number().int().nonnegative(),
   single_file_path: z.string().nullable(),
 });

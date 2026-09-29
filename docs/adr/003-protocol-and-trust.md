@@ -1,6 +1,6 @@
 # ADR-003：协议、依赖锁定与信任边界
 
-- 状态：**已决定，附证据缺口**（缺口见 §6，其中隧道与账号部分为 **BLOCKED**）
+- 状态：**已决定，附证据缺口**（缺口见 §6；网页基础工具链已实测，协议协商与断线恢复仍未知）
 - 日期：2026-09-25
 - 关联任务：LWB-004
 - 关联不变量：I02、I06、I13
@@ -16,12 +16,16 @@
 ## 1. 背景
 
 方案 §3 给出五个信任边界。任务书 LWB-004 要求划分它们、锁定版本、确认「私有无单用户连接
-不等于可区分所有对话」，并形成 G0 检查单与能力开关。这一步的作用不是增加功能，
+不等于可区分所有对话」，并记录外部验收检查单。这一步的作用不是增加隐藏功能门禁，
 而是**把「哪些东西不可信」写死在设计里**——否则等到实现阶段，边界会自然地向方便的一侧移动。
+
+**实现模型更新（2026-09-29）**：外部验收字段只用于诊断，不关闭运行时能力；连接启停、同一
+workspace 上的逐工具 grant、根模式和恢复状态决定实际可用能力。此处原始方案里「G0 全过前
+关闭直写/Git」的全局门禁已由用户明确要求移除，不再作为运行时授权规则。
 
 ---
 
-## 2. 已锁定的版本（本机实际安装）
+## 2. 已锁定的版本与构建证据
 
 | 组件 | 锁定版本 | 来源与验证方式 |
 | --- | --- | --- |
@@ -31,21 +35,25 @@
 | TypeScript | **5.9.3** | `package.json` devDependencies |
 | tsx | **4.23.15** | 同上；测试与脚本的运行方式 |
 | better-sqlite3 | **13.0.3** | `package.json` dependencies；LWB-006 实测通过 |
-| `@modelcontextprotocol/sdk` | **1.30.1** | `package.json` dependencies（**尚未被任何代码使用**，见 §6） |
+| `@modelcontextprotocol/sdk` | **1.30.1** | `package.json`/lockfile；adapter 的 MCP `Server`、stdio transport、Zod JSON Schema 转换与 Windows E2E 已实用 |
 | zod | **4.6.5** | 同上 |
 | isomorphic-git | **1.42.2** | 同上（尚未使用） |
+| `tunnel-client` | **v0.0.15** | 当前 Windows runtime 构建固定官方 archive SHA-256 并在包内运行 `--version` 成功；见 `docs/evidence/runtime-package-validation-20260929.md` |
 | PowerShell | **7.6.6** | `$PSVersionTable`；原生护栏与受保护存储的过渡实现 |
 | .NET | **10.0.12** | `RuntimeInformation.FrameworkDescription`；DPAPI 经 P/Invoke |
 | 原生工具链 | **无（Rust / MSVC / Windows SDK 均未安装）** | 见 ADR-002 §5 的过渡方案与替换触发条件 |
 
-**没有**出现在这张表里的东西，就是没有锁定：
+**仍未完整锁定或验证的内容：**
 
 - **MCP 协议修订版本（protocol revision）未锁定。** 它由客户端与服务端在 `initialize` 时协商，
-  而本环境没有真实的隧道连接可协商。SDK 1.30.1 支持的修订集合**不等于**ChatGPT 实际会协商到的那个。
-- **tunnel-client 版本未锁定**，因为它**未安装**（LWB-002 BLOCKED）。
-- **ChatGPT 账号的能力边界未确定**：官方资料自身存在不一致（方案 §1.1 已记录：
+  本次真实网页调用证明互操作成功，但没有保存原始 `initialize.protocolVersion`，SDK 1.30.1
+  支持的修订集合**不等于**ChatGPT 实际协商到的版本。
+- `tunnel-client` v0.0.15 已按官方 archive hash 打入当前验证包，但活动 daemon 缺少
+  `build_id`，因此不能把活动隧道进程绑定到该构建，也未验证睡眠唤醒/断线重连。
+- **账号能力范围不能泛化**：官方资料自身存在不一致（方案 §1.1 已记录：
   开发者指南称 Pro/Plus 可用读写工具，帮助中心另一篇仍把 Pro 描述为读/fetch 范围）。
-  在这种冲突下，**只能以真实账号实测为准**，不能二选一采信。
+  本次真实账号已验证当前 ChatGPT 网页连接可按 workspace grant 调用命令与文件工具；这只证明
+  此账号/连接/授权组合，不裁决其他账号或公开分发的能力。
 
 ---
 
@@ -168,36 +176,38 @@ daemon 侧的路径校验（`packages/secure-store/protected-paths.ts`）是**�
 
 ---
 
-## 5. 能力开关与 G0 检查单
+## 5. 能力状态与 G0 证据检查单
 
-### 5.1 能力开关（方案 §14）
+### 5.1 实现能力标志（非授权开关）
 
-| 开关 | 默认 | 含义 |
+| 状态字段 | 当前实现读数 | 含义 |
 | --- | --- | --- |
-| `read_enabled` | 关 | 读取、列举、搜索 |
-| `git_enabled` | 关 | 只读 Git |
-| `proposal_enabled` | 关 | 生成修改集（**不写文件**） |
-| `direct_write_enabled` | **关** | 实际写入用户文件 |
-| `recovery_required` | 关 | 存在未决恢复时置位，**阻断新的写入** |
+| `read_enabled` | true | daemon 支持读取、列举、搜索；仍需当前 workspace 的相应 grant |
+| `git_enabled` | true | daemon 支持 Git 只读；仍需该 workspace 的 `git_read` grant |
+| `proposal_enabled` | true | daemon 支持文件修改；实际写入须该 workspace 的 `propose` grant |
+| `direct_write_enabled` | true | daemon 支持受保护写入；不是用户授权，授权仍由 workspace grant 决定 |
+| `recovery_required` | 按 workspace 派生 | 有未决恢复时阻断该根的新写入 |
 
-**默认全关**。未提供的能力**不得**在工具描述里暗示可用——
-一个描述里写着能写、实际拒绝的工具，会让模型反复重试并最终诱导操作者放宽权限。
+这些 flags 是实现/诊断读数，不是全局权限闸门。工具清单按连接中已启用 workspace 的 grant 生成；
+每次调用再对模型指定的那个 workspace 单独复核。权限来源是本地操作者配置的 workspace/tool grant，
+不是 G0/G2/G3 状态，也不是模型参数。恢复状态仍是写入硬拒绝条件。
 
-### 5.2 G0 检查单（方案 §1.2）
+### 5.2 G0 外部验收记录（不作为运行时门禁）
 
 | # | 验证项 | 通过证据 | 当前状态 |
 | --- | --- | --- | --- |
-| 1 | 网页原生工具接入 | 真实 ChatGPT 会话成功发现并调用测试工具 | **未验证 —— BLOCKED**（无真实账号） |
-| 2 | 网页写能力 | 在专用测试目录完成确认后写入与回读 | **未验证 —— BLOCKED** |
-| 3 | 隧道运行条件 | tunnel-client 在目标 Windows 环境可正常运行、断线重连 | **未验证**（tunnel-client 未安装） |
-| 4 | 调用身份边界 | 证明该隧道/连接只授予目标私人用户或明确可信主体 | **未验证** |
+| 1 | 网页原生工具接入 | 真实 ChatGPT 对话完成 workspace discovery 与多种工具调用 | **已验证（基础）**；逐工具元数据字段仍缺 `granted_tools` |
+| 2 | 网页写能力 | 对唯一临时文件 create/read/edit/read/delete/readback | **已验证（单一 workspace smoke）**；不是完整冲突/拒绝/恢复矩阵 |
+| 3 | 隧道运行条件 | 已锁定 runtime 包内 v0.0.15 并成功承载真实网页调用 | **部分**；活动实例 build identity 未知，睡眠/断线重连未测 |
+| 4 | 调用身份边界 | 权限按连接与 workspace/tool grant 复核；模型参数不授予身份 | **部分**；单用户私有连接不能区分不同 ChatGPT 对话/真实多账号 |
 | 5 | 路径与写入保护 | Windows 句柄并发/目录交换 PoC 通过 | **已验证** → `docs/evidence/lwb-003/`、ADR-002 |
-| 6 | 版本兼容 | 记录已通过的 SDK、协议、客户端与运行时版本 | **部分**：本机工具链已锁定（§2）；协议修订与客户端版本未验证 |
+| 6 | 版本兼容 | 记录 SDK、协议、客户端与运行时版本 | **部分**：SDK 1.30.1 与包内客户端 v0.0.15 已锁定；协商协议修订和活动 build ID 未知 |
 
-**G0 未通过。** 按任务书验收标准第 3 条，**不得进入真实目录开发联调**。
-第 5 项通过只说明「写入护栏本身可行」，不构成 G0 通过。
+**G0 外部签署仍是 PARTIAL，不能报告为正式 PASS。** 但该 checklist 不关闭运行时能力；
+已启用连接与 workspace/tool grant 允许的本地调用可继续，不能把 G0 读数当作另一层隐藏授权。
 
-**MCP Inspector 的成功不能替代第 1、2 项。** 它只能证明局部协议工作。
+MCP Inspector 或本地 adapter E2E 不能替代网页验收；反过来，一次网页 smoke 也不能代替
+协议协商版本、出站审计、冲突/恢复和断线重连的完整验收。
 
 ---
 
@@ -205,12 +215,12 @@ daemon 侧的路径校验（`packages/secure-store/protected-paths.ts`）是**�
 
 | 缺口 | 原因 | 影响 |
 | --- | --- | --- |
-| 真实网页读—写—回读 | LWB-002 **BLOCKED**（无真实账号与隧道凭据） | G0 第 1、2 项不通过；A01–A04 等验收样例无法执行 |
-| 协商到的 MCP 协议修订 | 无隧道可协商 | 适配器（LWB-017）的协议层**未经验证**；SDK 已装但**零使用** |
-| tunnel-client 版本与运行方式 | 未安装，方案 §1.2 要求「按官方当前说明安装，不自行猜测命令参数」 | 无法锁定；**不允许**凭猜测写配置 |
-| 账号写权限范围 | 官方文档自相矛盾（方案 §1.1） | 只能实测；在实测前不得假设有写权限 |
-| `principal_id` 不来自参数 | 字段尚不存在（LWB-008 引入） | 验收标准第 1 条目前**只有评审、无执行证据** |
-| 真实多账户/多连接隔离 | 单用户机器 | A26 无法执行 |
+| 完整网页场景矩阵 | 基础 discovery/command/file lifecycle 已实测；搜索、冲突、撤权、恢复、拒绝和断线/重连未覆盖 | LWB-002/041/043 仍 PARTIAL；不能以一次 smoke 代表完整验收 |
+| 协商到的 MCP 协议修订 | 未保存原始 `initialize.protocolVersion` | 真实工具互操作通过，但不能声称 exact protocol revision 已锁定 |
+| 活动 tunnel-client / daemon 构建身份 | runtime package 固定 v0.0.15；活动 `bridge_status` 缺 `build_id` | 无法证明网页正在运行本次源码构建；需重启并 Refresh 后核验 |
+| 账号能力范围 | 当前真实 ChatGPT account/workspace 组合的文件与命令工具已成功调用；官方资料范围冲突仍存在 | 仅对已测试 account/workspace 有证据，不泛化至其他账号或公开分发 |
+| `principal_id` 不来自参数 | strict tool schemas、IPC channel binding 与伪造参数负向测试 | 代码和自动化证据已有；独立非实现者审查仍待完成 |
+| 真实多账户/多连接隔离 | 单用户机器；测试覆盖连接/workspace grant 隔离，不代表真实多账户 | A26/真实多账户场景仍无法实测 |
 
 **「官方文档冲突」本身就是证据缺口，不是一个需要选边的问题。** 方案 §1.1 记录的两处矛盾
 被原样保留在这里，直到有实测能够裁决。
@@ -220,7 +230,7 @@ daemon 侧的路径校验（`packages/secure-store/protected-paths.ts`）是**�
 ## 7. 后果
 
 **正面**：身份来源被固定为「通道」，模型无法通过任何参数扩权；执行器是唯一的文件接触点，
-安全判定只有一处；能力开关默认全关，未实现的功能不会意外可用。
+安全判定只有一处；实际权限由连接与 workspace/tool grants 决定，诊断状态不构成隐藏的全局开关。
 
 **代价**：无法提供「按对话隔离」这类看起来自然的特性；需要本地控制台做配置，
 而不是让模型自述；每加一个能力都要先想清楚它在哪个边界上、由谁判定。
@@ -231,6 +241,5 @@ daemon 侧的路径校验（`packages/secure-store/protected-paths.ts`）是**�
 
 - 本任务的产物是**文档**，不改变运行时行为。回退即删除本文件与
   `docs/security/threat-model.md`、`docs/compatibility.md`。
-- §5.1 的能力开关目前**尚未实现**（LWB-008 起），因此没有可关闭的开关；
-  这份清单是**将来实现时必须遵守的默认值**，不是当前已有的配置。
+- 运行时权限应通过本地连接启停和 workspace/tool grants 收窄或撤销；不要把外部验收字段改回全局能力门禁。
 - 未使用 `git reset --hard` / `git clean` / `git checkout` / `git stash`。

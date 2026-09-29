@@ -1295,7 +1295,7 @@
       ],
       "deliverables": [
         "apps/daemon/lifecycle/",
-        "packaging/launcher/"
+        "deployment/launcher/"
       ],
       "execution_steps": [
         "提供每用户启动器与显式开机启动选项，默认不以管理员运行。",
@@ -1327,7 +1327,7 @@
         "LWB-039"
       ],
       "deliverables": [
-        "packaging/windows/",
+        "deployment/windows/",
         "docs/install-and-upgrade.md"
       ],
       "execution_steps": [

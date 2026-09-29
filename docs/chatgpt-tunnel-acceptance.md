@@ -14,9 +14,9 @@
 
 ### 启动本机服务
 
-推荐直接运行一体化启动脚本：先在项目根（打包 runtime 则在 runtime 根）`.env` 中填写 `tunnel_id=...` 与 `runtime_API_key=...`，源码目录执行 `.\packaging\windows\Start-LocalWebGPT.ps1`，runtime 目录执行 `.\Start-LocalWebGPT.ps1`。脚本从 `.env` 读取配置，不回显凭据；若模型连接默认停用，会等待本机控制台确认启用，随后自动 doctor 并启动隧道。`.env` 已忽略且构建时不会复制，打包后需在 runtime 根单独创建。这样“读取本地配置 → 启动服务 → 本机启用 ChatGPT 连接 → 隧道开始接收请求”由一个命令串起来。
+推荐直接运行一体化启动脚本：先在项目根（打包 runtime 则在 runtime 根）`.env` 中填写 `tunnel_id=...` 与 `runtime_API_key=...`，源码目录执行 `.\scripts\windows\Start-LocalWebGPT.ps1`，runtime 目录执行 `.\Start-LocalWebGPT.ps1`。脚本从 `.env` 读取配置，不回显凭据；若模型连接默认停用，会等待本机控制台确认启用，随后自动 doctor 并启动隧道。`.env` 已忽略且构建时不会复制，打包后需在 runtime 根单独创建。这样“读取本地配置 → 启动服务 → 本机启用 ChatGPT 连接 → 隧道开始接收请求”由一个命令串起来。
 
-源码 checkout 可运行 `.\packaging\windows\Start-LocalWebGPT.ps1 -ValidateOnly` 检查项目根 `.env`，再运行 `.\packaging\windows\Start-LocalWebGPT.ps1`。打包 runtime 则运行 `.\Start-LocalWebGPT.ps1`。若需手工诊断，也可以在 Windows PowerShell 中设置当前会话变量。隧道 ID 不是密钥；runtime key 输入时隐藏。两者都不要提交到仓库、写入 YAML 或发送到聊天：
+源码 checkout 可运行 `.\scripts\windows\Start-LocalWebGPT.ps1 -ValidateOnly` 检查项目根 `.env`，再运行 `.\scripts\windows\Start-LocalWebGPT.ps1`。打包 runtime 则运行 `.\Start-LocalWebGPT.ps1`。若需手工诊断，也可以在 Windows PowerShell 中设置当前会话变量。隧道 ID 不是密钥；runtime key 输入时隐藏。两者都不要提交到仓库、写入 YAML 或发送到聊天：
 
 ```powershell
 $env:CONTROL_PLANE_TUNNEL_ID = 'tunnel_从 Platform 复制的 ID'
@@ -28,7 +28,7 @@ npm run chatgpt:local
 
 启动器会先构建本地控制台，再启动 daemon；随后用同一组参数执行 `tunnel-client doctor`，通过后以前台方式启动隧道。若隧道子进程意外退出，启动器在原 daemon 内按 1、2、5、10、30、60 秒（封顶）退避，再运行 doctor；doctor 通过才重新启动隧道，doctor 失败则停止并要求操作者处理，避免凭据错误时无限空转。恢复过程中不会重建 daemon 或写执行器。runtime key 只在 tunnel-client 所需的环境里；它启动 MCP 子进程时，薄启动入口会先移除 runtime key、`OPENAI_API_KEY` 和 tunnel ID，再加载适配器。daemon 只向 tunnel-client 提供 MCP adapter 专属 IPC 凭据，不提供控制台 audience 凭据；秘密不进入命令行、配置文件或启动日志。Ctrl+C 用于结束前台隧道与本地服务。
 
-也可从另一个 PowerShell 窗口请求停止 LocalWebGPT：源码目录运行 `.\packaging\windows\Stop-LocalWebGPT.ps1`，打包 runtime 根目录运行 `.\Stop-LocalWebGPT.ps1`。命令向本机控制管道发送固定停止请求，不按进程名或 PID 终止；服务会拒绝新操作、等在途处理器结束后关闭。若脚本未收到 `STOPPING` 确认（例如 daemon 是不支持管道停止协议的旧版），不要强杀；回到启动时的原终端按 Ctrl+C 并等待退出。若恰好在工具调用中停止，ChatGPT 可能收不到该次回执；重连后用 `change_get` 核对状态，不能盲目重复应用。Windows 下 Node 会强制终止本启动器自己创建的 tunnel-client 子进程，daemon 仍会等待已进入的操作结束后再关闭状态库。
+也可从另一个 PowerShell 窗口请求停止 LocalWebGPT：源码目录运行 `.\scripts\windows\Stop-LocalWebGPT.ps1`，打包 runtime 根目录运行 `.\Stop-LocalWebGPT.ps1`。命令向本机控制管道发送固定停止请求，不按进程名或 PID 终止；服务会拒绝新操作、等在途处理器结束后关闭。若脚本未收到 `STOPPING` 确认（例如 daemon 是不支持管道停止协议的旧版），不要强杀；回到启动时的原终端按 Ctrl+C 并等待退出。若恰好在工具调用中停止，ChatGPT 可能收不到该次回执；重连后用 `change_get` 核对状态，不能盲目重复应用。Windows 下 Node 会强制终止本启动器自己创建的 tunnel-client 子进程，daemon 仍会等待已进入的操作结束后再关闭状态库。
 
 daemon 启动后，从一次性本地控制台链接进入 **ChatGPT 连接** 页，选中“我确认……”并点击“在本机启用 ChatGPT 连接”；这一步只启用模型侧连接，不创建工作区授权。
 
@@ -60,7 +60,7 @@ ChatGPT 的 **Allow all actions** 只控制客户端是否允许调用已经发�
 
 ## B. 本机恢复快照导出（与 ChatGPT 无关）
 
-此验收只验证恢复页通过本地控制 API 取回受保护快照，并由浏览器写到操作者选择的新文件。它不启动 tunnel-client、不创建 ChatGPT 应用，也不把快照发送给 ChatGPT。
+此验收只验证恢复页通过本地控制 API 取回受保护快照，并由浏览器写到操作者选择的目录。页面生成随机后缀的新文件名，不使用文件级保存选择器，因此不会因选择已有文件而先清空其内容。它不启动 tunnel-client、不创建 ChatGPT 应用，也不把快照发送给 ChatGPT。
 
 ```powershell
 npm run acceptance:lwb037-export
@@ -68,9 +68,9 @@ npm run acceptance:lwb037-export
 
 1. 打开终端打印的一次性控制台地址；地址含一次性令牌，不要粘贴到聊天或截图。
 2. 进入“恢复与冲突”，确认临时记录显示 `THIRD_CONTENT`，即当前文件是第三方修改。
-3. 勾选确认，分别测试“导出原版本快照”和“导出提议版本快照”，每次都选一个不存在的新 `.snapshot` 文件。
+3. 勾选确认，分别点击“导出原版本快照”和“导出提议版本快照”；每次在**文件夹选择器**中选择终端打印的“浏览器导出目录”。每个快照会生成带随机后缀的新 `.snapshot` 文件。
 4. 对照页面给出的 SHA-256 和字节数；本夹具内容应分别是 `Acceptance fixture: original bytes` 与 `Acceptance fixture: proposed bytes`。
-5. 再选一个已存在的目标文件，导出应取消且原文件字节不变。完成后在启动夹具的终端按 Ctrl+C；临时服务与临时测试目录会被清理。
+5. 确认目录中预置的 `preserve-existing.snapshot` 未变。回到启动夹具的终端按 Ctrl+C；夹具会校验两份快照字节、大小和 SHA-256 以及 canary，再关闭服务并清理整个临时目录。
 
 该命令不是 ChatGPT 接入验收。若夹具已经在运行，不要启动第二份；使用原终端打印的一次性链接并在原终端结束它。
 

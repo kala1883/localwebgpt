@@ -7,7 +7,7 @@ import { acquireSingleInstance } from '@lwb/ipc';
 
 const isWindows = process.platform === 'win32';
 const describeWindows = isWindows ? describe : describe.skip;
-const STOP_SCRIPT = fileURLToPath(new URL('../../packaging/windows/Stop-LocalWebGPT.ps1', import.meta.url));
+const STOP_SCRIPT = fileURLToPath(new URL('../../scripts/windows/Stop-LocalWebGPT.ps1', import.meta.url));
 
 function currentUserSid(): string {
   const output = execFileSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], {

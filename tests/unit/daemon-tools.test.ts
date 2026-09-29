@@ -559,6 +559,25 @@ describe('跨连接隔离（验收 3：两条连接不能读对方的工作区�
     );
   });
 
+  it('workspace_list 按每个工作区显示工具 grant，不跨目录合并', async () => {
+    const scoped = await makeToolHarness({ gates: GATES_ON });
+    try {
+      scoped.grant(ADAPTER_CONNECTION, scoped.workspace.id, ['read']);
+      scoped.grant(ADAPTER_CONNECTION, scoped.otherWorkspace.id, ['command_exec']);
+
+      const envelope = await callTool<WorkspaceListData>(scoped, 'workspace_list', {});
+      const listed = dataOf<WorkspaceListData>(envelope);
+      assertConforms('workspace_list', envelope);
+      const byId = new Map(listed.workspaces.map((workspace) => [workspace.workspace_id, workspace]));
+
+      assert.deepEqual(byId.get(scoped.workspace.id)?.granted_tools, ['file_read', 'change_get']);
+      assert.deepEqual(byId.get(scoped.otherWorkspace.id)?.granted_tools, ['command_exec']);
+      assertNoAbsolutePath(listed, 'workspace_list with tool grants');
+    } finally {
+      scoped.close();
+    }
+  });
+
   it('读对方的工作区：未授权', async () => {
     const viaFileRead = errorOf(
       await callTool(h, 'file_read', { workspace_id: h.otherWorkspace.id, path: 'README.md' }),
@@ -687,6 +706,7 @@ describe('结果契约（夹具仓库）', () => {
     const closed = await makeToolHarness({ gates: GATES_OFF });
     try {
       const status = dataOf<BridgeStatusData>(await callTool(closed, 'bridge_status', {}));
+      assert.equal(status.build_id, 'test-build-id');
       assert.equal(status.capabilities.read_enabled, true);
       assert.equal(status.capabilities.git_enabled, true);
       assert.equal(status.capabilities.direct_write_enabled, true);

@@ -626,7 +626,7 @@ local-workspace-bridge/
     fault-injection/
     evals/
     performance/
-  packaging/windows/
+  deployment/windows/
   docs/
     adr/
     evidence/
@@ -1707,7 +1707,7 @@ V1 成功标准是：用户能在 ChatGPT 网页对本地授权的代码/文本�
 
 **前置依赖：** LWB-008, LWB-034, LWB-035
 
-**交付物：** `apps/daemon/lifecycle/`、`packaging/launcher/`
+**交付物：** `apps/daemon/lifecycle/`、`deployment/launcher/`
 
 **执行步骤**
 
@@ -1731,7 +1731,7 @@ V1 成功标准是：用户能在 ChatGPT 网页对本地授权的代码/文本�
 
 **前置依赖：** LWB-006, LWB-007, LWB-039
 
-**交付物：** `packaging/windows/`、`docs/install-and-upgrade.md`
+**交付物：** `deployment/windows/`、`docs/install-and-upgrade.md`
 
 **执行步骤**
 

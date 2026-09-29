@@ -99,6 +99,7 @@ import type { WinfsOps } from '@lwb/winfs';
 import type { RequestContext } from '@lwb/ipc';
 import type { ConcurrencyGate, LimitTable } from '@lwb/limits';
 import type { ConnectionRecord, WorkspaceRecord } from '@lwb/persistence';
+import { grantedToolsForWorkspace } from './catalog.ts';
 import type { CommandProcessManager, CommandProcessResult } from '../lifecycle/command-processes.ts';
 
 import { capabilityFlagsFrom, limitationsOf } from '../gates.ts';
@@ -122,6 +123,7 @@ import { isSafeForModel, toModelPayload } from './errors.ts';
  */
 export interface ToolSurfaceFacts {
   readonly server_version: string;
+  readonly build_id: string;
   /** 本地 IPC 协议版本。与 `contract_version` 不是一个东西。 */
   readonly protocol_version: string;
   readonly gates: PlatformGates;
@@ -412,6 +414,7 @@ async function bridgeStatus(input: unknown, context: RequestContext, deps: ToolH
     return {
       connection_alias: displayableAlias(connection.alias),
       server_version: deps.status().server_version,
+      build_id: deps.status().build_id,
       protocol_version: deps.status().protocol_version,
       contract_version: CONTRACT_VERSION,
       capabilities: flags,
@@ -454,6 +457,10 @@ async function workspaceList(input: unknown, context: RequestContext, deps: Tool
         mode: workspace.mode,
         enabled: workspace.enabled,
         capabilities: deps.capability_flags(workspace),
+        granted_tools: grantedToolsForWorkspace(
+          workspace,
+          deps.repos.grants.find(connection.id, workspace.id),
+        ),
         generation: workspace.generation,
         single_file_path: singleFilePathOf(workspace),
       })),

@@ -17,9 +17,9 @@
 
 - 已交付恢复与历史页面：apps/console/views/RecoveryView.vue、HistoryView.vue，以及无 DOM 的恢复/历史判定与响应解析模块；恢复页同时展示原版本、提议版本、当前观测版本和审计账本。
 - 已接入本地控制面：recovery.list/get/export_snapshot、recovery.keep_current/repropose/authorize/repair、history.list。保留当前与重新提议只落审计、不清除待恢复状态；恢复写入必须经控制台身份、显式确认、一次性授权、服务端重新观测和既有受保护执行器。
-- 快照导出已打通：服务端按 operation/item/version 绑定一次性 nonce，只从受保护 BlobStore 读取并核对；响应只回到本地控制台。界面在用户确认后打开浏览器保存选择器，先检查目标不存在，再核对长度与 SHA-256 后写入；目标路径不传给 daemon，每次导出都重新确认。
+- 快照导出链路：服务端按 operation/item/version 绑定一次性 nonce，只从受保护 BlobStore 读取并核对；响应只回到本地控制台。已知 `showSaveFilePicker` 会在 Promise 返回前清空已选既有文件，故改用浏览器目录选择器并生成带随机后缀的新文件名；目录/文件名不传给 daemon，响应长度与 SHA-256 在浏览器端校验后才创建新输出，每次导出重新确认。真实浏览器验收仍未执行。
 - 本轮验证 `npm run typecheck`、`npm run typecheck:console`、`npm run check:imports` 均通过。上一轮单元 1279/1279、Windows 307/307、控制台 158/158 的记录属于导出接线前，本轮没有重跑自动化测试。
-- 已补同源控制台宿主（LWB-039 的一部分）：`npm run console:dev` 会构建 Vue 页面，再由 daemon 从固定资产表托管；启动链接兑换后由宿主创建控制客户端并接到恢复/历史页面，导出按钮现在可以走完保存选择器、nonce 绑定的快照读取、摘要核对和本机文件写入。
+- 已补同源控制台宿主（LWB-039 的一部分）：`npm run console:dev` 会构建 Vue 页面，再由 daemon 从固定资产表托管；启动链接兑换后由宿主创建控制客户端并接到恢复/历史页面，导出按钮现在可以走完目录选择器、nonce 绑定的快照读取、摘要核对和本机随机新文件写入。
 - 已加一次性浏览器验收夹具：`npm run acceptance:lwb037-export` 会用临时受保护存储与临时 NTFS 工作区创建一条“当前内容是第三方版本”的待恢复操作，打印一次性控制台链接并保持服务运行；Ctrl+C 后关闭服务并删除整棵临时目录。它不使用默认 LWB_HOME，也不触碰项目工作区。
 - 本轮验证：根/控制台类型检查、FSG 导入护栏和 Vite 生产构建通过；本机 HTTP 静态宿主冒烟读到 `/` 200，页面引用的 JS/CSS 两个资产均 200。Windows/unit/Vitest 全量套件未在这轮重跑。
 - LWB-037 仍未记 DONE：还需在真实浏览器里完成下面的导出验收；读屏/键盘走查和真实 ChatGPT 网页验收仍是 NOT_RUN。LWB-039 的睡眠唤醒、隧道重连和显式开机启动仍未实现。
@@ -74,20 +74,20 @@
 - `chatgpt:local` 现在监督长驻 `tunnel-client run`：子进程意外退出后按 1/2/5/10/30/60 秒退避，重启前重新运行 doctor；doctor 失败时停止，不带错误凭据无限重试。
 - 恢复只重启 tunnel-client 子进程，保留同一个 daemon/执行器实例；Ctrl+C 可中断退避并按原有 finally 关闭服务。单实例防护和授权/审批检查仍由 daemon 原有边界负责。
 - 新增 3 项监督器单测：退避重连、doctor 失败停止、退避封顶。真实睡眠/唤醒、操作系统网络恢复与长期运行还未实测；每用户启动器与开机启动也未实现，所以 LWB-039 仍为 PARTIAL。
-- 增加一体化 `packaging/windows/Start-LocalWebGPT.ps1`：隐藏输入 runtime key 并启动同一前台链；新装连接停用时，daemon 等待本机 Console 的显式确认，确认后才跑 doctor 和 Tunnel。等待走现有连接控制 API/审计链，不直改数据库，也不创建 workspace grants。
+- 增加一体化 `scripts/windows/Start-LocalWebGPT.ps1`：隐藏输入 runtime key 并启动同一前台链；新装连接停用时，daemon 等待本机 Console 的显式确认，确认后才跑 doctor 和 Tunnel。等待走现有连接控制 API/审计链，不直改数据库，也不创建 workspace grants。
 - 新增两条连接等待/取消单测；本轮根类型检查、启动器测试 **9/9**、ConnectionView 测试 **2/2**、FsGuard 导入检查（212 文件）通过。源码目录启动脚本做了假 tunnel ID + 空 key 冒烟，按预期在启动 daemon 前拒绝；两个 PS1 均解析通过。真实终端—浏览器—Tunnel 的联动尚未重启验收。
 - 首次配置页新增折叠式门禁说明，区分 G0 平台接入、G2 只读/出站审计、G3 提议/审批与实际运行时开关；说明启动或连接启用都不授予目录。setup 页面测试 **30/30 PASS**，控制台类型检查通过。
 
 ## 2026-09-27 本轮继续：LWB-040 升级拒绝保护证据（PARTIAL）
 
 - 加强“较新 schema 由旧程序打开时拒绝启动”的回归：不仅断言 `STORAGE_UNAVAILABLE`，还在拒绝前后逐字节比较状态库，证明旧程序没有迁移、截断或重建较新数据库。
-- 新增 `packaging/windows/build-runtime.ps1` 与 `docs/install-and-upgrade.md`：要求用户指定仓库外的新输出目录；拷贝运行树而不带 `.git`、完整 `node_modules`、本机 profile/凭据；验证官方 tunnel-client 压缩包 SHA-256 并提取许可证；在输出目录安装锁定依赖、核对 SQLite Windows x64 预编译二进制摘要、运行两层类型检查、FsGuard 导入检查、控制台生产构建和原生 SQLite smoke。
+- 新增 `deployment/windows/build-runtime.ps1` 与 `docs/install-and-upgrade.md`：要求用户指定仓库外的新输出目录；拷贝运行树而不带 `.git`、完整 `node_modules`、本机 profile/凭据；验证官方 tunnel-client 压缩包 SHA-256 并提取许可证；在输出目录安装锁定依赖、核对 SQLite Windows x64 预编译二进制摘要、运行两层类型检查、FsGuard 导入检查、控制台生产构建和原生 SQLite smoke。
 - 2026-09-27 在全新仓库外 staging 对完整 `build-runtime.ps1` 重跑：Node **v22.20.0** 下 `npm ci --ignore-scripts` 安装 252 个包；根/控制台类型检查、214 文件导入检查、40 模块 Vite 生产构建、校验过的 tunnel-client **v0.0.15** 和 better-sqlite3 原生 SQLite smoke 均通过。npm 对 `abbrev` / `nopt` 仍有两条非阻断 `EBADENGINE` 警告（CI 固定用 v22.22.2）。之后在 staging 执行 `npm run chatgpt:local`，将 tunnel 变量仅在该 PowerShell 子进程设为空，脚本按预期 exit 2，daemon/tunnel 均未启动。构建输出保留于 `%TEMP%\LocalWebGPT-runtime-validation-42392e46642b4cc2aa29f31d874ef954` 以供复核；系统拦截了自动清理仓库外目录的尝试，未重试删除。
 - LWB-040 仍未完成：升级前备份/恢复流程、schema 升级兼容策略、卸载与状态保留语义、签名安装器均未实现或验收。
 
 ## 2026-09-27 本轮继续：启动凭据改为项目根 `.env`
 
-- `packaging/windows/Start-LocalWebGPT.ps1` 不再交互询问凭据；从运行根目录 `.env` 读取现有键名 `tunnel_id` / `runtime_API_key`，并兼容规范环境名。重复、缺失、格式错误均在启动前拒绝，错误文本不包含配置值；调用前的 PowerShell 环境变量在脚本退出时恢复。
+- `scripts/windows/Start-LocalWebGPT.ps1` 不再交互询问凭据；从运行根目录 `.env` 读取现有键名 `tunnel_id` / `runtime_API_key`，并兼容规范环境名。重复、缺失、格式错误均在启动前拒绝，错误文本不包含配置值；调用前的 PowerShell 环境变量在脚本退出时恢复。
 - 更新启动、安装和隧道验收说明。打包流程继续排除 `.env`；用户需在打包 runtime 根单独创建，防止凭据进入产物。
 - `.env` 当前在本机存在且被 Git 忽略；本轮仅核对了变量名，没有读取、展示或暂存变量值。
 - 验证：`-ValidateOnly` 退出码 0 且只报告通过；启动契约 **10/10 PASS**；secret-scan 回归 **4/4 PASS**；完整 `npm run check` 为主测试 **1760 / 1747 PASS / 0 FAIL / 13 SKIP**、控制台 **164/164 PASS**；`git diff --check` 通过。未重启真实 daemon/tunnel。
@@ -1943,7 +1943,7 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 ## 2026-09-28 本轮继续：单文件提案入口与 LocalWebGPT 停止命令
 
 - 新增 MCP `file_create` 与 `file_edit`：前者为单个新文本文件创建待审批提案，后者必须使用最新 `file_read` 的哈希/票据及精确行编辑；二者复用既有 `change_prepare`/`change_apply` 安全链，工具调用本身不改用户文件。目录授权、审计、并发守卫、模型说明、Console 能力文案和 ChatGPT 评测用例均已同步，工具总数由 12 增至 14。
-- 新增 `packaging/windows/Stop-LocalWebGPT.ps1` 并纳入 runtime 构建：只向 SID 定向的本机管道发送固定停止命令，不按任意 PID 或进程名终止。停止会阻止新 IPC/控制面操作，等待已进入的 handler 结束，再断开 socket 并关闭状态库；Windows 下 Node 对本启动器拥有的 tunnel-client 子进程执行强制终止，因此在途调用的网页回执可能丢失，重连后须用 `change_get` 核对，不能盲目重复应用。
+- 新增 `scripts/windows/Stop-LocalWebGPT.ps1` 并纳入 runtime 构建：只向 SID 定向的本机管道发送固定停止命令，不按任意 PID 或进程名终止。停止会阻止新 IPC/控制面操作，等待已进入的 handler 结束，再断开 socket 并关闭状态库；Windows 下 Node 对本启动器拥有的 tunnel-client 子进程执行强制终止，因此在途调用的网页回执可能丢失，重连后须用 `change_get` 核对，不能盲目重复应用。
 - 新增真实命名管道停止握手、在途操作排空、文件工具契约/权限/审计与评测测试。最终全量 `npm run check` 通过：主测试 **1774 项 / 1761 PASS / 0 FAIL / 13 SKIP**，Console **164/164 PASS**；FsGuard 检查了 214 个文件，秘密扫描通过。ChatGPT 手工评测仍标为 `NOT_RUN`；停止脚本 PowerShell 语法解析通过，未实际停止用户当前运行的服务。
 - 任务余额（将本文件任务矩阵与后续记录合并）：V1 的 LWB-001–046 为 **33 DONE、7 PARTIAL、6 NOT_STARTED**，故 **13 项尚未完成**；V1.1/V2 的 LWB-047–054 仍有 **8 项未开始**。整份 54 项计划合计 **21 项尚未完成**。其中 PARTIAL：001、002、004、037、039、040、041；V1 尚未开始：038、042–046。
 - 用户已确认旧历史凭据已撤销；该事项不再阻塞后续工作。
@@ -2016,7 +2016,7 @@ LWB-023 引入了本仓库的**第一处构建步骤**与**第二个测试运行
 ## 2026-09-28 本轮继续：LWB-040 手工卸载与状态保留语义（PARTIAL）
 
 - `docs/install-and-upgrade.md` 新增 V1 手工卸载步骤：先检查恢复页、通过 SID 定向命令停止并等待启动窗口返回，再只移除精确 runtime 输出目录；明确不得删除工作区或 `%LOCALAPPDATA%\LocalWorkspaceBridge`（数据库、快照、恢复记录和凭证默认保留）。
-- 新增 `packaging/windows/Uninstall-LocalWebGPT.ps1` 并纳入 runtime 构建：验证受保护状态库中的登记根，拒绝与授权工作区/状态根重叠的目标；只删除精确 runtime，遇到 reparse point 只删除链接本身。由于 Windows 会锁住正在运行的卸载脚本目录，实际清理交给隐藏 helper，在独立 PowerShell 进程退出后执行；测试覆盖目标 runtime 删除、工作区与状态库保留、授权根重叠拒绝、WhatIf 与 `.env` 值不进入输出 **3/3 PASS**。
+- 新增 `scripts/windows/Uninstall-LocalWebGPT.ps1` 并纳入 runtime 构建：验证受保护状态库中的登记根，拒绝与授权工作区/状态根重叠的目标；只删除精确 runtime，遇到 reparse point 只删除链接本身。由于 Windows 会锁住正在运行的卸载脚本目录，实际清理交给隐藏 helper，在独立 PowerShell 进程退出后执行；测试覆盖目标 runtime 删除、工作区与状态库保留、授权根重叠拒绝、WhatIf 与 `.env` 值不进入输出 **3/3 PASS**。
 - 本轮完整 `npm run check` **PASS**：根测试 **1815 PASS / 15 SKIP / 0 FAIL**，Console **162/162 PASS**；根/Console 类型检查、FsGuard（218 文件）和工作树 secrets scan 通过。LWB-040 仍 PARTIAL：未对真实安装包做卸载/升级验收，自动升级切换、签名安装包和更长时升级恢复仍未完成。
 
 ## 2026-09-28 本轮继续：按工作区授权直接创建/编辑，移除全局审批门禁（实现完成，外部验收未完成）

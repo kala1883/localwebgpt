@@ -5,10 +5,10 @@
 仓库提供一个 Windows x64 runtime 目录构建器：
 
 ```powershell
-.\packaging\windows\build-runtime.ps1 -OutputDirectory "$env:LOCALAPPDATA\Programs\LocalWebGPT"
+.\deployment\windows\build-runtime.ps1 -OutputDirectory "$env:LOCALAPPDATA\Programs\LocalWebGPT"
 ```
 
-这条构建命令从源码仓库运行；生成的 runtime 目录不包含 `packaging/` 构建脚本。
+这条构建命令从源码仓库运行；生成的 runtime 目录不包含 `deployment/` 构建脚本。
 
 输出目录必须不存在且位于仓库之外。脚本会把源码与锁定依赖复制到该目录，在**该目录**运行 `npm ci --ignore-scripts`，再核对 `better-sqlite3` 的 Windows x64 预编译二进制与已验证的 checkout 二进制逐字节相同，并从输出目录实际打开内存数据库验证它。这样无需在目标机安装 Visual Studio C++ workload；Console 构建和 FsGuard 导入边界也会在输出目录检查。隧道客户端只从匹配官方 `SHA256SUMS.txt` 的 v0.0.15 Windows amd64 压缩包提取，随包包含许可证文件。它不会复制 `.git`、整份当前 `node_modules`、本机 tunnel profile 或凭据，也不会改写用户的源仓库。构建要求源仓库已有相同 Node 版本的 `better-sqlite3` 安装；其他依赖跳过 install lifecycle 后由 Console 构建和原生 smoke test 验证。
 
@@ -33,11 +33,11 @@ snapshot_store_max_bytes=536870912
 
 `snapshot_store_max_bytes` 是可选的本机快照对象硬上限（十进制字节），缺省为 1 GiB，最大不可超过 2 GiB；超过上限时提案以 `STORAGE_UNAVAILABLE` 拒绝，工作区不写入。上限低于当前已有对象占用时不会删除旧快照，新的不同快照会被拒绝；相同内容去重仍可复用。daemon 启动时及运行中每小时执行保留感知回收；若活跃/待恢复操作阻止回收，则容量要等后续周期或重启后才能释放。
 
-`.env` 被 Git 忽略。构建脚本不会复制源码 `.env`，所以打包后应在 runtime 根目录另行创建该文件。启动时凭据只传给当前 PowerShell 子进程及其启动链；脚本退出后恢复调用前的环境变量，不把密钥放入参数或日志。若模型连接尚未启用，脚本会等待你打开终端打印的一次性本地控制台链接，在“ChatGPT 连接”页明确确认并启用；完成后脚本自动运行 doctor 并启动隧道。该步骤只启用连接级工具发现，不会登记目录或授予工作区读写权；请在“工作区”页登记目录并分别勾选所需工具。开发源码目录对应脚本为 `packaging/windows/Start-LocalWebGPT.ps1`。
+`.env` 被 Git 忽略。构建脚本不会复制源码 `.env`，所以打包后应在 runtime 根目录另行创建该文件。启动时凭据只传给当前 PowerShell 子进程及其启动链；脚本退出后恢复调用前的环境变量，不把密钥放入参数或日志。若模型连接尚未启用，脚本会等待你打开终端打印的一次性本地控制台链接，在“ChatGPT 连接”页明确确认并启用；完成后脚本自动运行 doctor 并启动隧道。该步骤只启用连接级工具发现，不会登记目录或授予工作区读写权；请在“工作区”页登记目录并分别勾选所需工具。开发源码目录对应脚本为 `scripts/windows/Start-LocalWebGPT.ps1`。
 
 可用 `-ValidateOnly` 单独检查 `.env` 格式；该模式不启动 daemon 或隧道，也不显示凭据。
 
-停止已运行服务时，在另一个 PowerShell 窗口执行源码目录的 `.\packaging\windows\Stop-LocalWebGPT.ps1`，或 runtime 根目录的 `.\Stop-LocalWebGPT.ps1`；等待启动窗口返回提示符。命令不按 PID 杀进程；服务先拒绝新操作并等待在途处理器结束。若脚本未收到 `STOPPING` 确认（例如 daemon 是不支持管道停止协议的旧版），不要强杀；回到启动时的原终端按 Ctrl+C 并等待退出。若停在一次工具调用期间，重连后查询 `change_get` 确认状态，勿盲目重复应用。
+停止已运行服务时，在另一个 PowerShell 窗口执行源码目录的 `.\scripts\windows\Stop-LocalWebGPT.ps1`，或 runtime 根目录的 `.\Stop-LocalWebGPT.ps1`；等待启动窗口返回提示符。命令不按 PID 杀进程；服务先拒绝新操作并等待在途处理器结束。若脚本未收到 `STOPPING` 确认（例如 daemon 是不支持管道停止协议的旧版），不要强杀；回到启动时的原终端按 Ctrl+C 并等待退出。若停在一次工具调用期间，重连后查询 `change_get` 确认状态，勿盲目重复应用。
 
 ## 升级与卸载限制
 
@@ -50,6 +50,14 @@ snapshot_store_max_bytes=536870912
 3. 否则用 SQLite 在线备份 API 在 `%LOCALAPPDATA%\LocalWorkspaceBridge\db` 生成快照（涵盖 WAL 中已提交内容），检查 `quick_check` 和迁移元数据，再运行 schema 迁移。只有验证过的快照才会以 `.pre-migration-...sqlite` 名称保留。
 
 如果备份无法创建或验证，daemon 会在迁移前停止，原状态库不变；如果迁移后续失败，预迁移快照仍会保留。不要在服务运行时手工覆盖状态库。
+
+迁移前置检查与 schema 兼容性回归：
+
+```powershell
+node --import tsx --test tests/unit/database-upgrade.test.ts
+```
+
+当前测试覆盖旧库快照、未决恢复操作时阻断、缺失/当前库的快照跳过，以及旧程序遇到更高 schema 时拒绝打开且不改变数据库字节。
 
 ### 卸载 runtime（V1）
 

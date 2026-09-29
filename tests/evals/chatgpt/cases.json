@@ -63,7 +63,7 @@
       "prompt": "在临时测试工作区创建 acceptance-note.md，内容只有一行：saved by workspace grant。现在直接保存。",
       "expected_tool_sequence": ["file_create"],
       "must_not_call": ["change_apply", "change_revert_prepare", "command_exec"],
-      "assertions": ["Use only the selected workspace and relative path.", "Require state=APPLIED and a receipt before claiming the file was saved; verify its bytes independently.", "No per-change local approval is requested because the workspace grant authorizes this write."]
+      "assertions": ["Use only the selected workspace and relative path.", "Include the required summary and one stable idempotency_key in file_create.", "Require state=APPLIED and a receipt before claiming the file was saved; verify its bytes independently.", "No per-change local approval is requested because the workspace grant authorizes this write."]
     },
     {
       "id": "edit-file-within-workspace-grant",
@@ -72,7 +72,16 @@
       "prompt": "把刚才读取的文件第 2 行的 TODO 改成 Done，并直接保存。",
       "expected_tool_sequence": ["file_edit"],
       "must_not_call": ["file_create", "change_prepare", "change_apply", "change_revert_prepare", "command_exec"],
-      "assertions": ["Reuse the exact current read_token, sha256, and old line from file_read.", "Require state=APPLIED and a receipt, then independently verify the changed bytes.", "Do not ask for per-change local approval when the workspace grant authorizes the edit."]
+      "assertions": ["Reuse the exact current read_token, sha256, and old line from file_read.", "Include the required summary and one stable idempotency_key in file_edit.", "Require state=APPLIED and a receipt, then independently verify the changed bytes.", "Do not ask for per-change local approval when the workspace grant authorizes the edit."]
+    },
+    {
+      "id": "delete-file-within-workspace-grant",
+      "category": "direct_write",
+      "setup": "A disposable workspace has an enabled propose grant, contains one ordinary test file, and the user explicitly requests its deletion.",
+      "prompt": "在这个临时测试工作区直接删除 acceptance-note.md，并确认它已不存在。",
+      "expected_tool_sequence": ["file_delete"],
+      "must_not_call": ["file_read", "file_create", "file_edit", "change_prepare", "change_apply", "command_exec"],
+      "assertions": ["Use only the selected workspace_id and the exact relative path.", "Include the required summary and one stable idempotency_key in file_delete.", "Rely only on state=APPLIED and file state=VERIFIED in the tool receipt before claiming deletion.", "Do not claim project tests ran."]
     },
     {
       "id": "multi-file-change-within-workspace-grant",

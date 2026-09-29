@@ -85,6 +85,7 @@ import { applyChange, createNativeApplier, ExecutionCoordinator, ITEM_STAGE } fr
 import type { ApplyReport, ExecutionApplier, ExecutionPlan } from '@lwb/executor';
 import { createProcessProbe, OperationRegistry } from '@lwb/ipc';
 import { PowerShellWinfsBackend } from '@lwb/winfs';
+import type { WinfsOps } from '@lwb/winfs';
 import type { WorkspaceEnvironment } from '@lwb/workspaces';
 
 import { registerApprovalOperations } from '../../apps/daemon/src/control/index.ts';
@@ -163,6 +164,7 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
 
   interface RigOptions {
     readonly files?: Readonly<Record<string, string>>;
+    readonly ops?: WinfsOps;
     readonly gates?: typeof GATES_ON | (() => typeof GATES_ON);
     readonly paused?: boolean | (() => boolean);
     readonly apply_options?: ToolHarness['deps']['apply_options'];
@@ -191,7 +193,7 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     const harness = await makeToolHarness({
       root: dir,
       other_root: other,
-      ops: backend,
+      ops: options.ops ?? backend,
       probe: backend,
       environment,
       gates: options.gates ?? GATES_ON,
@@ -532,6 +534,110 @@ describeWindows('LWB-032 真 NTFS：已批准修改集的应用', () => {
     assert.equal(records.length, 1, '一条修改集上只该有一个执行授权记录');
     assert.equal(records[0]?.state, 'CONSUMED');
     assert.equal(records[0]?.consumed_by, applied.operation_id, '消费它的是那唯一一条操作');
+  });
+
+  it('§2 多文件应用中途失败：工具回执如实报告，已写文件回到基线', async () => {
+    let guardedWrites = 0;
+    let rejectedPath: string | null = null;
+    const faultingOps = new Proxy(backend as WinfsOps, {
+      get(target, property) {
+        if (property === 'writeFileGuarded') {
+          return async (request: Parameters<WinfsOps['writeFileGuarded']>[0]) => {
+            guardedWrites += 1;
+            if (guardedWrites === 2) {
+              rejectedPath = request.relative_path;
+              return {
+                ok: false as const,
+                code: 'PERMISSION_DENIED' as const,
+                message: '注入：第二个文件写入被拒绝',
+                win32_error: 5,
+              };
+            }
+            return target.writeFileGuarded(request);
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const files = [
+      { path: 'a.txt', before: 'before-a', after: 'after-a' },
+      { path: 'b.txt', before: 'before-b', after: 'after-b' },
+    ] as const;
+    const harness = await rig('multi-file-rollback', {
+      files: Object.fromEntries(files.map(({ path, before }) => [path, `${before}\n`])),
+      ops: faultingOps,
+    });
+
+    const reads: FileReadData[] = [];
+    for (const file of files) {
+      const read = dataOf<FileReadData>(
+        await callTool(
+          harness,
+          'file_read',
+          { workspace_id: harness.workspace.id, path: file.path },
+          harness.adapterContext(),
+        ),
+        `file_read(${file.path})`,
+      );
+      assert.equal(read.editable, true);
+      reads.push(read);
+    }
+    const prepared = dataOf<ChangePrepareData>(
+      await callTool(
+        harness,
+        'change_prepare',
+        {
+          workspace_id: harness.workspace.id,
+          idempotency_key: idem('multi-rollback'),
+          summary: '验证多文件应用中途失败后的回滚回执',
+          items: files.map((file, index) => ({
+            op: 'edit_text' as const,
+            path: file.path,
+            base_sha256: reads[index]!.sha256,
+            read_token: reads[index]!.read_token,
+            edits: [{
+              start_line: 1,
+              end_line_exclusive: 2,
+              old_lines: [file.before],
+              new_lines: [file.after],
+            }],
+          })),
+        },
+        harness.adapterContext(),
+      ),
+      '多文件 change_prepare',
+    );
+    assert.equal(prepared.state, 'PENDING_APPROVAL');
+    assert.equal(prepared.workspace_modified, false);
+
+    const applied = dataOf<ChangeApplyData>(
+      await applyTool(harness, prepared.change_id, idem('multi-rollback-apply')),
+      '中途失败后的多文件 change_apply',
+    );
+
+    assert.equal(rejectedPath, 'b.txt', '第二个文件必须是失败条目');
+    assert.equal(guardedWrites, 3, '第一项写入、第二项拒绝、第一项回滚');
+    assert.equal(applied.state, 'ROLLED_BACK');
+    assert.equal(applied.in_progress, false);
+    assert.deepEqual(
+      applied.files.map(({ path, state, error_code }) => ({ path, state, error_code })),
+      [
+        { path: 'a.txt', state: 'RECOVERED_ORIGINAL', error_code: null },
+        { path: 'b.txt', state: 'FAILED', error_code: 'PERMISSION_DENIED' },
+      ],
+    );
+    for (const file of files) {
+      assert.equal(
+        (await readFile(absOf(harness, file.path), 'utf8')),
+        `${file.before}\n`,
+        `${file.path} 必须回到其原始字节`,
+      );
+    }
+    const receipt = operationReceiptFor(prepared.change_id, harness.repos);
+    assert.equal(receipt?.state, 'ROLLED_BACK');
+    assert.deepEqual(receipt?.files.map(({ path, state }) => ({ path, state })),
+      applied.files.map(({ path, state }) => ({ path, state })));
   });
 
   // -------------------------------------------------------------------------

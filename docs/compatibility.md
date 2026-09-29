@@ -77,25 +77,29 @@ tsconfig（无 DOM lib）检查 —— 这不是重复劳动，根那份验的�
 
 ---
 
-## 3. 外部接入（**部分观察，读写验收未完成**）
+## 3. 外部接入（**基础网页工具链已验证；LWB-002 仍 PARTIAL**）
 
-这一节是 LWB-002 的范围。2026-09-27 的本机观察见 `docs/evidence/g2-read.md` §7：
-真实 ChatGPT 会话的既有对话记录报告已发现 Bridge 并读取 `workspace_list` 元数据，
-本机同时观察到 `chatgpt-local` / `tunnel-client` / adapter 进程。这只能把基础网页连通与工作区元数据列为**部分已观察**；它不能代替真实文件内容读取、批准写入或回读。
+本节是 LWB-002 的范围。历史进程/读取观察见 `docs/evidence/g2-read.md` §7；
+2026-09-29 的真实 ChatGPT 网页验收见 `docs/evidence/live-workspace-grants-20260929.md`：
+在新对话中通过 Plugins → Local Workspace Bridge → Try in chat，成功调用 `workspace_list`、
+在获授的 `maas_business` 中执行 28.859 秒无文件/网络副作用的命令，并在“本项目目录”对唯一临时
+文件完成创建/读取/编辑/回读/删除/NOT_FOUND。它证明当前账号、连接与这两个 workspace 的已授工具
+在该次会话可调用；不证明完整搜索/冲突/撤权/重连矩阵、审计范围核对或多账户边界。
 
 | 项 | 状态 | 说明 |
 | --- | --- | --- |
-| ChatGPT 网页工具发现与 `workspace_list` 元数据 | **部分已观察** | 现存 Chrome 对话报告工具调用成功并返回启用工作区元数据；没有本仓库捕获的 MCP 原始调用日志 |
-| ChatGPT 网页文件读取 / 搜索 / 内容出站核对 | **未验证** | 尚未通过真实网页读取专用测试目录并与审计的范围、字节、结果码对照；本机能力已启用但仍须逐目录 grant |
-| Secure MCP Tunnel 的 `tunnel_id` / API key / Platform 权限范围 | **部分已观察** | 实际 ChatGPT→Bridge 元数据链路成功且 tunnel-client 进程在运行；凭据值及其精确权限未读取或记录 |
-| tunnel-client 在目标 Windows 环境的基本运行 | **已验证（基本启动）** | `tunnel-client` v0.0.15 按官方 SHA-256 校验并报告版本；当前网页元数据调用成功。睡眠唤醒与断线重连仍未验证 |
-| 协商到的 MCP 协议修订（protocol revision） | **未验证** | ChatGPT 页面显示的 `lwb-ipc-v1` 是本地 IPC 协议标识，不等于实际协商的 MCP protocol revision；SDK 支持集合也不等于协商结果 |
-| 账号写能力 / 网页端真实写入与回读 | **未验证** | 官方文档范围冲突见 §4；本机单文件 direct-write 已在真 NTFS 测试，ChatGPT 网页端尚未验收 |
-| 断线 / 重连 / 元数据刷新 | **未验证** | 当前进程运行和一次历史元数据结果不证明断线后的恢复行为 |
+| ChatGPT 网页工具发现与 `workspace_list` 元数据 | **已验证（基础）** | 真实新对话调用成功；当前 `workspace_list` 返回名称/legacy flags，但未返回源码已实现的 `granted_tools` |
+| ChatGPT 网页文件读取/修改/删除 | **已验证（受控临时文件）** | `file_create`/`file_read`/`file_edit`/`file_delete` 全部返回可核验终态，最后 `NOT_FOUND`，本机再确认路径不存在；不代表大文件或所有编码已测 |
+| ChatGPT 网页搜索及内容出站审计 | **未完成** | 真实网页尚未验证搜索覆盖范围与每段内容的审计/脱敏记录关联 |
+| Secure MCP Tunnel 的 `tunnel_id` / API key / Platform 权限范围 | **部分已观察** | 真实 ChatGPT→Bridge 调用成功；凭据值和精确 Platform 权限未读取或记录 |
+| tunnel-client 在目标 Windows 环境的基本运行 | **已验证（包内）** | runtime 构建固定并校验 `tunnel-client` v0.0.15 的官方 archive hash，包内版本命令成功；活动 daemon 缺 `build_id`，不能把当前进程绑定到该包。睡眠唤醒与断线重连未验证 |
+| 协商到的 MCP 协议修订（protocol revision） | **未验证** | `lwb-ipc-v1` 是本地 IPC 标识，不是 MCP protocol revision；本次没有保存原始 `initialize.protocolVersion` |
+| 账号写能力 / 网页端命令能力 | **已验证（该账号/该 grant）** | 真实网页在获授 workspace 完成文件生命周期，并在 `maas_business` 执行 28.859 秒命令；不泛化到其他账号/workspace，官方文档冲突仍见 §4 |
+| 刷新/断线/重连 | **部分** | 操作者执行 Manage → Refresh tools 后新工具出现；网页新会话调用成功。隧道断线、重连与睡眠唤醒未实测 |
 
-**MCP Inspector 的成功不能替代真实网页验收。** 同样，网页端成功取得元数据也不能替代文件内容读取与审计核对。
+**MCP Inspector 的成功不能替代真实网页验收。** 目前已有真实网页基础读写与命令 smoke，但不能替代搜索/脱敏审计、冲突恢复、拒绝、断线重连和对抗对话验收。
 
-外部账号/隧道验证状态继续如实记录为未验证，但它们不再关闭本地工具。首次网页端读写验收应只对专用临时测试目录授予相应工具。若操作者明确登记 `C:\` / `D:\` 这类固定 NTFS 卷根，授权范围就是整卷；这会覆盖该卷内较窄的根授权，且工具返回的内容仍会发送给 ChatGPT。硬拒绝秘密文件和插件自身状态目录仍生效。
+外部账号及隧道权限的精确范围仍未审计；实际工具授权仍由本地连接和逐 workspace/tool grants 决定，不由 G0/G2/G3 诊断字段关闭或打开。若操作者登记 `C:\` / `D:\` 这类固定 NTFS 卷根，授权范围就是整卷，会覆盖同卷内较窄的根授权；工具返回的内容会发送给 ChatGPT。秘密路径和插件自身状态目录仍硬拒绝。
 
 ---
 

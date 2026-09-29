@@ -142,7 +142,7 @@ function walkPayload(root, outputDirectory) {
 
 function npmSbom(runtimeRoot) {
   const result = runNpm(
-    ['sbom', '--package-lock-only', '--sbom-format=spdx', '--sbom-type=application'],
+    ['sbom', '--package-lock-only', '--omit=dev', '--sbom-format=spdx', '--sbom-type=application'],
     runtimeRoot,
   );
   if (result.error || result.status !== 0) {
@@ -160,7 +160,24 @@ function npmSbom(runtimeRoot) {
   return `${JSON.stringify(document, null, 2)}\n`;
 }
 
-function buildRecord({ sourceRoot, runtimeRoot, source, payload, packageInfo, sbomText, extra }) {
+function writePackagedBuildInfo(runtimeRoot, source, packageInfo) {
+  const buildInfo = {
+    schema_version: 1,
+    build_id: `sha256:${source.manifestSha256}`,
+    source_commit: source.commit,
+    source_manifest_sha256: source.manifestSha256,
+    package_name: packageInfo.name,
+    package_version: packageInfo.version,
+  };
+  writeFileSync(
+    path.join(runtimeRoot, '.lwb-build-info.json'),
+    `${JSON.stringify(buildInfo, null, 2)}\n`,
+    { encoding: 'utf8' },
+  );
+  return buildInfo;
+}
+
+function buildRecord({ sourceRoot, runtimeRoot, source, payload, packageInfo, sbomText, buildInfo, extra }) {
   const lockfile = path.join(runtimeRoot, 'package-lock.json');
   const npmVersionResult = runNpm(['--version'], runtimeRoot);
   if (npmVersionResult.error || npmVersionResult.status !== 0) {
@@ -184,6 +201,7 @@ function buildRecord({ sourceRoot, runtimeRoot, source, payload, packageInfo, sb
   const tunnelVersionLine = extra['tunnel-client-version']
     ? `- tunnel-client version: \`${extra['tunnel-client-version']}\`\n`
     : '';
+  const buildIdLine = buildInfo ? `- Runtime build ID: \`${buildInfo.build_id}\`\n` : '';
 
   return [
     '# LocalWebGPT build record',
@@ -193,6 +211,7 @@ function buildRecord({ sourceRoot, runtimeRoot, source, payload, packageInfo, sb
     `- Source commit: \`${source.commit}\``,
     `- Source working tree: ${source.dirty ? 'dirty; see the source manifest fingerprint below' : 'clean'}`,
     `- Source manifest SHA-256: \`${source.manifestSha256}\` (${String(source.fileCount)} files; excludes generated \`${RELEASE_SUBDIR}/\` evidence)`,
+    buildIdLine.trimEnd(),
     `- Runtime package: \`${packageInfo.name}@${packageInfo.version}\``,
     `- Runtime payload manifest SHA-256: \`${payload.manifestSha256}\` (${String(payload.fileCount)} files; excludes generated release evidence)`,
     `- package-lock.json SHA-256: \`${sha256File(lockfile)}\``,
@@ -221,10 +240,13 @@ function main() {
 
   const sbomText = npmSbom(runtimeRoot);
   const source = gitSourceState(sourceRoot);
+  const buildInfo = path.resolve(sourceRoot) === path.resolve(runtimeRoot)
+    ? null
+    : writePackagedBuildInfo(runtimeRoot, source, packageInfo);
   const payload = path.resolve(sourceRoot) === path.resolve(runtimeRoot)
     ? source
     : walkPayload(runtimeRoot, outputDirectory);
-  const record = buildRecord({ sourceRoot, runtimeRoot, source, payload, packageInfo, sbomText, extra: args });
+  const record = buildRecord({ sourceRoot, runtimeRoot, source, payload, packageInfo, sbomText, buildInfo, extra: args });
 
   mkdirSync(outputDirectory, { recursive: true });
   writeFileSync(path.join(outputDirectory, 'sbom.json'), sbomText, { encoding: 'utf8' });

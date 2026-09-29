@@ -11,7 +11,7 @@
 ```powershell
 npm ci
 npm run check
-.\packaging\windows\build-runtime.ps1 -OutputDirectory "$env:LOCALAPPDATA\Programs\LocalWebGPT-v0.1.0"
+.\deployment\windows\build-runtime.ps1 -OutputDirectory "$env:LOCALAPPDATA\Programs\LocalWebGPT-v0.1.0"
 ```
 
 输出目录必须是一个尚不存在的新目录。构建器会校验锁定依赖、Windows SQLite 原生模块和官方 tunnel-client 包，构建 Console，并生成 SPDX SBOM 与构建指纹。生成目录绑定绝对路径，之后不要移动它。没有签名安装器；遇到失败时保留输出目录供诊断，不要直接覆盖旧安装。
@@ -38,7 +38,7 @@ snapshot_store_max_bytes=1073741824
 该命令必须在 runtime 根目录执行；若从源码仓库运行，则使用：
 
 ```powershell
-.\packaging\windows\Start-LocalWebGPT.ps1 -ValidateOnly
+.\scripts\windows\Start-LocalWebGPT.ps1 -ValidateOnly
 ```
 
 ## 3. 先启动本机服务与 Tunnel
@@ -59,6 +59,15 @@ Invoke-WebRequest http://127.0.0.1:8080/readyz
 ```
 
 两者都应返回 HTTP `200`。如安装的 tunnel-client 改了管理端口，以本机实际配置为准。管理 UI 是 `http://127.0.0.1:8080/ui`；不要把它转发到公网。
+
+### 核对当前运行的代码版本
+
+在 ChatGPT 工具面调用 `bridge_status`：
+
+- `server_version` 是产品版本号（例如 `0.1.0`），不区分同一版本的不同源码构建。
+- 打包 runtime 会返回 `build_id=sha256:<fingerprint>`；它应与 runtime 根目录 `docs/release/build-record.md` 的 source manifest SHA-256 对应。源码 checkout 返回 `source-checkout`。
+- `build_id` 只是本机诊断指纹，不是签名或安全证明；目录授权仍由 workspace/tool grants 决定。
+- 更新代码后若 `bridge_status` 仍没有 `build_id` 或指纹未变，先确认旧 daemon 已正常退出，再从目标 runtime 启动；之后在 ChatGPT Plugins 管理页执行 **Refresh tools** 并新建会话。只刷新工具元数据不会重载本机 daemon 代码。
 
 ## 4. 在 ChatGPT 网页创建 MCP App
 

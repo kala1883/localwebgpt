@@ -56,8 +56,8 @@ Before each launch from a source checkout, validate `.env` and run the integrate
 
 ```powershell
 Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
-.\packaging\windows\Start-LocalWebGPT.ps1 -ValidateOnly
-.\packaging\windows\Start-LocalWebGPT.ps1
+.\scripts\windows\Start-LocalWebGPT.ps1 -ValidateOnly
+.\scripts\windows\Start-LocalWebGPT.ps1
 ```
 
 Validation should report that `.env` is valid without displaying the key. The launcher starts the local daemon and prints a **one-time local-console URL**. Open that exact URL in a browser (do not share it; it contains a temporary authorization token), go to **ChatGPT Connection**, review the confirmation, and click **Enable ChatGPT connection on this machine**. This enables connection-level tool discovery only; it does not authorize a directory. After confirmation, the launcher runs Tunnel doctor and starts `tunnel-client`; wait for a healthy Tunnel before creating the ChatGPT App.
@@ -66,7 +66,7 @@ Validation should report that `.env` is valid without displaying the key. The la
 
 If PowerShell cannot find Node/npm, install a supported Node.js version and open a new terminal. Correct `.env` issues using the validation error; the launcher never prints secret values.
 
-To stop the service, open another PowerShell window and run `.\packaging\windows\Stop-LocalWebGPT.ps1` from the source checkout (`.\Stop-LocalWebGPT.ps1` from a packaged runtime), then wait for the launcher window to return to its prompt. This sends a fixed local stop request rather than killing an arbitrary PID; the daemon waits for in-flight operations before closing.
+To stop the service, open another PowerShell window and run `.\scripts\windows\Stop-LocalWebGPT.ps1` from the source checkout (`.\Stop-LocalWebGPT.ps1` from a packaged runtime), then wait for the launcher window to return to its prompt. This sends a fixed local stop request rather than killing an arbitrary PID; the daemon waits for in-flight operations before closing.
 
 ## 4. Create the MCP App in ChatGPT
 

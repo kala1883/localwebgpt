@@ -48,7 +48,7 @@ created, and no write guard method was called.
 - `node --import tsx --test tests/unit/blob-store.test.ts tests/unit/snapshot-quota.test.ts tests/unit/blob-quota.test.ts tests/unit/snapshot-maintenance.test.ts tests/unit/chatgpt-local-launch.test.ts tests/unit/changes-invalidation.test.ts`: **87/87 passed**.
 - `node --import tsx --test tests/windows/lwb038-storage-quota.test.ts`: **1/1 passed** on Windows/NTFS with the real path guard.
 - `npm run typecheck`, `npm run check:secrets`, `npm run check:imports`: passed; import scan covered 216 files.
-- PowerShell AST parse of `packaging/windows/Start-LocalWebGPT.ps1`: passed.
+- PowerShell AST parse of `scripts/windows/Start-LocalWebGPT.ps1`: passed.
 
 ## Remaining
 

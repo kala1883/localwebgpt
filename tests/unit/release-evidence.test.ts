@@ -189,7 +189,16 @@ describe('LWB-045 release evidence artifacts', () => {
       const record = readFileSync(path.join(runtimeRoot, 'docs', 'release', 'build-record.md'), 'utf8');
       assert.match(record, /Evidence type: packaged-runtime evidence/);
       assert.match(record, /Runtime package: `lwb-runtime-fixture@1\.2\.3`/);
-      assert.match(record, /Runtime payload manifest SHA-256: `[0-9a-f]{64}` \(3 files/);
+      assert.match(record, /Runtime build ID: `sha256:[0-9a-f]{64}`/);
+      assert.match(record, /Runtime payload manifest SHA-256: `[0-9a-f]{64}` \(4 files/);
+      const buildInfo = JSON.parse(readFileSync(path.join(runtimeRoot, '.lwb-build-info.json'), 'utf8')) as {
+        schema_version: number;
+        build_id: string;
+        source_manifest_sha256: string;
+      };
+      assert.equal(buildInfo.schema_version, 1);
+      assert.equal(buildInfo.build_id, `sha256:${buildInfo.source_manifest_sha256}`);
+      assert.equal(JSON.stringify(buildInfo).includes(fixtureRoot), false, 'build metadata must not contain absolute paths');
       assert.ok(record.includes(`tunnel-client executable SHA-256: \`${'b'.repeat(64)}\``));
       assert.ok(record.includes(`better-sqlite3 Windows x64 prebuild SHA-256: \`${'a'.repeat(64)}\``));
     } finally {

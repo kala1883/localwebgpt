@@ -204,4 +204,39 @@ describe('database upgrade preflight', () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it('refuses a database from a newer runtime without mutating it', () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'lwb-db-upgrade-future-'));
+    const file = path.join(directory, 'bridge.sqlite');
+    try {
+      const initialized = openDatabase({ path: file });
+      closeDatabase(initialized.db);
+
+      const futureVersion = KNOWN_SCHEMA_VERSION + 1;
+      const writer = new Database(file);
+      try {
+        writer.prepare(
+          'INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)',
+        ).run(futureVersion, 'future-schema', 'f'.repeat(64), '2026-01-03T00:00:00.000Z');
+      } finally {
+        writer.close();
+      }
+      const before = readFileSync(file);
+
+      assert.throws(
+        () => openDatabase({ path: file }),
+        (error: unknown) => {
+          assert.ok(error instanceof BridgeError);
+          assert.equal(error.code, 'STORAGE_UNAVAILABLE');
+          assert.equal(error.details?.['found_version'], futureVersion);
+          assert.equal(error.details?.['supported_version'], KNOWN_SCHEMA_VERSION);
+          return true;
+        },
+      );
+
+      assert.deepEqual(readFileSync(file), before, 'an older runtime must not mutate a newer schema database');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

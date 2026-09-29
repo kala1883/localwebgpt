@@ -5,7 +5,7 @@
  *
  * `npm run daemon` 一直指向 `apps/daemon/src/main.ts`，而那个文件（以及
  * 它需要的这一层）在任务清单里**没有任何一条任务认领** —— LWB-039 交付的是
- * `apps/daemon/lifecycle/` 与 `packaging/launcher/`，也就是常驻、睡眠唤醒、
+ * `apps/daemon/lifecycle/` 与 `deployment/launcher/`，也就是常驻、睡眠唤醒、
  * 开机启动那一层，它假设「已经有一个能启动的 daemon 进程」。偏差项 55
  * 从 LWB-017 起就记着这件事。本文件把 `docs/PROGRESS.md` 里那句
  * 「装配根仍不存在」变成一句可运行的事实。
@@ -134,6 +134,7 @@ import {
 import { loadIpcSecrets, loadRuntimeKeys } from './credentials.ts';
 import { startDataPipe, type DataPipe } from './ipc-server.ts';
 import { parseStartupOptions, type StartupOptions } from './options.ts';
+import { buildIdFromEnvironment } from './build-info.ts';
 
 // ---------------------------------------------------------------------------
 // 对外形状
@@ -593,6 +594,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
     const operations = new OperationRegistry();
     const facts: ToolSurfaceFacts = {
       server_version: DAEMON_VERSION,
+      build_id: buildIdFromEnvironment(options.env),
       protocol_version: IPC_PROTOCOL_VERSION,
       gates: BRIDGE_GATES,
       // 这两个都是**函数**，不是字段（LWB-034 关掉的那条偏差）。

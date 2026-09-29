@@ -111,7 +111,7 @@ const idempotencyKey = z
   .min(LIMITS.MIN_IDEMPOTENCY_KEY_CHARS)
   .max(LIMITS.MAX_IDEMPOTENCY_KEY_CHARS)
   .describe(
-    '客户端生成的幂等键。同一键重复提交且内容相同会返回既有结果；内容不同会返回 IDEMPOTENCY_CONFLICT。',
+    '必填幂等键：每条用户意图生成一个稳定键；精确重试必须复用原键。相同键重复提交且内容相同会返回既有结果；内容不同会返回 IDEMPOTENCY_CONFLICT。',
   );
 
 const lineEdit = z.strictObject({
@@ -241,7 +241,7 @@ const proposalSummary = z
   .string()
   .min(1)
   .max(500)
-  .describe('本次修改的简要说明。这是不受信文案，只用于展示，不作为批准依据。');
+  .describe('必填字段。用一句简短的话说明本次文件操作；这是不受信文案，仅用于展示和审计，不作为批准依据。');
 
 const fileCreateInput = z.strictObject({
   workspace_id: workspaceId,
@@ -415,7 +415,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'bridge_status',
     title: '查询桥接状态',
     description:
-      '查询当前本地桥接服务的连接别名、版本、能力开关与限制说明。' +
+      '查询当前本地桥接服务的连接别名、版本、build_id、能力开关与限制说明。build_id 是诊断指纹，不是签名或授权。' +
       '不返回任何凭证。该工具只读，不改变任何状态。' +
       '注意：进程在运行不等于平台已验证可调用；请如实转述 gates 字段。',
     inputSchema: TOOL_INPUT_SCHEMAS.bridge_status,
@@ -425,7 +425,8 @@ export const TOOLS: readonly ToolDefinition[] = [
     name: 'workspace_list',
     title: '列出已授权工作区',
     description:
-      '列出当前连接获准访问的工作区别名、类型、访问模式与能力。' +
+      '列出当前连接获准访问的工作区别名、类型、访问模式、daemon 实现状态与该工作区实际获授的 granted_tools。' +
+      '选择目标时必须以对应工作区的 granted_tools 为准；capabilities 只是 daemon 实现/诊断读数，不是授权。' +
       '只能使用这里返回的 workspace_id，不能构造或推测其它 ID。' +
       '本工具不枚举本机其它目录，也不返回任何绝对路径。',
     inputSchema: TOOL_INPUT_SCHEMAS.workspace_list,
@@ -496,7 +497,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     title: '创建文本文件',
     description:
       '在已授予“文件修改”的工作区中直接创建一个新文本文件。目标必须不存在；冲突时绝不覆盖。' +
-      '创建经受保护执行器完成并返回逐文件回执；不需要逐次本机批准。',
+      '调用时必须提供 summary 和 idempotency_key；每条用户意图使用稳定键，精确重试复用原键。创建经受保护执行器完成并返回逐文件回执；不需要逐次本机批准。',
     inputSchema: TOOL_INPUT_SCHEMAS.file_create,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
@@ -505,7 +506,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     title: '编辑文本文件',
     description:
       '基于最新 file_read 的完整读取票据、哈希与精确行区间，直接编辑一个已授权文本文件；工具清单仅在同一工作区同时获授读取和文件修改时提供本工具。' +
-      '冲突时不覆盖；修改经受保护执行器完成并返回逐文件回执，无需逐次本机批准。',
+      '调用时必须提供 summary 和 idempotency_key；每条用户意图使用稳定键，精确重试复用原键。冲突时不覆盖；修改经受保护执行器完成并返回逐文件回执，无需逐次本机批准。',
     inputSchema: TOOL_INPUT_SCHEMAS.file_edit,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
@@ -514,7 +515,7 @@ export const TOOLS: readonly ToolDefinition[] = [
     title: '删除文件',
     description:
       '在获授“文件修改”的工作区中删除一个普通文件。调用只需提供工作区与相对路径；' +
-      'daemon 会在本次调用中读取并保存可恢复快照（单文件上限 16 MiB），再由受保护执行器核对同一文件身份并删除；无需先单独调用 file_read，也无需逐次本机批准。' +
+      '调用时还必须提供 summary 和 idempotency_key；每条用户意图使用稳定键，精确重试复用原键。daemon 会在本次调用中读取并保存可恢复快照（单文件上限 16 MiB），再由受保护执行器核对同一文件身份并删除；无需先单独调用 file_read，也无需逐次本机批准。' +
       '硬拒绝的秘密/凭证路径不可删除。只有返回 state=APPLIED 且该文件回执 state=VERIFIED 才可声称已删除。',
     inputSchema: TOOL_INPUT_SCHEMAS.file_delete,
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },

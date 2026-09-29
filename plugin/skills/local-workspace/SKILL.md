@@ -34,11 +34,12 @@ Use the Local Workspace Bridge only for a task the user asked you to perform aga
 ## Read and write within the explicit workspace grant
 
 1. For an edit, first use `file_read` on the current saved file and retain its returned `read_token` and hash. Use exact line edits grounded in that fresh read.
-2. For a single new text file, call `file_create`; for a single existing text file, call `file_edit`. With the local console’s per-workspace “File modifications” grant, these apply directly and return a write receipt. Never claim success before seeing `state=APPLIED`.
-3. For a multi-file change, use `change_prepare`, inspect its diff if needed, then call `change_apply`. The same workspace grant authorizes application; there is no per-change local approval step. Never invent `approved`, `user_id`, or other authorization fields.
-4. If the service says `WORKSPACE_NOT_GRANTED` or `CAPABILITY_NOT_GRANTED`, stop and ask the user to adjust that specific workspace in the local console. Do not try another path or tool as a workaround.
-5. For `QUEUED`, `VALIDATING`, `APPLYING`, timeout, or lost response, query `change_get`; do not repeat the write request blindly.
-6. A conflict is not permission to overwrite. Explain the conflict and ask what to do. `change_revert_prepare` creates an inverse change; it does not delete files or bypass the workspace grant.
+2. Every direct `file_create`, `file_edit`, or `file_delete` call must include both required fields: a concise `summary` and an `idempotency_key`. Generate one stable key per intended write; an exact retry must reuse that key. `file_create` does not need a read ticket; `file_delete` captures its own recoverable snapshot. With the local console’s per-workspace “File modifications” grant, these apply directly and return a write receipt. Never claim success before seeing `state=APPLIED` and a verified file receipt.
+3. If the connector returns a parameter-schema error such as a missing required field before the handler runs, treat it as no write: correct the missing field and retry with the same key. If execution or side effects are uncertain, stop and inspect the path or operation before retrying; do not mint a fresh key.
+4. For a multi-file change, use `change_prepare` with its required summary and idempotency key, inspect its diff if needed, then call `change_apply` with the returned change ID and a stable idempotency key. The same workspace grant authorizes application; there is no per-change local approval step. Never invent `approved`, `user_id`, or other authorization fields.
+5. If the service says `WORKSPACE_NOT_GRANTED` or `CAPABILITY_NOT_GRANTED`, stop and ask the user to adjust that specific workspace in the local console. Do not try another path or tool as a workaround.
+6. For `QUEUED`, `VALIDATING`, `APPLYING`, timeout, or lost response, query `change_get`; do not repeat the write request blindly.
+7. A conflict is not permission to overwrite. Explain the conflict and ask what to do. `change_revert_prepare` creates an inverse change; it does not delete files or bypass the workspace grant.
 
 ## Response discipline
 

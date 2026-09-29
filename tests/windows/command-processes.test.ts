@@ -40,6 +40,24 @@ describe('workspace command process manager', () => {
     await manager.terminateAll();
   });
 
+  it('allows a command to run past 25 seconds without a local hard deadline', { timeout: 60_000 }, async () => {
+    const manager = new CommandProcessManager();
+    const command = process.platform === 'win32'
+      ? 'Start-Sleep -Seconds 26; Write-Output LWB_LONG_COMMAND_OK'
+      : 'sleep 26; echo LWB_LONG_COMMAND_OK';
+    try {
+      const result = await manager.run({ shell, command, cwd: process.cwd() });
+
+      assert.equal(result.started, true);
+      assert.equal(result.exit_code, 0);
+      assert.equal(result.timed_out, false);
+      assert.ok(result.duration_ms >= 25_000, `command returned too early: ${result.duration_ms}ms`);
+      assert.match(result.stdout, /LWB_LONG_COMMAND_OK/);
+    } finally {
+      await manager.terminateAll();
+    }
+  });
+
   it('supports cmd on Windows', async () => {
     if (process.platform !== 'win32') return;
     const manager = new CommandProcessManager({ timeout_ms: 5_000 });

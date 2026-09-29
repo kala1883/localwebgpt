@@ -296,6 +296,7 @@ export interface ToolHarnessOptions {
    */
   readonly pause_source?: PauseSource;
   readonly server_version?: string;
+  readonly build_id?: string;
   readonly protocol_version?: string;
   /**
    * 覆盖快照库。省略即按需建一个真实对象目录（临时目录）。
@@ -574,6 +575,7 @@ export async function makeToolHarness(options: ToolHarnessOptions = {}): Promise
 
   const facts: ToolSurfaceFacts = {
     server_version: options.server_version ?? '0.1.0-test',
+    build_id: options.build_id ?? 'test-build-id',
     protocol_version: options.protocol_version ?? 'lwb-ipc-v1',
     gates,
     paused: isPaused,

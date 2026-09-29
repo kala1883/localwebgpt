@@ -8,6 +8,7 @@
 
 import type { CapabilityFlags } from './capabilities.ts';
 import type { WorkspaceKind, WorkspaceMode } from './version.ts';
+import type { ToolName } from './tools.ts';
 
 export type ConnectionAlias = string;
 
@@ -15,6 +16,8 @@ export interface BridgeStatusData {
   /** 当前连接别名（本地配置）。不是模型可指定的字段。 */
   readonly connection_alias: ConnectionAlias;
   readonly server_version: string;
+  /** Package/source fingerprint when supplied by the launcher; not a signature or permission. */
+  readonly build_id?: string;
   readonly protocol_version: string;
   readonly contract_version: string;
   /** 连接级能力；与工作区级能力取交集后才是实际可用能力。 */
@@ -70,7 +73,10 @@ export interface WorkspaceSummary {
   readonly kind: WorkspaceKind;
   readonly mode: WorkspaceMode;
   readonly enabled: boolean;
+  /** daemon 实现/诊断读数，不表示此工作区授予了哪些模型工具。 */
   readonly capabilities: CapabilityFlags;
+  /** 当前连接在此工作区实际获授的 MCP 工具；不与其它工作区的 grant 合并。 */
+  readonly granted_tools: readonly ToolName[];
   /** 工作区代次。变化即代表旧票据与批准全部失效。 */
   readonly generation: number;
   /** 单文件工作区时返回该文件的相对路径；目录工作区返回 null。 */

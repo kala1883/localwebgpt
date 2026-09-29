@@ -34,7 +34,7 @@
 
 ### LWB-002 · 验证真实 ChatGPT 账号与隧道接入
 
-**版本/优先级：** V1 / P0　 **状态：** PARTIAL
+**版本/优先级：** V1 / P0　 **状态：** PARTIAL（2026-09-29 真实 ChatGPT 网页已完成 workspace_list、获授 workspace 的 command_exec 与临时文件读写回读；断连/重连、当前服务的 build_id/granted_tools 与独立网络切换验收仍待闭合）
 
 **前置依赖：** LWB-001
 
@@ -958,7 +958,7 @@
 
 **前置依赖：** LWB-008, LWB-034, LWB-035
 
-**交付物：** `apps/daemon/lifecycle/`、`packaging/launcher/`
+**交付物：** `apps/daemon/lifecycle/`、`deployment/launcher/`
 
 当前隧道重连部分证据见 `docs/evidence/lwb-039-reconnect.md`；不能据此声称已验证 Windows 系统睡眠/唤醒。
 
@@ -980,11 +980,11 @@
 
 ### LWB-040 · 实现安装、升级和卸载语义
 
-**版本/优先级：** V1 / P0　 **状态：** PARTIAL（runtime 构建及迁移前快照/未决操作阻断已交付；手工保留状态卸载流程已文档化；自动卸载器、升级恢复与签名安装器未完成）
+**版本/优先级：** V1 / P0　 **状态：** PARTIAL（runtime 构建、迁移前快照、未决操作阻断及“高于当前版本的 schema 拒绝打开且数据库字节不变”已实现/测试；手工保留状态卸载流程已文档化；自动升级切换与签名安装器未完成）
 
 **前置依赖：** LWB-006, LWB-007, LWB-039
 
-**交付物：** `packaging/windows/`、`docs/install-and-upgrade.md`
+**交付物：** `deployment/windows/`、`docs/install-and-upgrade.md`
 
 **执行步骤**
 
@@ -1006,7 +1006,7 @@
 
 ### LWB-041 · 完成工具说明与真实对话评测
 
-**版本/优先级：** V1 / P1　 **状态：** PARTIAL（工作流 Skill 与评测集已创建；grant 直写与 MCP 回读已在受控副本验证；真实 ChatGPT 网页评测仍 NOT_RUN）
+**版本/优先级：** V1 / P1　 **状态：** PARTIAL（工作流 Skill 与评测集已创建；2026-09-29 真实 ChatGPT 网页完成 workspace_list、26 秒以上 command_exec 与临时文件 create/read/edit/delete/readback；冲突、拒绝、重连与对抗对话矩阵仍未跑）
 
 **前置依赖：** LWB-032, LWB-036, LWB-037, LWB-040
 
@@ -1056,7 +1056,7 @@
 
 ### LWB-043 · 完成目标场景回归
 
-**版本/优先级：** V1 / P0　 **状态：** PARTIAL（干净受控副本上的真实 NTFS 工具链 journey 已跑；ChatGPT 网页端验收仍 NOT_RUN）
+**版本/优先级：** V1 / P0　 **状态：** PARTIAL（TransportAndAI 干净受控副本的真实 NTFS journey 已跑；LocalWebGPT 的 ChatGPT 网页基础工具链已验收，但 TransportAndAI 目标场景网页 journey 及安全审查前置项仍未完成）
 
 **前置依赖：** LWB-033, LWB-041, LWB-042
 
@@ -1134,7 +1134,7 @@
 
 ### LWB-046 · 完成 V1 发布门禁与交付
 
-**版本/优先级：** V1 / P0　 **状态：** PARTIAL（验收清单与操作手册已交付；真实网页验收、独立安全审查与正式发布检查仍待完成）
+**版本/优先级：** V1 / P0　 **状态：** PARTIAL（验收清单、操作手册和基础真实 ChatGPT 网页工具链证据已交付；完整网页场景、独立安全审查与正式发布检查仍待完成）
 
 **前置依赖：** LWB-041, LWB-042, LWB-043, LWB-044, LWB-045
 
