@@ -617,37 +617,35 @@ describe('LWB-012 · 步骤 2：会话、CSRF 与一次性 nonce', () => {
       assert.equal(store.redeem(ticket.token), null);
     });
 
-    it('会话有绝对上限与空闲上限，持续活动续不了绝对上限', () => {
+    it('会话只有不可续期的绝对上限', () => {
       let now = 0;
       const store = new ControlSessionStore({
         now: () => now,
         port: 9000,
         sessionTtlMs: 20_000,
-        idleTtlMs: 1_000,
       });
       const issued = store.redeem(store.mintBootstrap().token);
       assert.ok(issued !== null);
 
-      // 每 900ms 活动一次，始终够不到空闲上限（1000ms），于是会话不会因"闲置"而死……
+      // 持续请求也不会延长签发时确定的绝对有效期。
       for (let i = 0; i < 10; i += 1) {
         now += 900;
-        assert.ok(store.authenticate(issued.cookie_value) !== null, `第 ${i} 次活动后被登出了`);
+        assert.ok(store.authenticate(issued.cookie_value) !== null, `第 ${i} 次请求后提前失效`);
       }
       assert.equal(now, 9_000, '装置前提：到此刻为止都没碰到绝对上限');
 
-      // ……但绝对上限一到就结束，哪怕它一直在被使用。
-      // 这一条防的是「一个被人拿走的会话靠定时心跳永生」。
+      // 绝对上限一到就结束，哪怕它一直在被使用。
       now = 20_001;
       assert.equal(store.authenticate(issued.cookie_value), null, '绝对上限必须压住持续活动');
     });
 
-    it('空闲超时后会话失效', () => {
+    it('只要未达到绝对上限，长时间空闲也不会使会话失效', () => {
       let now = 0;
-      const store = new ControlSessionStore({ now: () => now, port: 9000, idleTtlMs: 1000 });
+      const store = new ControlSessionStore({ now: () => now, port: 9000, sessionTtlMs: 2 * 60 * 60 * 1000 });
       const issued = store.redeem(store.mintBootstrap().token);
       assert.ok(issued !== null);
-      now += 1001;
-      assert.equal(store.authenticate(issued.cookie_value), null);
+      now += 60 * 60 * 1000;
+      assert.ok(store.authenticate(issued.cookie_value) !== null);
     });
 
     it('会话表里存的是摘要，不是 cookie 值本身', () => {

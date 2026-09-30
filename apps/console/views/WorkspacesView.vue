@@ -31,7 +31,7 @@
 -->
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import type { CapabilityFlags } from '@lwb/contracts';
 import type { SessionPresence } from '../src/changes/approval.ts';
 import {
@@ -80,6 +80,8 @@ const props = withDefaults(
     readonly machineLine?: string | null;
     /** 有请求在途时按钮不可再点。 */
     readonly busy?: boolean;
+    /** 由本机控制平面打开系统目录/文件选择器。取消时返回 null。 */
+    readonly pickPath?: (kind: WorkspaceKind) => Promise<string | null>;
     /** 上一次操作的结果。与列表**分开**，刷新不会把它盖掉。 */
     readonly feedback?: { readonly ok: boolean; readonly message: string } | null;
   }>(),
@@ -164,17 +166,45 @@ const canSubmit = computed(() => validation.value.can_submit && props.session !=
  */
 const selectedOffer = computed(() => offers.value.find((offer) => offer.mode === draft.value.mode) ?? null);
 
-/** 路径输入仍然由操作者粘贴；这个状态只负责还原参考图里的分段控件。 */
+/** 选择路径 / 手动输入切换与其焦点状态。 */
 const pathMode = ref<'select' | 'manual'>('select');
 const pathInput = ref<HTMLInputElement | null>(null);
+const pickingPath = ref(false);
+const pathPickerMessage = ref<string | null>(null);
 
 function setPathMode(mode: 'select' | 'manual'): void {
   pathMode.value = mode;
   pathInput.value?.focus();
 }
 
-function focusPathInput(): void {
-  pathInput.value?.focus();
+async function browsePath(): Promise<void> {
+  pathPickerMessage.value = null;
+  const picker = props.pickPath;
+  if (picker === undefined) {
+    pathInput.value?.focus();
+    pathPickerMessage.value = '本机选择窗口不可用；请从资源管理器复制完整路径并粘贴到此处。';
+    return;
+  }
+
+  pickingPath.value = true;
+  pathPickerMessage.value = '正在打开本机选择窗口…';
+  try {
+    const selectedPath = await picker(draft.value.kind);
+    if (selectedPath === null) {
+      pathPickerMessage.value = '已取消选择，路径未更改。';
+      return;
+    }
+    draft.value = { ...draft.value, path: selectedPath };
+    pathPickerMessage.value = '已填入所选路径，请核对后再登记。';
+    await nextTick();
+    pathInput.value?.focus();
+  } catch (cause) {
+    pathPickerMessage.value = cause instanceof Error
+      ? cause.message
+      : '无法打开本机选择窗口；请手动粘贴完整路径。';
+  } finally {
+    pickingPath.value = false;
+  }
 }
 
 function onSubmit(): void {
@@ -200,6 +230,7 @@ function setAlias(event: Event): void {
 }
 
 function setPath(event: Event): void {
+  pathPickerMessage.value = null;
   draft.value = { ...draft.value, path: inputValue(event) };
 }
 
@@ -442,12 +473,13 @@ function cancelAccess(): void {
               @input="setPath"
             />
           </div>
-          <button type="button" class="ws__browse" aria-label="浏览本地目录" @click="focusPathInput">
+          <button type="button" class="ws__browse" aria-label="打开本机目录或文件选择窗口" :disabled="busy || pickingPath" :aria-busy="pickingPath" @click="browsePath">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3.5 7.5h6l2 2H20a1 1 0 0 1 1 1v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /><path d="M3.5 9.5h17" stroke="currentColor" stroke-width="1.8" /></svg>
             浏览
           </button>
         </div>
-        <p class="ws__path-hint" data-testid="path-hint">浏览器不能替你选目录：请粘贴完整本机路径（例如从资源管理器地址栏复制）。可输入 `C:\` / `D:\` 登记整块本机卷；这会让授权工具覆盖该卷全部可访问目录。</p>
+        <p class="ws__path-hint" data-testid="path-hint">Windows 下点击“浏览”会打开系统目录/文件选择窗口；其他平台或无法弹窗时，请粘贴完整路径。输入 `C:\` / `D:\` 可登记整块本机卷，并让获授工具覆盖该卷全部可访问目录。</p>
+        <p v-if="pathPickerMessage !== null" class="ws__path-feedback" role="status" data-testid="path-picker-message">{{ pathPickerMessage }}</p>
 
         <div class="ws__field">
           <label for="ws-alias">别名 <span>（可选）</span></label>
@@ -508,7 +540,7 @@ function cancelAccess(): void {
           <li v-for="(problem, index) in validation.problems" :key="index" data-testid="form-problem">{{ problem }}</li>
         </ul>
         <p v-else-if="session === null" class="ws__dim" data-testid="no-session">
-          {{ sessionExpired ? '控制台会话已过期，登记按不动。请重新运行本地启动命令。' : '还没有控制台会话，登记按不动。本地启动命令会打印一个带一次性令牌的地址，用它打开控制台。' }}
+          {{ sessionExpired ? '本地会话已过期，登记按不动。请从仍在线的控制台生成浏览器链接，或重新运行本地启动脚本。' : '还没有控制台会话，登记按不动。请从仍在线的控制台生成浏览器链接，或运行本地启动脚本。' }}
         </p>
         <p class="ws__dim ws__capability-note" data-testid="capability-note">登记本身**不改动**那个目录里的任何文件，也不代表内容立刻会被读走 —— 对应工具只有在该根保存 grant 且 ChatGPT 连接启用后才可调用。</p>
       </section>
@@ -757,6 +789,7 @@ function cancelAccess(): void {
 .ws__browse { display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; border: 1px solid #dce6f2; border-radius: 8px; background: #f8fbff; color: #4f6587; font-size: 12px; cursor: pointer; }
 .ws__browse svg { width: 17px; height: 17px; }
 .ws__path-hint { margin: 7px 0 0; color: #8c9cb4; font-size: 11px; line-height: 1.45; }
+.ws__path-feedback { margin: 6px 0 0; color: #526a8e; font-size: 11px; line-height: 1.45; }
 
 .ws__field { margin-top: 13px; }
 .ws__field label, .ws__choice-card legend { display: block; color: #273d66; font-size: 12px; font-weight: 700; }
@@ -817,7 +850,8 @@ function cancelAccess(): void {
 .ws__empty strong { color: #405a83; font-size: 13px; }
 .ws__empty p, .ws__no-results { margin: 6px 0 0; color: #91a0b7; font-size: 11px; }
 .ws__no-results { padding: 32px 18px; text-align: center; }
-.ws__table-head, .ws__row { display: grid; grid-template-columns: minmax(220px, 2.05fr) 74px 112px minmax(170px, 1.45fr) 42px; column-gap: 0; }
+/* 允许列随工作区卡片收缩；较窄的双栏布局会让旧的固定最小宽度挤出卡片。 */
+.ws__table-head, .ws__row { display: grid; grid-template-columns: minmax(0, 2fr) 74px minmax(0, 1.25fr) minmax(0, 1.5fr) 42px; column-gap: 0; }
 .ws__table-head { align-items: center; min-height: 37px; padding: 0 15px; border-top: 1px solid #edf1f7; border-bottom: 1px solid #e7edf5; background: #fbfcfe; color: #546a8d; font-size: 11px; font-weight: 700; }
 .ws__table-head span + span { padding-left: 10px; border-left: 1px solid #e3eaf3; }
 .ws__rows { list-style: none; padding: 0; margin: 0; }
@@ -841,7 +875,7 @@ function cancelAccess(): void {
 .ws__state-pill.is-enabled { border: 1px solid #d5f0df; background: #f0fbf4; color: #1c9f5c; }
 .ws__state-pill.is-paused { border: 1px solid #f2e1b6; background: #fff9e7; color: #9c751e; }
 .ws__state-pill.is-removed { border: 1px solid #e0e3e8; background: #f7f8fa; color: #7e8999; }
-.ws__mode-label { border: 1px solid #e1e6ff; background: #f5f5ff; color: #765fe2; }
+.ws__mode-label { max-width: 100%; border: 1px solid #e1e6ff; background: #f5f5ff; color: #765fe2; white-space: normal; overflow-wrap: anywhere; }
 .ws__access { min-width: 0; }
 .ws__access p { margin: 0; color: #7c8ca5; font-size: 10px; line-height: 1.45; }
 .ws__access p strong { display: block; margin-top: 3px; color: #617697; font-weight: 600; }
@@ -920,6 +954,8 @@ function cancelAccess(): void {
   .ws__table-head { display: none; }
   .ws__row { grid-template-columns: 1fr auto; gap: 10px; padding: 14px; }
   .ws__row-main { grid-column: 1 / -1; }
+  .ws__row-state { grid-column: 1; grid-row: 2; }
+  .ws__row-mode { grid-column: 1 / -1; grid-row: 3; }
   .ws__row-capability { grid-column: 1 / -1; padding-left: 0; }
   .ws__row-state, .ws__row-mode { padding-left: 0; }
   .ws__row-actions { grid-column: 2; grid-row: 2; align-self: center; }

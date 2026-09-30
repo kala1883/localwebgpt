@@ -282,10 +282,10 @@ describe('B 组 · 目录 / 单文件、两种模式与各自的说明（执行�
     const wrapper = mountView({ session: SESSION });
     assert.deepEqual(
       wrapper.findAll('[data-testid="form-problem"]').map((li) => li.text()),
-      ['别名不能为空。', '路径不能为空。浏览器不能替你选目录，请粘贴完整路径。'],
+      ['别名不能为空。', '路径不能为空。请使用系统选择窗口或粘贴完整路径。'],
     );
     // 路径不能为空这一条**不许**替服务端判「路径存不存在」：界面只说自己知道的事。
-    assert.match(wrapper.find('[data-testid="path-hint"]').text(), /浏览器不能替你选目录/);
+    assert.match(wrapper.find('[data-testid="path-hint"]').text(), /系统目录\/文件选择窗口/);
   });
 
   it('B5a 粘贴盘符根时说明整卷授权的实际范围', async () => {
@@ -360,7 +360,7 @@ describe('B 组 · 目录 / 单文件、两种模式与各自的说明（执行�
     assert.equal(wrapper.find('[data-testid="path-input"]').element.value, '');
     assert.deepEqual(
       wrapper.findAll('[data-testid="form-problem"]').map((li) => li.text()),
-      ['别名不能为空。', '路径不能为空。浏览器不能替你选目录，请粘贴完整路径。'],
+      ['别名不能为空。', '路径不能为空。请使用系统选择窗口或粘贴完整路径。'],
     );
   });
 

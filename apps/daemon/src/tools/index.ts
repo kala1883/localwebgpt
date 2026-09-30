@@ -65,6 +65,7 @@ export function createToolSurface(deps: ToolSurfaceDeps): ToolSurface {
   // 不再成立。这条注释存在的理由就是这个失效方式**在功能上无声**。
   const guard: GuardDeps = {
     repos: deps.repos,
+    ...(deps.configuration === undefined ? {} : { configuration: deps.configuration }),
     concurrency: deps.concurrency ?? concurrencyGateFor(deps.effective_limits ?? LIMITS),
   };
 

@@ -7,6 +7,7 @@ import { BridgeError, newGrantId } from '@lwb/contracts';
 import { screenMetadata } from '@lwb/audit';
 import type { OperationDefinition, OperationRegistry, RequestContext } from '@lwb/ipc';
 import type { Repositories } from '@lwb/persistence';
+import type { LocalConfigurationStore } from '../config/local-configuration.ts';
 import { WORKSPACES_MANAGE_CAPABILITY, originOf } from './workspaces.ts';
 
 export const MODEL_WORKSPACE_CAPABILITIES = ['read', 'list', 'search', 'git_read', 'propose', 'command_exec'] as const;
@@ -14,6 +15,8 @@ export type ModelWorkspaceCapability = (typeof MODEL_WORKSPACE_CAPABILITIES)[num
 
 export interface WorkspaceAccessOperationsDeps {
   readonly repos: Repositories;
+  /** Always present in production; isolated operation tests use the repository mirror. */
+  readonly configuration?: LocalConfigurationStore;
   /** Set by daemon assembly, never taken from a request. */
   readonly model_connection_id: string;
 }
@@ -87,7 +90,16 @@ export function registerWorkspaceAccessOperations(
         if (connection === null || connection.principal_kind !== 'model_surface') {
           throw new BridgeError('NOT_AUTHORIZED', 'ChatGPT 网页连接尚未在本机正确登记。');
         }
-        return deps.repos.grants.listByConnection(connection.id).map(grantView);
+        const grants = deps.configuration?.listGrantsByConnection(connection.id) ??
+          deps.repos.grants.listByConnection(connection.id);
+        return grants.map((grant) => {
+          if (deps.configuration === undefined) return grantView(grant);
+          const workspace = deps.repos.workspaces.findById(grant.workspace_id);
+          if (workspace === null || !deps.configuration.matchesWorkspace(workspace)) {
+            return grantView({ ...grant, capabilities: [], enabled: false });
+          }
+          return grantView(grant);
+        });
       },
     },
     {
@@ -135,6 +147,7 @@ export function registerWorkspaceAccessOperations(
             capabilities: grant.enabled ? capabilities.join(',') : '',
           }),
         });
+        deps.configuration?.refreshWorkspaceSnapshot(deps.repos);
         return grantView(grant);
       },
     },

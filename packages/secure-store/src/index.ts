@@ -63,6 +63,12 @@ export {
 } from './layout.ts';
 
 export {
+  ProtectedConfigurationFileError,
+  readProtectedJsonConfiguration,
+  writeProtectedJsonConfiguration,
+} from './json-configuration.ts';
+
+export {
   HARD_DENIED_BASENAMES,
   HARD_DENIED_DIRNAMES,
   NOT_AUTO_EXEMPTED,

@@ -5,7 +5,7 @@
   authenticated control API; the page never needs CORS or a second API origin.
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { ControlApiFailure, ControlClient } from '../src/auth/client.ts';
 import { parseHistoryResponse, type HistoryData } from '../src/history/index.ts';
 import { parseRecoveryResponse, type RecoveryRecord, type RecoverySession } from '../src/recovery/index.ts';
@@ -27,13 +27,38 @@ import ConnectionView from './ConnectionView.vue';
 import HistoryView from './HistoryView.vue';
 import RecoveryView from './RecoveryView.vue';
 import WorkspacesView from './WorkspacesView.vue';
+import ConfigurationView from './ConfigurationView.vue';
+
+interface ConsoleConfiguration {
+  readonly schema_version: number;
+  readonly session: { readonly idle_timeout_ms: number; readonly absolute_timeout_ms: number | null };
+  readonly workspaces: readonly Record<string, unknown>[];
+}
+
+function parseConsoleConfiguration(result: unknown): ConsoleConfiguration | null {
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) return null;
+  const record = result as Record<string, unknown>;
+  const session = record['session'];
+  if (
+    typeof record['schema_version'] !== 'number' ||
+    typeof session !== 'object' || session === null || Array.isArray(session) ||
+    typeof (session as Record<string, unknown>)['idle_timeout_ms'] !== 'number' ||
+    ((session as Record<string, unknown>)['absolute_timeout_ms'] !== null &&
+      typeof (session as Record<string, unknown>)['absolute_timeout_ms'] !== 'number') ||
+    !Array.isArray(record['workspaces'])
+  ) return null;
+  if (record['workspaces'].some((workspace) => typeof workspace !== 'object' || workspace === null || Array.isArray(workspace))) {
+    return null;
+  }
+  return result as ConsoleConfiguration;
+}
 
 const props = defineProps<{
   readonly client: ControlClient;
   readonly startupMessage: string | null;
 }>();
 
-const page = ref<'recovery' | 'history' | 'connection' | 'workspaces'>('workspaces');
+const page = ref<'recovery' | 'history' | 'connection' | 'workspaces' | 'configuration'>('workspaces');
 const pageMeta = computed(() => {
   switch (page.value) {
     case 'workspaces':
@@ -44,6 +69,8 @@ const pageMeta = computed(() => {
       return { title: '历史记录', subtitle: '查看本地工作区的操作记录与审计信息', icon: 'clock' };
     case 'connection':
       return { title: 'ChatGPT 连接', subtitle: '管理本机与 ChatGPT 之间的安全连接', icon: 'link' };
+    case 'configuration':
+      return { title: '配置', subtitle: '设置会话期限，并查看工作区和工具授权 JSON', icon: 'settings' };
   }
 });
 const recoveryRows = ref<readonly RecoveryRecord[]>([]);
@@ -54,10 +81,14 @@ const workspaces = ref<readonly WorkspaceRow[]>([]);
 const workspaceAccess = ref<readonly WorkspaceAccessRow[]>([]);
 const connectionEnabled = ref<boolean | null>(null);
 const statusReading = ref<StatusReading | null>(null);
+const configuration = ref<ConsoleConfiguration | null>(null);
 const now = ref(new Date().toISOString());
 const busy = ref(false);
+const savingConfiguration = ref(false);
 const error = ref<string | null>(props.startupMessage);
 const notice = ref<string | null>(null);
+const browserInvitationUrl = ref<string | null>(null);
+const invitingBrowser = ref(false);
 const authenticated = ref(props.client.session !== null);
 const clientSession = computed<RecoverySession | null>(() => authenticated.value ? { authenticated: true } : null);
 const workspaceSession = computed<SessionPresence | null>(() =>
@@ -76,15 +107,53 @@ function recordRows(payload: unknown): readonly RecoveryRecord[] {
 
 function setFailure(cause: unknown): void {
   if (cause instanceof ControlApiFailure && cause.detail.session_expired) {
-    error.value = '控制台会话已过期。请重新运行本地启动命令，再打开新打印的链接。';
+    error.value = '本地会话已过期。请从仍在线的控制台生成新浏览器链接；如果没有在线控制台，请重新运行本地启动脚本。';
     recoveryRecord.value = null;
     historyData.value = null;
     authenticated.value = false;
     workspaceAccess.value = [];
     connectionEnabled.value = null;
+    configuration.value = null;
     return;
   }
   error.value = cause instanceof Error ? cause.message : '本机请求失败。';
+}
+
+async function connectAnotherBrowser(): Promise<void> {
+  if (props.client.session === null) return;
+  invitingBrowser.value = true;
+  browserInvitationUrl.value = null;
+  error.value = null;
+  notice.value = null;
+  try {
+    const payload = await props.client.call('/api/session/invitations');
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+      throw new Error('浏览器接入链接响应格式未知。');
+    }
+    const url = (payload as Record<string, unknown>)['url'];
+    if (typeof url !== 'string') throw new Error('本地服务没有返回浏览器接入链接。');
+    const parsed = new URL(url);
+    if (parsed.origin !== window.location.origin || parsed.pathname !== '/' || !parsed.hash.startsWith('#t=lwb_boot_')) {
+      throw new Error('浏览器接入链接不是本机控制台地址，已拒绝显示。');
+    }
+    browserInvitationUrl.value = url;
+    await copyBrowserInvitation();
+  } catch (cause) {
+    setFailure(cause);
+  } finally {
+    invitingBrowser.value = false;
+  }
+}
+
+async function copyBrowserInvitation(): Promise<void> {
+  const url = browserInvitationUrl.value;
+  if (url === null) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    notice.value = '浏览器接入链接已复制；5 分钟内可在另一浏览器兑换一次。请只在自己的设备间使用。';
+  } catch {
+    notice.value = '链接已生成。请选中下方地址并复制；5 分钟内可兑换一次。';
+  }
 }
 
 async function loadRecoveryList(preferredId = selectedOperationId.value): Promise<void> {
@@ -119,11 +188,12 @@ async function loadHistory(): Promise<void> {
 async function loadWorkspaceData(): Promise<void> {
   if (props.client.session === null) return;
   now.value = new Date().toISOString();
-  const [workspacePayload, accessPayload, connectionPayload, statusPayload] = await Promise.all([
+  const [workspacePayload, accessPayload, connectionPayload, statusPayload, configurationPayload] = await Promise.all([
     props.client.call('/api/workspaces/list'),
     props.client.call('/api/workspaces/access/list'),
     props.client.call('/api/connections/list'),
     props.client.get('/api/status'),
+    props.client.get('/api/config'),
   ]);
   const parsedAccess = parseWorkspaceAccess(accessPayload);
   if (parsedAccess === null) throw new Error('目录授权响应格式未知；为避免误显示权限，已拒绝渲染。');
@@ -132,6 +202,31 @@ async function loadWorkspaceData(): Promise<void> {
   connectionEnabled.value = parseConnections(connectionPayload)
     .find((row) => row.principal_kind === 'model_surface')?.enabled ?? null;
   statusReading.value = parseStatusReading(statusPayload);
+  const parsedConfiguration = parseConsoleConfiguration(configurationPayload);
+  if (parsedConfiguration === null) throw new Error('本机 JSON 配置响应格式未知。');
+  configuration.value = parsedConfiguration;
+  scheduleSessionCheck();
+}
+
+async function loadConfiguration(): Promise<void> {
+  const result = await props.client.get('/api/config');
+  const parsed = parseConsoleConfiguration(result);
+  if (parsed === null) throw new Error('本机 JSON 配置响应格式未知。');
+  configuration.value = parsed;
+  scheduleSessionCheck();
+}
+
+async function pickWorkspacePath(kind: WorkspaceKind): Promise<string | null> {
+  const result = await props.client.call('/api/workspaces/pick', { kind });
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+    throw new Error('本机选择窗口响应格式未知。');
+  }
+  const path = (result as Record<string, unknown>)['path'];
+  if (path === null) return null;
+  if (typeof path !== 'string' || path.length === 0) {
+    throw new Error('本机选择窗口没有返回有效路径。');
+  }
+  return path;
 }
 
 async function refresh(): Promise<void> {
@@ -142,6 +237,7 @@ async function refresh(): Promise<void> {
     if (page.value === 'recovery') await loadRecoveryList();
     else if (page.value === 'history') await loadHistory();
     else if (page.value === 'workspaces') await loadWorkspaceData();
+    else if (page.value === 'configuration') await loadConfiguration();
   } catch (cause) {
     setFailure(cause);
   } finally {
@@ -304,9 +400,36 @@ function repairRecovery(payload: {
   );
 }
 
-async function selectPage(next: 'recovery' | 'history' | 'connection' | 'workspaces'): Promise<void> {
+async function selectPage(next: 'recovery' | 'history' | 'connection' | 'workspaces' | 'configuration'): Promise<void> {
   page.value = next;
   if (next !== 'connection') await refresh();
+}
+
+async function saveSessionConfiguration(settings: {
+  readonly idle_timeout_ms: number;
+  readonly absolute_timeout_ms: number | null;
+}): Promise<void> {
+  if (props.client.session === null) return;
+  savingConfiguration.value = true;
+  error.value = null;
+  notice.value = null;
+  try {
+    const body = {
+      idle_timeout_ms: settings.idle_timeout_ms,
+      absolute_timeout_ms: settings.absolute_timeout_ms,
+    };
+    const authorized = await props.client.authorizeMutation('/api/config/session', 'session-timeouts', body);
+    const result = await props.client.call('/api/config/session', authorized);
+    const parsed = parseConsoleConfiguration(result);
+    if (parsed === null) throw new Error('保存后的 JSON 配置响应格式未知。');
+    configuration.value = parsed;
+    scheduleSessionCheck();
+    notice.value = '会话期限已保存并立即生效。';
+  } catch (cause) {
+    setFailure(cause);
+  } finally {
+    savingConfiguration.value = false;
+  }
 }
 
 async function logout(): Promise<void> {
@@ -318,7 +441,8 @@ async function logout(): Promise<void> {
   workspaceAccess.value = [];
   connectionEnabled.value = null;
   statusReading.value = null;
-  error.value = '已登出。重新载入本页需要重新运行本地启动命令。';
+  configuration.value = null;
+  error.value = '已登出。要重新进入，请使用另一个在线控制台生成浏览器链接；如果没有在线控制台，请重新运行本地启动脚本。';
 }
 
 async function openRecovery(operationId: string): Promise<void> {
@@ -333,8 +457,33 @@ async function selectOperation(event: Event): Promise<void> {
   await refresh();
 }
 
+let sessionCheckTimer: number | null = null;
+function sessionCheckDelay(): number {
+  const idleTtlMs = configuration.value?.session.idle_timeout_ms ?? 0;
+  if (idleTtlMs === 0) return 5 * 60 * 1000;
+  return Math.max(15 * 1000, Math.min(5 * 60 * 1000, Math.floor(idleTtlMs / 2)));
+}
+function scheduleSessionCheck(): void {
+  if (sessionCheckTimer !== null) window.clearInterval(sessionCheckTimer);
+  sessionCheckTimer = window.setInterval(checkSessionAlive, sessionCheckDelay());
+}
+function checkSessionAlive(): void {
+  if (props.client.session === null) return;
+  void props.client.get('/api/session').catch(setFailure);
+}
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible') checkSessionAlive();
+}
+
 onMounted(() => {
   void refresh();
+  scheduleSessionCheck();
+  document.addEventListener('visibilitychange', onVisibilityChange);
+});
+
+onUnmounted(() => {
+  if (sessionCheckTimer !== null) window.clearInterval(sessionCheckTimer);
+  document.removeEventListener('visibilitychange', onVisibilityChange);
 });
 </script>
 
@@ -364,8 +513,8 @@ onMounted(() => {
         <button type="button" class="sidebar__item" @click="selectPage('workspaces')">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m14.5 4.5 2-2 5 5-2 2M13 6l5 5M4 20l3.2-.8L19.6 6.8l-2.4-2.4L4.8 16.8 4 20Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg><span class="sidebar__label">工具授权</span>
         </button>
-        <button type="button" class="sidebar__item sidebar__item--muted" disabled title="设置功能即将开放">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 1.4 2.4 2.7.6.6 2.7L19 10l-1.7 2 1.7 2-2.3 1.3-.6 2.7-2.7.6L12 21l-1.4-2.4-2.7-.6-.6-2.7L5 14l1.7-2L5 10l2.3-1.3.6-2.7 2.7-.6L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.8" /></svg><span class="sidebar__label">设置</span>
+        <button type="button" class="sidebar__item" :class="{ 'is-active': page === 'configuration' }" :aria-current="page === 'configuration' ? 'page' : undefined" @click="selectPage('configuration')">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 1.4 2.4 2.7.6.6 2.7L19 10l-1.7 2 1.7 2-2.3 1.3-.6 2.7-2.7.6L12 21l-1.4-2.4-2.7-.6-.6-2.7L5 14l1.7-2L5 10l2.3-1.3.6-2.7 2.7-.6L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.8" /></svg><span class="sidebar__label">配置</span>
         </button>
       </nav>
 
@@ -387,6 +536,7 @@ onMounted(() => {
             <svg v-if="pageMeta.icon === 'folder'" viewBox="0 0 32 32" fill="none"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h7l3 3h9A2.5 2.5 0 0 1 28 11.5v12a2.5 2.5 0 0 1-2.5 2.5h-19A2.5 2.5 0 0 1 4 23.5v-15Z" fill="currentColor" /></svg>
             <svg v-else-if="pageMeta.icon === 'history'" viewBox="0 0 32 32" fill="none"><path d="M6 14a10 10 0 1 1 2.8 7M6 6v8h8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" /><path d="M16 10v7l4 2" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" /></svg>
             <svg v-else-if="pageMeta.icon === 'clock'" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="11" stroke="currentColor" stroke-width="2.5" /><path d="M16 10v7l4 2" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" /></svg>
+            <svg v-else-if="pageMeta.icon === 'settings'" viewBox="0 0 32 32" fill="none"><path d="m16 4 2 3.4 4 .9.9 4L26 14l-2.8 3.1.8 4-4 1.2L18 26l-4-2-3.1 2.8-2.8-3 1-4-3.4-2 2-3.5-.8-4 4-.9L13 6l3 2 3-2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /><circle cx="16" cy="16" r="3.5" stroke="currentColor" stroke-width="2" /></svg>
             <svg v-else viewBox="0 0 32 32" fill="none"><path d="M12.5 19.5 19.5 12.5M9 23l-1.5 1.5a5 5 0 0 1-7-7l4-4a5 5 0 0 1 7 0M23 9l1.5-1.5a5 5 0 0 1 7 7l-4 4a5 5 0 0 1-7 0" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" /></svg>
           </span>
           <div><h1>{{ pageMeta.title }}</h1><p>{{ pageMeta.subtitle }}</p></div>
@@ -394,6 +544,7 @@ onMounted(() => {
         <div class="app-header__actions">
           <div class="connection-pill" :data-authenticated="clientSession !== null"><span aria-hidden="true"></span>{{ clientSession ? '已连接' : '未连接' }}</div>
           <button type="button" class="header-refresh" :disabled="clientSession === null || page === 'connection'" @click="refresh"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11a8 8 0 1 0 1 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" /><path d="M20 5v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>刷新状态</button>
+          <button v-if="clientSession !== null" type="button" class="header-refresh" :disabled="invitingBrowser" @click="connectAnotherBrowser">{{ invitingBrowser ? '正在生成…' : '连接其他浏览器' }}</button>
           <button type="button" class="header-icon-button" aria-label="帮助" title="帮助">?</button>
           <button type="button" class="header-icon-button header-icon-button--user" aria-label="退出控制台" title="退出控制台" :disabled="clientSession === null" @click="logout"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="3.2" fill="currentColor" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" fill="currentColor" /></svg></button>
         </div>
@@ -402,6 +553,15 @@ onMounted(() => {
       <div class="host__surface">
         <p v-if="error" class="host__message host__message--error" role="alert">{{ error }}</p>
         <p v-if="notice" class="host__message" role="status">{{ notice }}</p>
+        <section v-if="browserInvitationUrl" class="invite-card" aria-label="浏览器接入链接">
+          <strong>在另一浏览器打开此链接</strong>
+          <div class="invite-card__row">
+            <input :value="browserInvitationUrl" readonly aria-label="一次性浏览器接入链接" />
+            <button type="button" @click="copyBrowserInvitation">复制链接</button>
+            <button type="button" aria-label="关闭链接" @click="browserInvitationUrl = null">关闭</button>
+          </div>
+          <small>链接 5 分钟后过期，并且只能兑换一次。将它只复制到你自己的另一台本地浏览器。</small>
+        </section>
 
         <section v-if="page === 'recovery'" class="host__content">
           <label v-if="recoveryRows.length > 1" class="host__selector">
@@ -414,7 +574,8 @@ onMounted(() => {
         </section>
         <HistoryView v-else-if="page === 'history'" :data="historyData" :loading="busy" :error="error" @refresh="refresh" @open-recovery="({ operation_id }) => openRecovery(operation_id)" />
         <ConnectionView v-else-if="page === 'connection'" :client="client" :session-active="authenticated" />
-        <WorkspacesView v-else :now="now" :session="workspaceSession" :workspaces="workspaces" :workspace-access="workspaceAccess" :connection-enabled="connectionEnabled" :flags="statusReading?.capability_flags ?? null" :machine-line="machineLine(statusReading?.machine ?? null)" :busy="busy" :feedback="notice === null ? null : { ok: true, message: notice }" @register="registerWorkspace" @pause="changeWorkspace('pause', $event)" @resume="changeWorkspace('resume', $event)" @remove="changeWorkspace('remove', $event)" @reverify="changeWorkspace('reverify', $event)" @relocate="relocateWorkspace" @set-access="setWorkspaceAccess" @navigate="selectPage" @refresh="refresh" />
+        <ConfigurationView v-else-if="page === 'configuration'" :configuration="configuration" :loading="busy" :saving="savingConfiguration" @save="saveSessionConfiguration" @refresh="refresh" />
+        <WorkspacesView v-else-if="page === 'workspaces'" :now="now" :session="workspaceSession" :workspaces="workspaces" :workspace-access="workspaceAccess" :connection-enabled="connectionEnabled" :flags="statusReading?.capability_flags ?? null" :machine-line="machineLine(statusReading?.machine ?? null)" :busy="busy" :feedback="notice === null ? null : { ok: true, message: notice }" :pick-path="pickWorkspacePath" @register="registerWorkspace" @pause="changeWorkspace('pause', $event)" @resume="changeWorkspace('resume', $event)" @remove="changeWorkspace('remove', $event)" @reverify="changeWorkspace('reverify', $event)" @relocate="relocateWorkspace" @set-access="setWorkspaceAccess" @navigate="selectPage" @refresh="refresh" />
       </div>
     </div>
   </main>
@@ -483,6 +644,11 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px s
 .host__content, .history, .recovery { display: grid; gap: 1rem; }
 .host__message { margin: 0 0 14px; padding: 10px 13px; border: 1px solid #b8e7cf; border-radius: 8px; background: #effbf4; color: #197b4b; font-size: 13px; }
 .host__message--error { border-color: #f0c3c3; background: #fff3f3; color: #9e3333; }
+.invite-card { display: grid; gap: 8px; margin: 0 0 14px; padding: 13px; border: 1px solid #c9dcf6; border-radius: 9px; background: #f7fbff; color: #253c67; font-size: 13px; }
+.invite-card__row { display: flex; flex-wrap: wrap; gap: 8px; }
+.invite-card__row input { flex: 1 1 320px; min-width: 0; padding: 9px; border: 1px solid #d5e1ef; border-radius: 6px; background: #fff; color: #344b70; }
+.invite-card__row button { padding: 8px 12px; border: 1px solid #d5e1ef; border-radius: 6px; background: #fff; color: #23538f; font-size: 12px; font-weight: 700; }
+.invite-card small { color: #7185a3; }
 .host__selector { display: flex; gap: .75rem; align-items: center; padding: 11px 13px; border: 1px solid var(--app-line); border-radius: 8px; background: #fff; color: #5e7395; font-size: 13px; }
 .host__selector select { min-width: 24rem; padding: .5rem; border: 1px solid var(--app-line); border-radius: 6px; color: #253c67; }
 .recovery > *, .history > *, .detail__region, .detail__prose, .history__section, .recovery__versions, .recovery__repair, .recovery__ledger { border: 1px solid var(--app-line); border-radius: 10px; background: #fff; padding: 1rem; }

@@ -73,6 +73,8 @@ import {
 export type ControlEvent =
   | { readonly type: 'listening'; readonly origin: string }
   | { readonly type: 'bootstrap_minted'; readonly expires_at: number }
+  | { readonly type: 'browser_invitation_minted'; readonly session_id: string; readonly expires_at: number }
+  | { readonly type: 'session_settings_changed'; readonly session_id: string; readonly idle_timeout_ms: number; readonly absolute_timeout_ms: number | null }
   | { readonly type: 'session_established'; readonly session_id: string }
   | { readonly type: 'session_rejected'; readonly reason: 'NO_COOKIE' | 'UNKNOWN_OR_EXPIRED' }
   | { readonly type: 'session_revoked'; readonly session_id: string }
@@ -298,7 +300,7 @@ export class ControlServer {
         response.setHeader('Set-Cookie', clearCookieHeader());
         return this.#json(response, 401, {
           ok: false,
-          error: { code: 'NOT_AUTHORIZED', message: '控制台会话无效或已过期；请重新运行本地启动命令。' },
+          error: { code: 'NOT_AUTHORIZED', message: '本地会话无效或已过期；请从其它在线控制台获取新链接，或重新运行本地启动脚本。' },
         });
       }
     }
@@ -515,7 +517,6 @@ function unauthenticatedSession(): ControlSession {
     session_id: 'unauthenticated',
     created_at: 0,
     expires_at: 0,
-    last_seen_at: 0,
     csrf_token: '',
   };
 }

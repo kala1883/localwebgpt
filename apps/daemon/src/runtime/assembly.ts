@@ -70,6 +70,7 @@
  */
 
 import { arch, hostname, platform } from 'node:os';
+import path from 'node:path';
 
 import { LIMITS, newLocalId } from '@lwb/contracts';
 import type { CapabilityFlags } from '@lwb/contracts';
@@ -95,6 +96,7 @@ import type { AudienceSecrets, SessionEvent } from '@lwb/ipc';
 import { ControlServer, type ControlEvent } from '../control/control-plane.ts';
 import type { StaticControlAsset } from '../control/server.ts';
 import { createControlPlane } from '../control/control-plane.ts';
+import { pickWorkspacePath } from '../control/workspace-picker.ts';
 import { ControlSessionStore } from '../control/session.ts';
 import { registerApprovalOperations } from '../control/approvals.ts';
 import { registerChangeOperations } from '../control/changes.ts';
@@ -132,6 +134,7 @@ import {
   DAEMON_VERSION,
 } from './constants.ts';
 import { loadIpcSecrets, loadRuntimeKeys } from './credentials.ts';
+import { LocalConfigurationStore } from '../config/local-configuration.ts';
 import { startDataPipe, type DataPipe } from './ipc-server.ts';
 import { parseStartupOptions, type StartupOptions } from './options.ts';
 import { buildIdFromEnvironment } from './build-info.ts';
@@ -424,6 +427,16 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
       `模型侧连接 ${connection.record.id}（${connection.created ? '本次登记' : '已登记'}，` +
         `当前${connection.record.enabled ? '已启用' : '**停用**'}）。`,
     );
+    const configuration = LocalConfigurationStore.loadOrMigrate({
+      file_path: path.join(layout.config, 'local-configuration.json'),
+      repos,
+      model_connection_id: ADAPTER_CONNECTION_ID,
+    });
+    log(
+      `本机 JSON 配置就绪：空闲期限 ${configuration.sessionTimeouts.idle_timeout_ms === 0 ? '关闭' : `${String(configuration.sessionTimeouts.idle_timeout_ms)} ms`}，` +
+      `绝对期限 ${configuration.sessionTimeouts.absolute_timeout_ms === null ? '无限' : `${String(configuration.sessionTimeouts.absolute_timeout_ms)} ms`}；` +
+        `工作区配置 ${String(configuration.document.workspaces.length)} 条。`,
+    );
 
     // ---- 10. 原生护栏 ----
     const guard = getWinfsBackend();
@@ -589,7 +602,12 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
       store_root: layout.root,
       protected_refs: protectedRefs,
     });
-    const registry = new WorkspaceRegistry({ repos, probe: guard, environment });
+    const registry = new WorkspaceRegistry({
+      repos,
+      probe: guard,
+      environment,
+      onChange: () => configuration.refreshWorkspaceSnapshot(repos),
+    });
 
     const operations = new OperationRegistry();
     const facts: ToolSurfaceFacts = {
@@ -624,6 +642,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
 
     const surface = createToolSurface({
       repos,
+      configuration,
       registry,
       blobs,
       budgets,
@@ -659,6 +678,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
     registerWorkspaceOperations(operations, registry);
     registerWorkspaceAccessOperations(operations, {
       repos,
+      configuration,
       model_connection_id: ADAPTER_CONNECTION_ID,
     });
     registerConnectionOperations(operations, { repos });
@@ -683,10 +703,16 @@ export async function startDaemon(options: StartDaemonOptions): Promise<DaemonRu
     registerPauseOperations(operations, { repos, pause });
 
     // ---- 14. 控制平面 ----
-    const sessions = new ControlSessionStore({ port: startup.control_port });
+    const sessions = new ControlSessionStore({
+      port: startup.control_port,
+      sessionTtlMs: configuration.sessionTimeouts.absolute_timeout_ms,
+      idleTtlMs: configuration.sessionTimeouts.idle_timeout_ms,
+    });
     const plane = createControlPlane({
       operations,
       sessions,
+      configuration,
+      pick_workspace_path: pickWorkspacePath,
       ...(options.static_assets === undefined ? {} : { static_assets: options.static_assets }),
       port: startup.control_port,
       onEvent: (event) => logControlEvent(event, log),
@@ -875,6 +901,15 @@ function logControlEvent(event: ControlEvent, log: LogSink): void {
       return;
     case 'session_revoked':
       log(`控制台会话撤销：${event.session_id}。`);
+      return;
+    case 'browser_invitation_minted':
+      log(`已签发浏览器一次性接入链接：会话 ${event.session_id}，5 分钟后过期。`);
+      return;
+    case 'session_settings_changed':
+      log(
+        `控制台会话期限已更新：空闲期限 ${event.idle_timeout_ms === 0 ? '关闭' : `${String(event.idle_timeout_ms)} ms`}，` +
+          `绝对期限 ${event.absolute_timeout_ms === null ? '无限' : `${String(event.absolute_timeout_ms)} ms`}（会话 ${event.session_id}）。`,
+      );
       return;
     case 'csrf_rejected':
       // CSRF 失败**没有**理由字段：原因只可能是「头部缺失或不匹配」，

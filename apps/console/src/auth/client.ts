@@ -21,9 +21,9 @@
  *
  * ## CSRF 令牌只放在内存里
  *
- * 不进 `localStorage`、不进 `sessionStorage`。理由：那两个地方
- * 会被任何一次 XSS 读到，也会在磁盘上留下副本；而这个模块把它
- * 关在自己的闭包里，页面刷新即消失 —— 刷新后本来就要重新建立会话。
+ * 不进 `localStorage`、不进 `sessionStorage`。页面刷新后由同源的
+ * `GET /api/session` 用现有 HttpOnly cookie 恢复内存状态，不把 CSRF
+ * 令牌留在磁盘上。
  */
 
 import { CONTROL_CSRF_HEADER } from './constants.ts';
@@ -33,7 +33,7 @@ export interface ControlApiError {
   readonly status: number;
   readonly code: string;
   readonly message: string;
-  /** 会话过期（401）。上层据此提示「重新运行本地启动命令」。 */
+  /** 会话过期（401）。上层提示从其它在线窗口接入或重启本地服务。 */
   readonly session_expired: boolean;
 }
 

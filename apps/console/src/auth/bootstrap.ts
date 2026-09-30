@@ -108,7 +108,37 @@ export interface RedeemDependencies {
 export interface ConsoleSession {
   readonly session_id: string;
   readonly csrf_token: string;
-  readonly expires_at: number;
+  readonly expires_at: number | null;
+}
+
+/** 用当前浏览器已有的 HttpOnly cookie 恢复页面内存中的控制台会话。 */
+export async function resumeConsoleSession(deps: RedeemDependencies): Promise<ConsoleSession | null> {
+  const response = await deps.fetchImpl(`${deps.origin}/api/session`, {
+    method: 'GET',
+    credentials: 'same-origin',
+    headers: { Origin: deps.origin },
+    redirect: 'error',
+  });
+  if (response.status === 401) return null;
+  if (!response.ok) {
+    throw new Error(`控制台会话恢复失败（HTTP ${response.status}）。`);
+  }
+
+  const payload = (await response.json()) as {
+    readonly ok?: boolean;
+    readonly result?: { readonly session_id?: unknown; readonly csrf_token?: unknown; readonly expires_at?: unknown };
+  };
+  const result = payload.result;
+  if (
+    payload.ok !== true ||
+    result === undefined ||
+    typeof result.session_id !== 'string' ||
+    typeof result.csrf_token !== 'string' ||
+    (result.expires_at !== null && typeof result.expires_at !== 'number')
+  ) {
+    throw new Error('控制台会话恢复响应格式不正确。');
+  }
+  return { session_id: result.session_id, csrf_token: result.csrf_token, expires_at: result.expires_at };
 }
 
 /**
@@ -136,7 +166,7 @@ export async function redeemBootstrap(
   });
 
   if (!response.ok) {
-    throw new Error(`控制台会话建立失败（HTTP ${response.status}）。请重新运行本地启动命令。`);
+    throw new Error(`控制台会话建立失败（HTTP ${response.status}）。请重新生成浏览器接入链接，或重新运行本地启动脚本。`);
   }
 
   const payload = (await response.json()) as {
@@ -149,7 +179,7 @@ export async function redeemBootstrap(
     result === undefined ||
     typeof result.session_id !== 'string' ||
     typeof result.csrf_token !== 'string' ||
-    typeof result.expires_at !== 'number'
+    (result.expires_at !== null && typeof result.expires_at !== 'number')
   ) {
     throw new Error('控制台会话响应格式不正确。');
   }
@@ -164,12 +194,10 @@ export interface BootstrapEnvironment {
 }
 
 /**
- * 页面加载时调用：读令牌 → 抹片段 → 兑换。
+ * 页面加载时调用：读令牌 → 抹片段 → 恢复现有会话或兑换令牌。
  *
- * 返回 `null` 表示「这次加载不是一次控制台启动」（地址里没有令牌）。
- * 那不是错误 —— 操作者刷新页面、或者从书签打开控制台时都会走到这里，
- * 此时正确行为是让上层去走「重新运行本地启动命令」的提示，
- * 而不是抛一个错误。
+ * 返回 `null` 表示地址里没有令牌；调用方可用当前浏览器的会话 cookie 恢复登录。
+ * 没有可恢复的 cookie 也不是异常 —— 这是尚未连接的浏览器的正常状态。
  */
 export async function bootstrapConsoleSession(
   env: BootstrapEnvironment,
@@ -186,6 +214,10 @@ export async function bootstrapConsoleSession(
 
   // 先抹掉再兑换。见文件头注释。
   stripFragment(env.history, env.location.pathname);
+
+  // 在同一浏览器再次打开邀请链接时，复用仍有效的 cookie，避免覆盖已有会话。
+  const currentSession = await resumeConsoleSession({ fetchImpl: env.fetchImpl, origin: env.location.origin });
+  if (currentSession !== null) return currentSession;
 
   return redeemBootstrap(token, { fetchImpl: env.fetchImpl, origin: env.location.origin });
 }

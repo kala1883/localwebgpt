@@ -176,6 +176,7 @@ interface AccessFacts {
 
 export interface GuardDeps {
   readonly repos: Repositories;
+  readonly configuration?: ToolHandlerDeps['configuration'];
   readonly concurrency: ConcurrencyGate;
 }
 
@@ -235,6 +236,7 @@ async function runGuarded(
   const isTool = isToolOperation(operation);
   const leased = isTool && needsConcurrencyLease(operation);
   const budget = deps.budgets.forConnection(connectionId);
+  const authorizationRevisionBefore = deps.configuration?.authorizationRevision ?? null;
 
   const base = {
     tool: operation,
@@ -356,7 +358,15 @@ async function runGuarded(
     // 而后者才是此刻的实情。
     const withheld =
       (leased ? pauseWithheld(deps) : null) ??
-      recheck(guard.repos, operation, connectionId, workspaceId, before);
+      recheck(
+        guard.repos,
+        guard.configuration,
+        authorizationRevisionBefore,
+        operation,
+        connectionId,
+        workspaceId,
+        before,
+      );
     if (withheld !== null) {
       // 成功的结果被**撤回**。它读了文件、也记了出站账，但模型拿不到。
       // 审计里这些行必须是 `delivered=false`：内容没有出去，但**读了** ——
@@ -540,21 +550,31 @@ function pauseWithheld(deps: ToolHandlerDeps): Withheld | null {
  * 覆盖的情形：连接被停用、连接代次变化（重新启用也是代次变化）、
  * 工作区被停用、被移除、代次递增（重新授权、策略变更、根重定位）。
  *
- * **未覆盖，且理由是依赖而不是自证**：授权行本身在调用中途被改写。
- * `grants` 表没有代次列，而改写授权行的路径（控制台的登记/移除）
- * 会同时递增工作区代次，因此落在上面那一类里。这条推论依赖
- * `packages/workspaces` 的实现 —— 如果将来出现一条只改 grants 的路径，
- * 这一层不会发现它。写在这里是因为「这一层拦不住什么」与
- * 「这一层拦得住什么」一样需要被知道。
+ * JSON 授权配置另有单调 `authorization_revision`：任何工作区或工具授权变更
+ * 都会递增它，结果回传前复查到变化就撤回本次结果。会话期限变更不递增该值，
+ * 因为它不改变工作区数据权限。
  */
 function recheck(
   repos: Repositories,
+  configuration: ToolHandlerDeps['configuration'],
+  authorizationRevisionBefore: number | null,
   operation: string,
   connectionId: string,
   workspaceId: string | null,
   before: AccessFacts,
 ): Withheld | null {
   const now = readFacts(repos, connectionId, workspaceId);
+  if (
+    workspaceId !== null &&
+    configuration !== undefined &&
+    authorizationRevisionBefore !== null &&
+    configuration.authorizationRevision !== authorizationRevisionBefore
+  ) {
+    return {
+      code: 'WORKSPACE_GENERATION_CHANGED',
+      message: '工作区工具授权在本次调用期间发生变化；本次结果未发送。',
+    };
+  }
   if (now.connection_enabled === false) {
     return { code: 'CONNECTION_DISABLED', message: '该连接已被本地操作者停用；本次结果未发送。' };
   }
@@ -580,7 +600,9 @@ function recheck(
     };
   }
   if (operation === 'command_exec' && workspaceId !== null) {
-    const grant = repos.grants.find(connectionId, workspaceId);
+    const grant = configuration === undefined
+      ? repos.grants.find(connectionId, workspaceId)
+      : configuration.findGrant(connectionId, workspaceId);
     if (grant === null || !grant.enabled || !grant.capabilities.includes('command_exec')) {
       return { code: 'WORKSPACE_NOT_GRANTED', message: '命令执行授权已撤销；本次结果未发送。' };
     }

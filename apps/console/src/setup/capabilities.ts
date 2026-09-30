@@ -150,7 +150,7 @@ export function validateRegister(draft: RegisterDraft): RegisterValidation {
   const problems: string[] = [];
   if (draft.alias.trim().length === 0) problems.push('别名不能为空。');
   if (draft.path.trim().length === 0) {
-    problems.push('路径不能为空。浏览器不能替你选目录，请粘贴完整路径。');
+    problems.push('路径不能为空。请使用系统选择窗口或粘贴完整路径。');
   }
   const offer = modeOffers({
     direct_write: false,

@@ -12,7 +12,7 @@
  * ## 身份与判定都来自本进程之外
  *
  * 处理器不自己判断「这次调用能不能碰这个工作区」，它调
- * `resolveWorkspaceAccess()`（一条链：连接记录 → 授权行 → `decide()` →
+ * `resolveWorkspaceAccess()`（一条链：连接记录 → JSON 工具授权 → `decide()` →
  * 每次重新探测根身份的登记表）。处理器这一层的职责只有三件：
  * 校验入参形态、把判定结果交给 `@lwb/files` / `@lwb/search` /
  * `@lwb/git-reader`、把结果或错误装进信封。
@@ -339,7 +339,7 @@ function displayableAlias(alias: string): string {
  */
 function connectionFlags(connection: ConnectionRecord, deps: ToolHandlerDeps): CapabilityFlags {
     const base = capabilityFlagsFrom();
-  const recovery = usableWorkspaces(deps.repos, connection.id).some(
+    const recovery = usableWorkspaces(deps.repos, deps.configuration, connection.id).some(
     (workspace) => deps.capability_flags(workspace).recovery_required,
   );
   return { ...base, recovery_required: recovery };
@@ -446,7 +446,7 @@ async function workspaceList(input: unknown, context: RequestContext, deps: Tool
   return await asEnvelope(context, () => {
     parseInput('workspace_list', input);
     const connection = resolveConnection(context, deps);
-    const usable = usableWorkspaces(deps.repos, connection.id);
+    const usable = usableWorkspaces(deps.repos, deps.configuration, connection.id);
     const page = usable.slice(0, MAX_WORKSPACES_LISTED);
 
     return {
@@ -459,7 +459,9 @@ async function workspaceList(input: unknown, context: RequestContext, deps: Tool
         capabilities: deps.capability_flags(workspace),
         granted_tools: grantedToolsForWorkspace(
           workspace,
-          deps.repos.grants.find(connection.id, workspace.id),
+          deps.configuration === undefined
+            ? deps.repos.grants.find(connection.id, workspace.id)
+            : deps.configuration.findGrant(connection.id, workspace.id),
         ),
         generation: workspace.generation,
         single_file_path: singleFilePathOf(workspace),
@@ -657,7 +659,9 @@ function commandCancellationCode(
     if (deps.status().paused()) return 'PAUSED';
     const connection = deps.repos.connections.findById(connectionId);
     if (connection === null || !connection.enabled) return 'CONNECTION_DISABLED';
-    const grant = deps.repos.grants.find(connectionId, workspaceId);
+    const grant = deps.configuration === undefined
+      ? deps.repos.grants.find(connectionId, workspaceId)
+      : deps.configuration.findGrant(connectionId, workspaceId);
     if (grant === null || !grant.enabled || !grant.capabilities.includes('command_exec')) {
       return 'WORKSPACE_NOT_GRANTED';
     }
@@ -920,7 +924,7 @@ function presentedOf(
  * `root_generation`，而写入路径（LWB-027）在写每一个文件之前重新核对它。
  *
  * 在这里读工作区行**不构成预言机**：结果只进 `presented`，不进回答，
- * 而 `resolveWorkspaceAccess` 仍然先查授权行、后查工作区行，
+ * 而 `resolveWorkspaceAccess` 仍然先查 JSON 授权、后查工作区行，
  * 两种情形（不存在 / 未授权）的回答逐字不变。行不存在时给 `-1`：
  * 那个值在判定里必然与当前代次不等，因此是**失败关闭**，不是放行。
  */

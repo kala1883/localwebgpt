@@ -9,6 +9,7 @@
  *   → 操作者点开 → 控制台页面读取 location.hash 里的令牌
  *   → POST /api/session { token }        ← 令牌在**请求体**里，不在 URL 里
  *   → 服务端核对（一次性、未过期）→ Set-Cookie: __Host-lwb_console=lwb_sess_…（HttpOnly）
+ *   → 页面刷新时 GET /api/session 可用现有 cookie 恢复内存中的 CSRF 令牌
  *   → 之后每个请求靠 cookie 鉴权，变更请求另需 CSRF 头
  * ```
  *
@@ -47,15 +48,15 @@
  * 是为了避免将来有人把现状读成「批准链路已经完备」。
  */
 
-import { CONTROL_COOKIE_NAME, MAX_SESSIONS, NONCE_TTL_MS, SESSION_IDLE_TTL_MS, SESSION_TTL_MS, BOOTSTRAP_TTL_MS } from './constants.ts';
+import { CONTROL_COOKIE_NAME, NONCE_TTL_MS, SESSION_TTL_MS, BOOTSTRAP_TTL_MS } from './constants.ts';
 import { constantTimeEquals, hashToken, newControlToken } from './tokens.ts';
 
 export interface ControlSession {
   readonly session_id: string;
   readonly created_at: number;
-  readonly expires_at: number;
-  readonly last_seen_at: number;
-  /** CSRF 令牌。**只应出现在兑换响应体与请求头里**，不进日志、不进审计。 */
+  /** null means the absolute expiry is disabled; an enabled idle timeout can still expire it. */
+  readonly expires_at: number | null;
+  /** CSRF 令牌。只在会话建立/恢复响应体与请求头中使用，不进日志或审计。 */
   readonly csrf_token: string;
 }
 
@@ -92,10 +93,10 @@ export type NonceRejection =
 export interface SessionStoreOptions {
   readonly now?: () => number;
   readonly bootstrapTtlMs?: number;
-  readonly sessionTtlMs?: number;
+  readonly sessionTtlMs?: number | null;
+  /** 0 disables idle expiry. */
   readonly idleTtlMs?: number;
   readonly nonceTtlMs?: number;
-  readonly maxSessions?: number;
   /**
    * 拼启动 URL 用。
    *
@@ -110,7 +111,7 @@ interface StoredSession {
   readonly session_id: string;
   readonly csrf_token: string;
   readonly created_at: number;
-  readonly expires_at: number;
+  expires_at: number | null;
   last_seen_at: number;
 }
 
@@ -123,14 +124,16 @@ interface StoredNonce {
 }
 
 export class ControlSessionStore {
-  readonly #options: Required<Omit<SessionStoreOptions, 'now'>> & { readonly now: () => number };
-  /** tokenHash → 过期时间。**同一时刻最多只有一张未兑换的启动令牌**。 */
+  readonly #options: Required<Omit<SessionStoreOptions, 'now' | 'sessionTtlMs' | 'idleTtlMs'>> & { readonly now: () => number };
+  /** tokenHash → 过期时间。启动令牌短时有效且每张只可兑换一次。 */
   readonly #bootstraps = new Map<string, number>();
   /** cookieHash → 会话。键是摘要，因此这张表本身不是凭证。 */
   readonly #sessions = new Map<string, StoredSession>();
   /** nonceHash → 绑定。 */
   readonly #nonces = new Map<string, StoredNonce>();
   #sessionSeq = 0;
+  #sessionTtlMs: number | null;
+  #idleTtlMs: number;
   /**
    * 控制平面的实际监听端口。
    *
@@ -145,13 +148,28 @@ export class ControlSessionStore {
     this.#options = {
       now: options.now ?? Date.now,
       bootstrapTtlMs: options.bootstrapTtlMs ?? BOOTSTRAP_TTL_MS,
-      sessionTtlMs: options.sessionTtlMs ?? SESSION_TTL_MS,
-      idleTtlMs: options.idleTtlMs ?? SESSION_IDLE_TTL_MS,
       nonceTtlMs: options.nonceTtlMs ?? NONCE_TTL_MS,
-      maxSessions: options.maxSessions ?? MAX_SESSIONS,
       port: options.port,
     };
+    this.#sessionTtlMs = options.sessionTtlMs === undefined ? SESSION_TTL_MS : options.sessionTtlMs;
+    this.#idleTtlMs = options.idleTtlMs ?? 0;
     this.#port = options.port;
+  }
+
+  /** Apply new protected JSON settings to existing and future sessions. */
+  configureTimeouts(options: { readonly sessionTtlMs: number | null; readonly idleTtlMs: number }): void {
+    if (
+      (options.sessionTtlMs !== null && (!Number.isSafeInteger(options.sessionTtlMs) || options.sessionTtlMs < 1)) ||
+      !Number.isSafeInteger(options.idleTtlMs) || options.idleTtlMs < 0 ||
+      (options.idleTtlMs > 0 && options.sessionTtlMs !== null && options.idleTtlMs > options.sessionTtlMs)
+    ) throw new Error('会话期限配置不合法。');
+
+    this.#sessionTtlMs = options.sessionTtlMs;
+    this.#idleTtlMs = options.idleTtlMs;
+    for (const stored of this.#sessions.values()) {
+      stored.expires_at = this.#sessionTtlMs === null ? null : stored.created_at + this.#sessionTtlMs;
+    }
+    this.#sweep();
   }
 
   /**
@@ -179,17 +197,27 @@ export class ControlSessionStore {
   /**
    * 签发一张启动令牌。
    *
-   * **签发新的会作废所有旧的未兑换令牌。** 理由是「有效的凭证越少越好」：
-   * 操作者每点一次「重新打开控制台」，终端里就多一行 URL；如果旧的那行
-   * 仍然有效，那些 URL 会留在终端回滚缓冲、剪贴板、甚至别人拍的照片里，
-   * 每一份都是一座能进控制台的门。保留「最近一张」使这件事可以推理：
-   * **终端里最后打印的那一行才是有效的。**
-   *
-   * 代价是操作者不能在两个终端里各开一个控制台 —— 但他并不需要：
-   * 一个会话可以被多个标签页共用。
+   * 启动签发会清除旧的未兑换令牌；额外浏览器的邀请由 `mintInvitation()`
+   * 单独签发，允许并行存在。两种令牌都只有 5 分钟有效期，且每张只能兑换一次。
    */
   mintBootstrap(): BootstrapTicket {
+    this.#sweep();
     this.#bootstraps.clear();
+    return this.#mintBootstrap();
+  }
+
+  /**
+   * 为已登录控制台签发额外浏览器接入令牌。
+   *
+   * 它与启动令牌一样是 5 分钟有效、兑换一次即失效；可以并行签发，
+   * 因为操作者可能要把不同链接分别贴到多个浏览器里。
+   */
+  mintInvitation(): BootstrapTicket {
+    this.#sweep();
+    return this.#mintBootstrap();
+  }
+
+  #mintBootstrap(): BootstrapTicket {
     const token = newControlToken('bootstrap');
     const expiresAt = this.#options.now() + this.#options.bootstrapTtlMs;
     this.#bootstraps.set(hashToken(token), expiresAt);
@@ -227,15 +255,6 @@ export class ControlSessionStore {
     this.#bootstraps.delete(key);
     if (expiresAt === undefined || expiresAt <= this.#options.now()) return null;
 
-    // 会话数上限：超出时先清掉最久未活动的已过期会话；仍然超出则拒绝。
-    // 拒绝而不是「踢掉最旧的」——踢掉别人正在用的会话会让操作者
-    // 莫名其妙地被登出，而拒绝只影响这一次新登录（他可以关掉旧标签页再试）。
-    this.#sweep();
-    if (this.#sessions.size >= this.#options.maxSessions) {
-      this.#sweep(true);
-      if (this.#sessions.size >= this.#options.maxSessions) return null;
-    }
-
     const now = this.#options.now();
     this.#sessionSeq += 1;
     const cookieValue = newControlToken('session');
@@ -245,7 +264,7 @@ export class ControlSessionStore {
       session_id: `s${this.#sessionSeq}-${hashToken(cookieValue).slice(0, 12)}`,
       csrf_token: newControlToken('csrf'),
       created_at: now,
-      expires_at: now + this.#options.sessionTtlMs,
+      expires_at: this.#sessionTtlMs === null ? null : now + this.#sessionTtlMs,
       last_seen_at: now,
     };
     this.#sessions.set(hashToken(cookieValue), session);
@@ -254,10 +273,9 @@ export class ControlSessionStore {
   }
 
   /**
-   * 用 cookie 值鉴权。成功时推后空闲期限并返回会话视图。
+   * 用 cookie 值鉴权；空闲期限为 0 时只受绝对期限限制。
    *
-   * 返回的是**副本**（`publicView`），不是内部对象：内部对象带着
-   * `last_seen_at` 的可变字段，交出去就意味着调用方可以改它。
+   * 返回的是**副本**（`publicView`），不是内部对象。
    */
   authenticate(cookieValue: string | undefined): ControlSession | null {
     if (cookieValue === undefined || cookieValue.length === 0) return null;
@@ -266,7 +284,10 @@ export class ControlSessionStore {
     if (stored === undefined) return null;
 
     const now = this.#options.now();
-    if (stored.expires_at <= now || stored.last_seen_at + this.#options.idleTtlMs <= now) {
+    if (
+      (stored.expires_at !== null && stored.expires_at <= now) ||
+      (this.#idleTtlMs > 0 && stored.last_seen_at + this.#idleTtlMs <= now)
+    ) {
       this.#sessions.delete(key);
       return null;
     }
@@ -372,18 +393,17 @@ export class ControlSessionStore {
     }
   }
 
-  /**
-   * 清理过期项。`all` 为真时连**未**过期的会话也一并清理 ——
-   * 只用在「会话数已达上限、需要腾位置」这一处。
-   */
-  #sweep(all = false): void {
+  /** 清理过期项；仍有效的浏览器会话不会因其它浏览器连接而被踢下线。 */
+  #sweep(): void {
     const now = this.#options.now();
     for (const [key, expiresAt] of this.#bootstraps) {
       if (expiresAt <= now) this.#bootstraps.delete(key);
     }
     for (const [key, stored] of this.#sessions) {
-      const idleDead = stored.last_seen_at + this.#options.idleTtlMs <= now;
-      if (all || stored.expires_at <= now || idleDead) {
+      if (
+        (stored.expires_at !== null && stored.expires_at <= now) ||
+        (this.#idleTtlMs > 0 && stored.last_seen_at + this.#idleTtlMs <= now)
+      ) {
         this.#sessions.delete(key);
         this.#forgetNoncesOf(stored.session_id);
       }
@@ -399,7 +419,6 @@ function publicView(stored: StoredSession): ControlSession {
     session_id: stored.session_id,
     created_at: stored.created_at,
     expires_at: stored.expires_at,
-    last_seen_at: stored.last_seen_at,
     csrf_token: stored.csrf_token,
   };
 }

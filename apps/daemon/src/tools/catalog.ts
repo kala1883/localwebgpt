@@ -66,33 +66,90 @@ const AVAILABILITY: Readonly<Record<ImplementedToolName, AvailabilityRule>> = {
   command_exec: { kind: 'workspace_grant', capabilities: ['command_exec'], directory_only: true },
 };
 
+const WORKSPACE_TOOL_NAMES = Object.entries(AVAILABILITY)
+  .filter(([, rule]) => rule.kind === 'workspace_grant')
+  .map(([name]) => name as ImplementedToolName);
+
+/** Grant capabilities 的规范序列化形式 → 工作区实际可授权的 MCP 工具名。 */
+export function workspaceToolsForCapabilities(
+  capabilities: readonly string[],
+  kind: WorkspaceRecord['kind'],
+  mode: WorkspaceRecord['mode'],
+): readonly ImplementedToolName[] {
+  return WORKSPACE_TOOL_NAMES.filter((name) => {
+    const rule = AVAILABILITY[name];
+    if (rule.kind !== 'workspace_grant') return false;
+    if (rule.directory_only && kind !== 'directory') return false;
+    if (
+      (rule.capabilities.includes('propose') || rule.capabilities.includes('command_exec')) &&
+      mode !== 'read_propose_apply_with_local_approval'
+    ) return false;
+    return rule.capabilities.every((capability) => capabilities.includes(capability));
+  });
+}
+
+/** JSON 配置中的工具名 → SQLite grant 使用的最小能力集合。 */
+export function capabilitiesForWorkspaceTools(
+  tools: readonly string[],
+  kind: WorkspaceRecord['kind'],
+  mode: WorkspaceRecord['mode'],
+): readonly ('read' | 'list' | 'search' | 'git_read' | 'propose' | 'command_exec')[] {
+  if (new Set(tools).size !== tools.length) throw new Error('工作区工具配置含重复名称。');
+  const capabilities = new Set<'read' | 'list' | 'search' | 'git_read' | 'propose' | 'command_exec'>();
+  for (const rawName of tools) {
+    if (!WORKSPACE_TOOL_NAMES.includes(rawName as ImplementedToolName)) {
+      throw new Error('工作区工具配置含未知或非工作区工具。');
+    }
+    const name = rawName as ImplementedToolName;
+    const rule = AVAILABILITY[name];
+    if (rule.kind !== 'workspace_grant') throw new Error('工作区工具配置无效。');
+    if (rule.directory_only && kind !== 'directory') throw new Error('单文件工作区不能授权目录命令工具。');
+    if (
+      (rule.capabilities.includes('propose') || rule.capabilities.includes('command_exec')) &&
+      mode !== 'read_propose_apply_with_local_approval'
+    ) throw new Error('只读工作区不能授权修改或命令工具。');
+    for (const capability of rule.capabilities) {
+      if (
+        capability !== 'read' && capability !== 'list' && capability !== 'search' &&
+        capability !== 'git_read' && capability !== 'propose' && capability !== 'command_exec'
+      ) throw new Error('工作区工具映射了非工作区授权能力。');
+      capabilities.add(capability);
+    }
+  }
+  return (['read', 'list', 'search', 'git_read', 'propose', 'command_exec'] as const)
+    .filter((item) => capabilities.has(item));
+}
+
+/** 即使工作区已暂停，也保留其配置中的 grant 工具，用于恢复后继续生效。 */
+export function configuredToolsForWorkspace(
+  workspace: WorkspaceRecord,
+  grant: GrantRecord | null,
+): readonly ImplementedToolName[] {
+  if (grant === null || !grant.enabled) return [];
+  return workspaceToolsForCapabilities(grant.capabilities, workspace.kind, workspace.mode);
+}
+
 /** 计算单个工作区可挂给 MCP 的 workspace-scoped 工具，不跨根合并 grant。 */
 export function grantedToolsForWorkspace(
   workspace: WorkspaceRecord,
   grant: GrantRecord | null,
 ): readonly ToolName[] {
   if (!workspace.enabled || workspace.removed_at !== null || grant === null || !grant.enabled) return [];
-
-  return TOOL_NAMES.filter((name): name is ImplementedToolName => {
-    if (!isImplementedToolName(name)) return false;
-    const rule = AVAILABILITY[name];
-    if (rule.kind === 'connection') return false;
-    if (rule.directory_only && workspace.kind !== 'directory') return false;
-    if (
-      (rule.capabilities.includes('propose') || rule.capabilities.includes('command_exec')) &&
-      workspace.mode !== 'read_propose_apply_with_local_approval'
-    ) return false;
-    return rule.capabilities.every((capability) => grant.capabilities.includes(capability));
-  });
+  return configuredToolsForWorkspace(workspace, grant);
 }
 
 export function catalogFor(context: RequestContext, deps: ToolHandlerDeps): readonly CatalogEntry[] {
   const connection = resolveConnection(context, deps);
-  const usable = usableWorkspaces(deps.repos, connection.id);
+  const usable = usableWorkspaces(deps.repos, deps.configuration, connection.id);
   const toolsByWorkspace = new Map(
     usable.map((workspace) => [
       workspace.id,
-      new Set(grantedToolsForWorkspace(workspace, deps.repos.grants.find(connection.id, workspace.id))),
+      new Set(grantedToolsForWorkspace(
+        workspace,
+        deps.configuration === undefined
+          ? deps.repos.grants.find(connection.id, workspace.id)
+          : deps.configuration.findGrant(connection.id, workspace.id),
+      )),
     ]),
   );
 

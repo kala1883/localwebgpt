@@ -7,7 +7,7 @@
  * ```
  * IPC 凭据（audience 派生密钥，握手时验过）
  *   → 连接记录（本机注册、已启用、principal_kind 与通道相符）
- *     → 授权行 grants（连接 × 工作区，逐工作区一条）
+ *     → 受保护 JSON 中该连接 × 工作区的 authorized_tools
  *       → 策略判定 decide()（连接 / 工作区 grant / 代次 / 文件规则）
  *         → 工作区登记表 authorizeAccess()（根身份每次重新探测）
  * ```
@@ -22,28 +22,28 @@
  * （`packages/contracts/src/tools.ts`），**多给一个字段就会被拒绝**。
  * 因此「模型不能声称自己是另一个连接」不是一条检查的结果，是**无从传入**。
  *
- * ## 为什么先查授权行、后查工作区行
+ * ## 为什么先查 JSON 授权、后查工作区行
  *
- * 顺序是刻意的，且理由是**信息泄露**而不是性能：如果先查工作区表，
- * 那么对同一个不存在的 workspace_id，有授权的连接会拿到 `NOT_FOUND`、
+ * 顺序是刻意的，且理由是**信息泄露**而不是性能：如果先查 SQLite 工作区表，
+ * 那么对同一个不存在的 workspace_id，有配置授权的连接会拿到 `NOT_FOUND`、
  * 没授权的连接会拿到 `WORKSPACE_NOT_GRANTED` —— 两个不同的回答就是一个
- * 「本机是否存在这个 id」的预言机。先查授权行，未授权的连接在读到工作区表
+ * 「本机是否存在这个 id」的预言机。先查 JSON 授权，未授权的连接在读到工作区表
  * **之前**就被拒，两种情形回答完全一样。
  *
  * ## 为什么授权视图按 (连接 × 工作区) 收窄
  *
- * `ConnectionView.granted_capabilities` 取的是**这一条授权行**的能力，
- * 而不是该连接所有授权行的并集。这不是"藏信息"，是取事实：本次动作绑定在
- * 一个工作区上，关于**那个工作区**的事实就是那一条授权行。
+ * `ConnectionView.granted_capabilities` 取的是 JSON 中**这一工作区**的能力，
+ * 而不是该连接所有工作区配置的并集。这不是"藏信息"，是取事实：本次动作绑定在
+ * 一个工作区上，关于**那个工作区**的事实就是那一项配置。
  *
  * 反过来的写法会制造一个真实的越权：连接 C 在 ws-A 上有 `read`、在 ws-B 上有
  * `git_read`，并集是 `['read','git_read']`，于是 C 用 ws-A 就能跑 `git_status`。
  * 逐工作区收窄让这件事在结构上不成立 —— 判定拿到的能力集合里根本
- * 不存在另一条授权行的内容。
+ * 不存在另一条授权配置的内容。
  *
  * 同理，`granted_workspace_ids` 只放**本次要访问的这一个** id。
- * 「列工作区」（`workspace_list`）是另一种动作：它枚举的是授权行本身，
- * 因此那里用的是 `grantedWorkspaceIds()`（一个 id 列表），
+ * 「列工作区」（`workspace_list`）是另一种动作：它枚举的是配置中的授权项，
+ * 因此那里用的是 `grantedWorkspaceIds()`（JSON 配置中的 id 列表），
  * 而**不是**一个 `ConnectionView` —— 并集形态的 `ConnectionView`
  * 在本进程里根本不存在，也就没有机会被误传给 `decide()`。
  *
@@ -51,7 +51,7 @@
  *
  * `capability_flags` 由装配根给出，本层不自造、也不从请求参数或工作区行推导。
  * 它们只描述实现状态；真正的数据范围和动作权限来自本次解析出的逐连接、
- * 逐工作区 grant，`recovery_required` 则是独立的本地恢复状态。
+ * JSON 逐工作区工具授权，`recovery_required` 则是独立的本地恢复状态。
  */
 
 import { BridgeError, CAPABILITY_NAMES } from '@lwb/contracts';
@@ -72,6 +72,7 @@ import type { ConnectionRecord, GrantRecord, Repositories, WorkspaceRecord } fro
 import type { Audience, RequestContext } from '@lwb/ipc';
 import type { AuthorizedRoot, WorkspaceRegistry } from '@lwb/workspaces';
 import type { EgressBudget, EgressBudgetStore } from '@lwb/egress';
+import type { LocalConfigurationStore } from '../config/local-configuration.ts';
 
 // ---------------------------------------------------------------------------
 // 依赖
@@ -79,6 +80,8 @@ import type { EgressBudget, EgressBudgetStore } from '@lwb/egress';
 
 export interface ToolAccessDeps {
   readonly repos: Repositories;
+  /** Always injected in production; omitted by isolated legacy policy fixtures. */
+  readonly configuration?: LocalConfigurationStore;
   readonly registry: WorkspaceRegistry;
   /** 每连接一份出站预算。**不按工作区记**，见 `packages/egress/src/budget.ts`。 */
   readonly budgets: EgressBudgetStore;
@@ -104,7 +107,7 @@ export interface ToolAccessDeps {
 const KNOWN_CAPABILITIES: ReadonlySet<string> = new Set<string>(CAPABILITY_NAMES);
 
 /**
- * 授权行里的能力字符串 → 契约能力名。
+ * JSON 工具配置展开出的能力字符串 → 契约能力名。
  *
  * 认不出的名字被**丢掉**，而丢掉的方向是拒绝：本次动作需要的能力不在
  * 结果里，`decide()` 就会报 `CAPABILITY_NOT_GRANTED`。
@@ -171,10 +174,13 @@ export function resolveConnection(context: RequestContext, deps: ToolAccessDeps)
   return record;
 }
 
-/** 本连接被授权的工作区 id（**由授权行得出，不由工作区表得出结论**）。 */
-export function grantedWorkspaceIds(repos: Repositories, connectionId: string): readonly string[] {
-  return repos.grants
-    .listByConnection(connectionId)
+/** 本连接被授权的工作区 id（**由 JSON 工具配置得出，不由工作区表得出结论**）。 */
+export function grantedWorkspaceIds(
+  repos: Repositories,
+  configuration: LocalConfigurationStore | undefined,
+  connectionId: string,
+): readonly string[] {
+  return (configuration?.listGrantsByConnection(connectionId) ?? repos.grants.listByConnection(connectionId))
     .filter((grant) => grant.enabled)
     .map((grant) => grant.workspace_id);
 }
@@ -189,14 +195,22 @@ export function grantedWorkspaceIds(repos: Repositories, connectionId: string): 
  * 工具清单和具体调用都以这份已授权 workspace 列表为边界，之后再按动作 grant
  * 作细分；本函数不判断目录磁盘当前是否可达。
  */
-export function usableWorkspaces(repos: Repositories, connectionId: string): readonly WorkspaceRecord[] {
+export function usableWorkspaces(
+  repos: Repositories,
+  configuration: LocalConfigurationStore | undefined,
+  connectionId: string,
+): readonly WorkspaceRecord[] {
   const out: WorkspaceRecord[] = [];
-  for (const id of grantedWorkspaceIds(repos, connectionId)) {
+  for (const id of grantedWorkspaceIds(repos, configuration, connectionId)) {
     const workspace = repos.workspaces.findById(id);
-    // 授权行已被过滤过一次（`grantedWorkspaceIds` 只返回 enabled 的），
+    // JSON 授权已被过滤过一次（`grantedWorkspaceIds` 只返回有工具的工作区），
     // 这里再排掉「已移除」：软删除的行仍在表里，而对调用方来说
     // 它与不存在没有区别。
-    if (workspace === null || workspace.removed_at !== null) continue;
+    if (
+      workspace === null ||
+      workspace.removed_at !== null ||
+      (configuration !== undefined && !configuration.matchesWorkspace(workspace))
+    ) continue;
     out.push(workspace);
   }
   return out;
@@ -258,8 +272,10 @@ export async function resolveWorkspaceAccess(
 ): Promise<WorkspaceAccess> {
   const connection = resolveConnection(context, deps);
 
-  // 第一步：授权行。刻意排在读工作区行**之前**，理由见文件头。
-  const grant = deps.repos.grants.find(connection.id, request.workspace_id);
+  // 第一步：JSON 工具授权。刻意排在读工作区行**之前**，理由见文件头。
+  const grant = deps.configuration === undefined
+    ? deps.repos.grants.find(connection.id, request.workspace_id)
+    : deps.configuration.findGrant(connection.id, request.workspace_id);
   if (grant === null || !grant.enabled) {
     throw new BridgeError('WORKSPACE_NOT_GRANTED', '当前连接未获准访问该工作区。');
   }
@@ -274,6 +290,9 @@ export async function resolveWorkspaceAccess(
     // 但对调用方来说它和不存在没有区别，而 `PAUSED`（策略层对 paused 的回答）
     // 会把它说成「暂停」—— 那是不准确的。
     throw new BridgeError('WORKSPACE_NOT_GRANTED', '该工作区已被本地操作者移除。');
+  }
+  if (deps.configuration !== undefined && !deps.configuration.matchesWorkspace(workspace)) {
+    throw new BridgeError('STORAGE_UNAVAILABLE', '工作区状态与受保护 JSON 配置不一致，已拒绝访问。');
   }
 
   // 第三步：策略判定。纯函数，不碰磁盘。

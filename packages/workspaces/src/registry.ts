@@ -80,6 +80,8 @@ export interface WorkspaceRegistryOptions {
   readonly repos: Repositories;
   readonly probe: RootProbe;
   readonly environment: WorkspaceEnvironment;
+  /** Persist the canonical local JSON workspace configuration after a successful mutation. */
+  readonly onChange?: () => void;
   /** 新工作区 id 的生成器。默认 `ws_<32 位十六进制>`。 */
   readonly newId?: () => string;
   readonly now?: () => string;
@@ -197,6 +199,7 @@ export class WorkspaceRegistry {
   readonly #environment: WorkspaceEnvironment;
   readonly #newId: () => string;
   readonly #now: () => string;
+  readonly #onChange: (() => void) | undefined;
 
   constructor(options: WorkspaceRegistryOptions) {
     this.#repos = options.repos;
@@ -204,6 +207,7 @@ export class WorkspaceRegistry {
     this.#environment = options.environment;
     this.#newId = options.newId ?? defaultWorkspaceId;
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#onChange = options.onChange;
   }
 
   // --- 登记 -------------------------------------------------------------
@@ -291,6 +295,7 @@ export class WorkspaceRegistry {
       mode: record.mode,
       generation: record.generation,
     });
+    this.#onChange?.();
     return record;
   }
 
@@ -301,6 +306,7 @@ export class WorkspaceRegistry {
     this.#requireLocal(origin);
     const record = this.#repos.workspaces.setEnabled(workspaceId, false);
     this.#audit('workspace.pause', record, 'allow', { generation: record.generation });
+    this.#onChange?.();
     return record;
   }
 
@@ -320,6 +326,7 @@ export class WorkspaceRegistry {
     this.#refuseIfRootChanged(await this.verifyRootIdentity(workspaceId), workspaceId);
     const record = this.#repos.workspaces.setEnabled(workspaceId, true);
     this.#audit('workspace.resume', record, 'allow', { generation: record.generation });
+    this.#onChange?.();
     return record;
   }
 
@@ -338,6 +345,7 @@ export class WorkspaceRegistry {
     this.#requireLocal(origin);
     const record = this.#repos.workspaces.markRemoved(workspaceId);
     this.#audit('workspace.remove', record, 'allow', { generation: record.generation });
+    this.#onChange?.();
     return record;
   }
 
@@ -387,6 +395,7 @@ export class WorkspaceRegistry {
           result: 'relocated',
           generation: after.generation,
         });
+        this.#onChange?.();
         return { kind: 'relocated', workspace: after, from: outcome.expected, to: outcome.observed };
       }
     }
@@ -453,6 +462,7 @@ export class WorkspaceRegistry {
       root_file_id: collected.facts.file_id,
     });
     this.#audit('workspace.relocate', record, 'allow', { generation: record.generation });
+    this.#onChange?.();
     return record;
   }
 

@@ -42,6 +42,7 @@ import {
   type ControlServerOptions,
   type StaticControlAsset,
 } from './server.ts';
+import type { LocalConfigurationStore } from '../config/local-configuration.ts';
 
 /** 会改变本机状态的控制操作。变更类路由要求 CSRF 头与一次性 nonce。 */
 export const MUTATING_OPERATIONS: readonly string[] = [
@@ -128,6 +129,9 @@ export const READ_ONLY_OPERATIONS: readonly string[] = [
 export interface ControlPlaneOptions {
   readonly operations: OperationRegistry;
   readonly sessions: ControlSessionStore;
+  readonly configuration?: LocalConfigurationStore;
+  /** 打开本机系统路径选择器；可选以便不托管网页的控制平面不暴露该接口。 */
+  readonly pick_workspace_path?: (kind: 'directory' | 'file') => Promise<string | null>;
   readonly static_assets?: ReadonlyMap<string, StaticControlAsset>;
   readonly port?: number;
   readonly onEvent?: (event: ControlEvent) => void;
@@ -200,6 +204,36 @@ function buildRoutes(options: ControlPlaneOptions, sessions: ControlSessionStore
   });
 
   table.register({
+    method: 'GET',
+    path: '/api/session',
+    capability: 'audit.read',
+    mutating: false,
+    // 同源页面刷新时凭 HttpOnly cookie 恢复内存态 CSRF；跨站脚本读不到此响应。
+    handler: ({ session }) => ({
+      session_id: session.session_id,
+      csrf_token: session.csrf_token,
+      expires_at: session.expires_at,
+    }),
+  });
+
+  table.register({
+    method: 'POST',
+    path: '/api/session/invitations',
+    capability: 'audit.read',
+    // 签发邀请需要有效会话与 CSRF，但不改变工作区状态，不消耗操作 nonce。
+    mutating: false,
+    handler: ({ session }) => {
+      const invitation = sessions.mintInvitation();
+      options.onEvent?.({
+        type: 'browser_invitation_minted',
+        session_id: session.session_id,
+        expires_at: invitation.expires_at,
+      });
+      return { url: invitation.url, expires_at: invitation.expires_at };
+    },
+  });
+
+  table.register({
     method: 'DELETE',
     path: '/api/session',
     capability: undefined,
@@ -230,6 +264,41 @@ function buildRoutes(options: ControlPlaneOptions, sessions: ControlSessionStore
     }),
   });
 
+  const configuration = options.configuration;
+  if (configuration !== undefined) {
+    table.register({
+      method: 'GET',
+      path: '/api/config',
+      capability: 'audit.read',
+      mutating: false,
+      handler: () => configuration.document,
+    });
+
+    table.register({
+      method: 'POST',
+      path: '/api/config/session',
+      capability: 'workspaces.manage',
+      mutating: true,
+      handler: ({ body, session }) => {
+        const updated = configuration.updateSessionTimeouts({
+          idle_timeout_ms: body['idle_timeout_ms'],
+          absolute_timeout_ms: body['absolute_timeout_ms'],
+        });
+        sessions.configureTimeouts({
+          idleTtlMs: updated.idle_timeout_ms,
+          sessionTtlMs: updated.absolute_timeout_ms,
+        });
+        options.onEvent?.({
+          type: 'session_settings_changed',
+          session_id: session.session_id,
+          idle_timeout_ms: updated.idle_timeout_ms,
+          absolute_timeout_ms: updated.absolute_timeout_ms,
+        });
+        return configuration.document;
+      },
+    });
+  }
+
   // ---- 一次性 nonce ----
 
   table.register({
@@ -254,6 +323,26 @@ function buildRoutes(options: ControlPlaneOptions, sessions: ControlSessionStore
       return { nonce: issued.nonce, expires_at: issued.expires_at, digest };
     },
   });
+
+  // ---- 本机路径选择器：只返回用户刚选的路径，不登记或授权工作区 ----
+
+  const pickWorkspacePath = options.pick_workspace_path;
+  if (pickWorkspacePath !== undefined) {
+    table.register({
+      method: 'POST',
+      path: '/api/workspaces/pick',
+      capability: 'workspaces.manage',
+      // 选择路径不会改变工作区或文件状态；仍要求会话与 CSRF，但不消耗变更 nonce。
+      mutating: false,
+      handler: async ({ body }) => {
+        const kind = body['kind'];
+        if (kind !== 'directory' && kind !== 'file') {
+          throw new BridgeError('INVALID_ARGUMENT', '字段 kind 必须是 directory 或 file。');
+        }
+        return { path: await pickWorkspacePath(kind) };
+      },
+    });
+  }
 
   // ---- 控制操作：由能力表推导，逐条映射 ----
 

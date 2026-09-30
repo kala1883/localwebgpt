@@ -31,6 +31,7 @@ export const HARD_DENIED_BASENAMES: readonly string[] = [
   'credentials',
   'credentials.json',
   'secrets.json',
+  'local-configuration.json',
   '.npmrc',
   '.pypirc',
   '.netrc',

@@ -26,6 +26,7 @@ export {
   BOOTSTRAP_FRAGMENT_KEY,
   bootstrapConsoleSession,
   isLoopbackOrigin,
+  resumeConsoleSession,
   readBootstrapToken,
   redeemBootstrap,
   stripFragment,

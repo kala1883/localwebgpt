@@ -1,5 +1,5 @@
 import { createApp } from 'vue';
-import { bootstrapConsoleSession } from '../src/auth/bootstrap.ts';
+import { bootstrapConsoleSession, resumeConsoleSession } from '../src/auth/bootstrap.ts';
 import { ControlClient } from '../src/auth/client.ts';
 import ConsoleHostView from '../views/ConsoleHostView.vue';
 
@@ -8,7 +8,7 @@ async function start(): Promise<void> {
   const client = new ControlClient({ origin, fetchImpl: window.fetch.bind(window) });
   let startupMessage: string | null = null;
   try {
-    const session = await bootstrapConsoleSession({
+    const environment = {
       location: {
         hash: window.location.hash,
         pathname: window.location.pathname,
@@ -16,9 +16,11 @@ async function start(): Promise<void> {
       },
       history: window.history,
       fetchImpl: window.fetch.bind(window),
-    });
+    };
+    const session = await bootstrapConsoleSession(environment) ??
+      await resumeConsoleSession({ fetchImpl: environment.fetchImpl, origin });
     if (session !== null) client.setSession(session);
-    else startupMessage = '请从 daemon 终端复制本次启动链接，在本机浏览器中打开以建立控制台会话。';
+    else startupMessage = '当前浏览器没有有效会话。请从仍已连接的控制台生成浏览器接入链接，或重新运行本地启动脚本。';
   } catch (error) {
     startupMessage = error instanceof Error ? error.message : '控制台会话建立失败。';
   }
