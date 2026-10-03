@@ -20,6 +20,51 @@ import {
 } from '../../apps/daemon/src/lifecycle/tunnel-supervisor.ts';
 
 describe('local Secure MCP Tunnel launch contract', () => {
+  it('forwards CMD validation from another directory and rejects unsupported Node before loading credentials', async (context) => {
+    if (process.platform !== 'win32') {
+      context.skip('CMD launcher validation is Windows-only.');
+      return;
+    }
+
+    const root = await mkdtemp(path.join(tmpdir(), 'lwb cmd launch '));
+    const secretSentinel = 'not-a-real-runtime-key-node-version-test';
+    try {
+      const scripts = path.join(root, 'scripts', 'windows');
+      const fakeBin = path.join(root, 'fake-bin');
+      await mkdir(scripts, { recursive: true });
+      await mkdir(fakeBin);
+      await copyFile(new URL('../../Start-LocalWebGPT.cmd', import.meta.url), path.join(root, 'Start-LocalWebGPT.cmd'));
+      await copyFile(new URL('../../scripts/windows/Start-LocalWebGPT.ps1', import.meta.url), path.join(scripts, 'Start-LocalWebGPT.ps1'));
+      await writeFile(path.join(root, 'package.json'), '{"name":"lwb-cmd-fixture"}\n', 'utf8');
+      await writeFile(path.join(root, '.env'), `tunnel_id=tunnel_0123456789abcdef\nruntime_API_key=${secretSentinel}\n`, 'utf8');
+
+      for (const [version, accepted] of [
+        ['v16.20.1', false],
+        ['v22.11.0', false],
+        ['invalid-version', false],
+        ['v22.12.0', true],
+        ['v24.9.0', true],
+      ] as const) {
+        await writeFile(path.join(fakeBin, 'node.cmd'), `@echo off\r\necho ${version}\r\nexit /b 0\r\n`, 'ascii');
+        const wrapper = path.join(root, 'Start-LocalWebGPT.cmd').replaceAll("'", "''");
+        const run = spawnSync('pwsh.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `& '${wrapper}' -ValidateOnly; exit $LASTEXITCODE`], {
+          cwd: tmpdir(),
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 10_000,
+          env: { ...process.env, PATH: `${fakeBin};${process.env['PATH'] ?? ''}` },
+        });
+        const output = `${run.stdout}${run.stderr}`;
+        assert.equal(run.status === 0, accepted, `${version}: ${output}`);
+        assert.equal(output.includes(secretSentinel), false);
+        assert.ok(output.includes(accepted ? 'Project-root .env is valid' : 'Node.js'), output);
+        if (!accepted) assert.equal(output.includes('Project-root .env is valid'), false);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+
   it('loads tunnel credentials from the root .env without prompting or echoing values', () => {
     const launcher = readFileSync(
       new URL('../../scripts/windows/Start-LocalWebGPT.ps1', import.meta.url),
@@ -155,7 +200,7 @@ describe('local Secure MCP Tunnel launch contract', () => {
       await mkdir(fakeBin);
       await writeFile(
         path.join(fakeBin, 'node.cmd'),
-        '@echo off\r\necho LWB_BUILD_ID=%LWB_BUILD_ID%\r\nexit /b 0\r\n',
+        '@echo off\r\nif "%~1"=="--version" (\r\n  echo v22.20.0\r\n  exit /b 0\r\n)\r\necho LWB_BUILD_ID=%LWB_BUILD_ID%\r\nexit /b 0\r\n',
         'ascii',
       );
       const launched = spawnSync('pwsh.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', launcher], {

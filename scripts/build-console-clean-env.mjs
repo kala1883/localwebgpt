@@ -18,16 +18,20 @@ for (const name of [
   delete env[name];
 }
 
+const npmArguments = ['--workspace', '@lwb/console', 'run', 'build'];
+const isWindows = process.platform === 'win32';
+const npmCli = process.env['npm_execpath'] ??
+  path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
 const child = spawn(
-  process.platform === 'win32' ? 'npm.cmd' : 'npm',
-  ['--workspace', '@lwb/console', 'run', 'build'],
+  isWindows ? process.execPath : 'npm',
+  isWindows ? [npmCli, ...npmArguments] : npmArguments,
   {
     cwd: repoRoot,
     env,
     stdio: 'inherit',
     windowsHide: true,
-    // npm.cmd is a Windows command shim; arguments above are fixed constants.
-    shell: process.platform === 'win32',
+    // Run npm's JS entry point directly on Windows, avoiding cmd/shell shims.
+    shell: false,
   },
 );
 

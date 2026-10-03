@@ -56,15 +56,15 @@ npm ci
 
 ```powershell
 Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
-.\scripts\windows\Start-LocalWebGPT.ps1 -ValidateOnly
-.\scripts\windows\Start-LocalWebGPT.ps1
+.\Start-LocalWebGPT.cmd -ValidateOnly
+.\Start-LocalWebGPT.cmd
 ```
 
-验证成功应显示 `Project-root .env is valid; credential values were not displayed.` 且不显示密钥。启动脚本会启动本机 daemon，并打印一个**一次性、本机控制台链接**。在浏览器打开终端给出的完整链接（不要分享链接，它含临时授权令牌），进入 **ChatGPT 连接**，阅读确认项并点击 **在本机启用 ChatGPT 连接**。这只启用连接级工具发现，不会授权任何目录。确认后脚本继续运行 Tunnel doctor 并启动 `tunnel-client`；等终端报告检查通过、隧道运行正常后再创建 ChatGPT App。
+验证成功应显示 `Project-root .env is valid; credential values were not displayed.` 且不显示密钥。运行 `.\Start-LocalWebGPT.cmd` 后，启动脚本会启动本机 daemon，并自动用默认浏览器打开管理界面，同时打印一个**一次性、本机控制台链接**；`-ValidateOnly` 只检查配置，不打开浏览器。若浏览器没有自动打开，可手动打开终端给出的完整链接（不要分享链接，它含临时授权令牌）。进入 **ChatGPT 连接**，阅读确认项并点击 **在本机启用 ChatGPT 连接**。这只启用连接级工具发现，不会授权任何目录。确认后脚本继续运行 Tunnel doctor 并启动 `tunnel-client`；等终端报告检查通过、隧道运行正常后再创建 ChatGPT App。
 
 > 为什么先做本机确认：本项目把 MCP 工具目录也放在连接启用守卫后面，ChatGPT 点击 Create 时会立即发现工具；未启用时可能因 `tools/list` 不可用而创建失败。这是 LocalWebGPT 的本地安全顺序；之后仍要保持本机脚本和 Tunnel 在线。
 
-若 PowerShell 找不到 Node/npm，先安装符合要求的 Node.js 并重开终端。`.env` 检查失败时按错误提示修正字段名/格式；脚本不会回显密钥。
+根目录 CMD 入口需要 PowerShell 7（`pwsh.exe`），会转发参数和退出码；原 `scripts/windows/Start-LocalWebGPT.ps1` 入口仍可使用。启动前会检查 Node.js 版本，要求 `>=22.12.0`。若遇到 `node:util` 缺少 `styleText`，检查 `node --version`；nvm 用户可先运行 `nvm use 22.20.0`（已安装该版本时）。若找不到 Node/npm，先安装符合要求的 Node.js 并重开终端。`.env` 检查失败时按错误提示修正字段名/格式；脚本不会回显密钥。
 
 停止服务时，另开一个 PowerShell 窗口运行源码目录的 `.\scripts\windows\Stop-LocalWebGPT.ps1`（打包 runtime 根目录为 `.\Stop-LocalWebGPT.ps1`），然后等待启动窗口返回提示符。该命令只发固定的本机停止请求，不按 PID 结束进程；它会等在途操作完成后再关闭 daemon。
 

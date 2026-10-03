@@ -10,6 +10,15 @@ if (-not $IsWindows) {
 }
 $null = Get-Command node -ErrorAction Stop
 
+# Check before loading credentials or invoking the console's build tools.
+$nodeVersionText = (& node --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $nodeVersionText -notmatch '^v(?<version>\d+\.\d+\.\d+)$') {
+  throw 'Node.js did not return a valid version. Install Node.js 22.12.0 or newer and reopen your terminal.'
+}
+if ([version]$Matches['version'] -lt [version]'22.12.0') {
+  throw "Node.js 22.12.0 or newer is required; found $nodeVersionText. Switch to a supported version (nvm users: nvm use 22.20.0), then run the launcher again."
+}
+
 $runtimeRoot = $null
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'package.json') -PathType Leaf) {
   # Installed runtime: the launcher is copied to the runtime root.

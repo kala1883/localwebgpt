@@ -56,15 +56,15 @@ Before each launch from a source checkout, validate `.env` and run the integrate
 
 ```powershell
 Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
-.\scripts\windows\Start-LocalWebGPT.ps1 -ValidateOnly
-.\scripts\windows\Start-LocalWebGPT.ps1
+.\Start-LocalWebGPT.cmd -ValidateOnly
+.\Start-LocalWebGPT.cmd
 ```
 
-Validation should report that `.env` is valid without displaying the key. The launcher starts the local daemon and prints a **one-time local-console URL**. Open that exact URL in a browser (do not share it; it contains a temporary authorization token), go to **ChatGPT Connection**, review the confirmation, and click **Enable ChatGPT connection on this machine**. This enables connection-level tool discovery only; it does not authorize a directory. After confirmation, the launcher runs Tunnel doctor and starts `tunnel-client`; wait for a healthy Tunnel before creating the ChatGPT App.
+Validation should report that `.env` is valid without displaying the key. Running `.\Start-LocalWebGPT.cmd` starts the local daemon, automatically opens the management console in your default browser, and prints a **one-time local-console URL**. `-ValidateOnly` checks configuration without opening a browser. If the browser does not open automatically, open that exact URL manually (do not share it; it contains a temporary authorization token). Go to **ChatGPT Connection**, review the confirmation, and click **Enable ChatGPT connection on this machine**. This enables connection-level tool discovery only; it does not authorize a directory. After confirmation, the launcher runs Tunnel doctor and starts `tunnel-client`; wait for a healthy Tunnel before creating the ChatGPT App.
 
 > Why this local step comes first: LocalWebGPT also guards MCP tool-list discovery behind its connection-enable check. ChatGPT requests tool discovery when you click Create, so creation can fail if the local connection has not been enabled. Keep the local launcher and Tunnel running while using the App.
 
-If PowerShell cannot find Node/npm, install a supported Node.js version and open a new terminal. Correct `.env` issues using the validation error; the launcher never prints secret values.
+The root CMD launcher requires PowerShell 7 (`pwsh.exe`) and forwards arguments and exit codes. The original `scripts/windows/Start-LocalWebGPT.ps1` entry point remains available. Startup checks for Node.js `>=22.12.0`. If `node:util` reports a missing `styleText` export, check `node --version`; nvm users can run `nvm use 22.20.0` if that version is installed. If Node/npm cannot be found, install a supported Node.js version and open a new terminal. Correct `.env` issues using the validation error; the launcher never prints secret values.
 
 To stop the service, open another PowerShell window and run `.\scripts\windows\Stop-LocalWebGPT.ps1` from the source checkout (`.\Stop-LocalWebGPT.ps1` from a packaged runtime), then wait for the launcher window to return to its prompt. This sends a fixed local stop request rather than killing an arbitrary PID; the daemon waits for in-flight operations before closing.
 
