@@ -32,8 +32,9 @@
  * 那个列表由本进程生成，因此断言必须也落在生成它的地方。
  */
 
-import { CONTROL_PLANE_ROUTES, TOOLS_BY_NAME, isImplementedToolName, isToolName, outputSchemaOf } from '@lwb/contracts';
-import type { ToolCatalogResult, ToolName } from '@lwb/contracts';
+import { CONTROL_PLANE_ROUTES } from '@lwb/contracts';
+import { TOOLS_BY_NAME, isImplementedToolName, isToolName, outputSchemaOf } from '../../../packages/contracts/src/tool-surface-v2.ts';
+import type { ToolCatalogResult, ToolName } from '../../../packages/contracts/src/tool-surface-v2.ts';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 

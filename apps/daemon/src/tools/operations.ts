@@ -34,9 +34,13 @@
  * 带的是**本地排障文本**，它可能含绝对路径。因此本层不能让它被走到。
  */
 
-import { BridgeError, TOOL_CATALOG_OPERATION, isControlPlaneName, isToolName } from '@lwb/contracts';
-import type { ImplementedToolName, ToolCatalogResult } from '@lwb/contracts';
-import { IMPLEMENTED_TOOL_NAMES } from '@lwb/contracts';
+import { BridgeError, TOOL_CATALOG_OPERATION, isControlPlaneName, IMPLEMENTED_TOOL_NAMES } from '@lwb/contracts';
+import type { ImplementedToolName } from '@lwb/contracts';
+import { isToolName } from '../../../../packages/contracts/src/tool-surface-v2.ts';
+import type { ToolCatalogResult } from '../../../../packages/contracts/src/tool-surface-v2.ts';
+import { COMMAND_JOB_CONTROL_NAMES } from '../../../../packages/contracts/src/command-job.ts';
+import type { CommandJobControlName } from '../../../../packages/contracts/src/command-job.ts';
+import { createCommandJobSurface } from './command-job-tools.ts';
 import { hasCapability } from '@lwb/ipc';
 import type { OperationRegistry, RequestContext } from '@lwb/ipc';
 
@@ -45,6 +49,7 @@ import { TOOL_HANDLERS, asEnvelope } from './handlers.ts';
 import type { ToolHandlerDeps } from './handlers.ts';
 import { withToolGuard } from './guard.ts';
 import type { GuardDeps } from './guard.ts';
+import { concurrencyForOperation } from './concurrency-pools.ts';
 
 /** 工具面所有操作要求的能力。见文件头第 3 条。 */
 const TOOL_CAPABILITY = 'tools.read';
@@ -100,9 +105,11 @@ export function registerToolOperations(
     assertRegisterable(name);
   }
   assertRegisterable(TOOL_CATALOG_OPERATION);
+  for (const name of COMMAND_JOB_CONTROL_NAMES) assertRegisterable(name);
+  const jobSurface = createCommandJobSurface(deps, guard);
 
   for (const name of IMPLEMENTED_TOOL_NAMES) {
-    const handler = TOOL_HANDLERS[name];
+    const handler = jobSurface.decorate(name, TOOL_HANDLERS[name]);
     operations.register({
       name,
       required: TOOL_CAPABILITY,
@@ -113,8 +120,17 @@ export function registerToolOperations(
       // 每个新增的工具自己记得调用它，而「记得」不是一种结构。
       // 包在这里之后，注册表里的每一个工具都必然经过审计与返回前复查 ——
       // 包括这一行下面将来新增的那些。
-      handler: withToolGuard(name, (input, context) => handler(input, context, deps), deps, guard),
+      // Command jobs enforce request guards internally and hold the independent
+      // execution lease until process termination is confirmed.
+      handler: name === 'command_exec' ? jobSurface.handle('command_exec')
+        : withToolGuard(name, (input, context) => handler(input, context, deps), deps, {
+          ...guard,
+          concurrency: concurrencyForOperation(name, guard.concurrency),
+        }),
     });
+  }
+  for (const name of COMMAND_JOB_CONTROL_NAMES) {
+    operations.register({ name, required: TOOL_CAPABILITY, handler: jobSurface.handle(name) });
   }
 
   operations.register({
@@ -144,14 +160,14 @@ export function registerToolOperations(
           // `INTERNAL_ERROR` —— 一个不变量被破坏，它就是本进程的 bug，
           // 而 INTERNAL_ERROR 正是这个意思。
           assertNoControlPlane(entries);
-          return { tools: entries };
+          return jobSurface.extendCatalog(entries);
         }),
       deps,
       guard,
     ),
   });
 
-  return { registered: [...IMPLEMENTED_TOOL_NAMES, TOOL_CATALOG_OPERATION] };
+  return { registered: [...IMPLEMENTED_TOOL_NAMES, ...COMMAND_JOB_CONTROL_NAMES, TOOL_CATALOG_OPERATION] };
 }
 
 function assertRegisterable(name: string): void {
@@ -164,4 +180,4 @@ function assertRegisterable(name: string): void {
 }
 
 /** 本模块导出的处理器名，供测试与启动日志使用。 */
-export type ToolOperationName = ImplementedToolName | typeof TOOL_CATALOG_OPERATION;
+export type ToolOperationName = ImplementedToolName | CommandJobControlName | typeof TOOL_CATALOG_OPERATION;

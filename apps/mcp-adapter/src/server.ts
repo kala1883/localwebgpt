@@ -28,14 +28,10 @@
  * 调用方问的根本不是一个有效问题。
  */
 
-import {
-  BRIDGE_ERRORS,
-  ERROR_ENVELOPE,
-  TOOL_OUTPUT_SCHEMAS,
-  isImplementedToolName,
-  isToolName,
-} from '@lwb/contracts';
-import type { BridgeErrorPayload, OkEnvelope, ToolName } from '@lwb/contracts';
+import { BRIDGE_ERRORS, ERROR_ENVELOPE } from '@lwb/contracts';
+import type { BridgeErrorPayload, OkEnvelope } from '@lwb/contracts';
+import { TOOL_OUTPUT_SCHEMAS, isImplementedToolName, isToolName } from '../../../packages/contracts/src/tool-surface-v2.ts';
+import type { ToolName } from '../../../packages/contracts/src/tool-surface-v2.ts';
 import type { IpcOutcome } from '@lwb/ipc';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
@@ -46,7 +42,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-import type { ToolCatalogResult } from '@lwb/contracts';
+import type { ToolCatalogResult } from '../../../packages/contracts/src/tool-surface-v2.ts';
 import { resolveSurface, SurfaceMismatchError } from './surface.ts';
 
 /**

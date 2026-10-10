@@ -83,6 +83,9 @@ export class ConcurrencyGate {
   #inFlight = 0;
   readonly #perConnection = new Map<string, number>();
   #denials = 0;
+  #nextLeaseId = 0;
+  readonly #leases = new Map<number, { connection_id: string; started_at: number }>();
+  readonly #waiting = new Map<string, number>();
 
   constructor(options: ConcurrencyGateOptions = {}) {
     this.#maxConcurrent = options.max_concurrent ?? LIMITS.MAX_CONCURRENT_READS;
@@ -90,7 +93,7 @@ export class ConcurrencyGate {
       options.max_per_connection ?? LIMITS.MAX_CONCURRENT_READS_PER_CONNECTION;
     this.#waitMs = options.wait_ms ?? LIMITS.CONCURRENCY_WAIT_MS;
     this.#pollMs = options.poll_ms ?? DEFAULT_POLL_MS;
-    this.#now = options.now ?? (() => Date.now());
+    this.#now = options.now ?? (() => performance.now());
     this.#sleep =
       options.sleep ??
       ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -131,6 +134,8 @@ export class ConcurrencyGate {
    */
   async acquire(connection_id: string): Promise<AcquireOutcome> {
     const start = this.#now();
+    let waiting = false;
+    try {
     for (;;) {
       const taken = this.#tryTake(connection_id, start);
       if (taken !== null) return taken;
@@ -153,10 +158,21 @@ export class ConcurrencyGate {
           limit: perConnectionFull ? this.#maxPerConnection : this.#maxConcurrent,
         };
       }
+      if (!waiting) {
+        waiting = true;
+        this.#waiting.set(connection_id, (this.#waiting.get(connection_id) ?? 0) + 1);
+      }
       // 睡眠长度不超过剩余等待时间：否则一次睡眠就可能超出上界，
       // 而「最多等 wait_ms」这句话就不再成立。
       const remaining = this.#waitMs - (this.#now() - start);
       await this.#sleep(Math.max(1, Math.min(this.#pollMs, remaining)));
+    }
+    } finally {
+      if (waiting) {
+        const count = (this.#waiting.get(connection_id) ?? 1) - 1;
+        if (count === 0) this.#waiting.delete(connection_id);
+        else this.#waiting.set(connection_id, count);
+      }
     }
   }
 
@@ -176,6 +192,8 @@ export class ConcurrencyGate {
 
   #makeLease(connection_id: string, waitedMs: number): ConcurrencyLease {
     let released = false;
+    const leaseId = ++this.#nextLeaseId;
+    this.#leases.set(leaseId, { connection_id, started_at: this.#now() });
     return {
       connection_id,
       waited_ms: waitedMs,
@@ -184,11 +202,37 @@ export class ConcurrencyGate {
           throw new Error('并发许可被重复释放：这是一次记账错误，调用方必须只释放一次。');
         }
         released = true;
+        this.#leases.delete(leaseId);
         this.#inFlight -= 1;
         const used = (this.#perConnection.get(connection_id) ?? 1) - 1;
         if (used <= 0) this.#perConnection.delete(connection_id);
         else this.#perConnection.set(connection_id, used);
       },
+    };
+  }
+
+  /** Connection-scoped diagnostics. No other connection IDs or user content. */
+  inspect(connectionId: string): {
+    readonly in_flight: number;
+    readonly global_in_flight: number;
+    readonly max_concurrent: number;
+    readonly max_per_connection: number;
+    readonly waiting: number;
+    readonly oldest_age_ms: number;
+    readonly active: readonly { readonly lease_id: string; readonly age_ms: number }[];
+  } {
+    const now = this.#now();
+    const active = [...this.#leases.entries()]
+      .filter(([, value]) => value.connection_id === connectionId)
+      .map(([id, value]) => ({ lease_id: `lease_${id}`, age_ms: Math.max(0, Math.round(now - value.started_at)) }));
+    return {
+      in_flight: this.#perConnection.get(connectionId) ?? 0,
+      global_in_flight: this.#inFlight,
+      max_concurrent: this.#maxConcurrent,
+      max_per_connection: this.#maxPerConnection,
+      waiting: this.#waiting.get(connectionId) ?? 0,
+      oldest_age_ms: Math.max(0, ...active.map((lease) => lease.age_ms)),
+      active,
     };
   }
 

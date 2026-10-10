@@ -36,8 +36,6 @@ import {
   CONTROL_PLANE_ROUTES,
   IMPLEMENTED_TOOL_NAMES,
   TOOL_CATALOG_OPERATION,
-  TOOL_NAMES,
-  TOOL_OUTPUT_SCHEMAS,
 } from '@lwb/contracts';
 import type {
   BridgeStatusData,
@@ -53,6 +51,8 @@ import type {
   WorkspaceListData,
 } from '@lwb/contracts';
 
+import { TOOL_NAMES, IMPLEMENTED_TOOL_NAMES as V2_IMPLEMENTED_TOOL_NAMES, TOOL_OUTPUT_SCHEMAS } from '../../packages/contracts/src/tool-surface-v2.ts';
+import { COMMAND_JOB_CONTROL_NAMES } from '../../packages/contracts/src/command-job.ts';
 import { assertNoControlPlane } from '../../apps/daemon/src/tools/catalog.ts';
 import { describeForLocalAudit, isSafeForModel, toModelPayload } from '../../apps/daemon/src/tools/errors.ts';
 import {
@@ -175,7 +175,7 @@ describe('工具清单（验收 1：无控制面方法）', () => {
       const catalog = await catalogOf(closed);
       const available = catalog.tools.filter((entry) => entry.available).map((entry) => entry.name);
 
-      assert.deepEqual([...available].sort(), [...IMPLEMENTED_TOOL_NAMES].sort());
+      assert.deepEqual([...available].sort(), [...V2_IMPLEMENTED_TOOL_NAMES].sort());
     } finally {
       closed.close();
     }
@@ -240,14 +240,14 @@ describe('工具清单（验收 1：无控制面方法）', () => {
     const catalog = await catalogOf(h);
     const available = catalog.tools.filter((entry) => entry.available).map((entry) => entry.name);
 
-    assert.deepEqual([...available].sort(), [...IMPLEMENTED_TOOL_NAMES].sort());
+    assert.deepEqual([...available].sort(), [...V2_IMPLEMENTED_TOOL_NAMES].sort());
 
     for (const entry of catalog.tools) {
       if (entry.available) continue;
       // 「没实现」与「开关关了」是两件事。把它们说成同一件会让本地排查
       // 去找一个不存在的开关。
       assert.equal(entry.reason, 'NOT_IMPLEMENTED', `${entry.name} 的不可用理由`);
-      assert.ok(!IMPLEMENTED_TOOL_NAMES.includes(entry.name as ImplementedToolName));
+      assert.ok(!V2_IMPLEMENTED_TOOL_NAMES.includes(entry.name as ImplementedToolName));
     }
   });
 
@@ -571,7 +571,7 @@ describe('跨连接隔离（验收 3：两条连接不能读对方的工作区�
       const byId = new Map(listed.workspaces.map((workspace) => [workspace.workspace_id, workspace]));
 
       assert.deepEqual(byId.get(scoped.workspace.id)?.granted_tools, ['file_read', 'change_get']);
-      assert.deepEqual(byId.get(scoped.otherWorkspace.id)?.granted_tools, ['command_exec']);
+      assert.deepEqual(byId.get(scoped.otherWorkspace.id)?.granted_tools, ['command_exec', ...COMMAND_JOB_CONTROL_NAMES]);
       assertNoAbsolutePath(listed, 'workspace_list with tool grants');
     } finally {
       scoped.close();

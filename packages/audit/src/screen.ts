@@ -29,6 +29,9 @@
  */
 
 const ALLOWED_METADATA_KEYS: readonly string[] = [
+  // Generated opaque job ID and closed job-state enum only; never command/output.
+  'job_id',
+  'job_state',
   'workspace_generation',
   'policy_version',
   'read_token_version',
