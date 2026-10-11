@@ -66,7 +66,7 @@ Validation should report that `.env` is valid without displaying the key. Runnin
 
 The root CMD launcher requires PowerShell 7 (`pwsh.exe`) and forwards arguments and exit codes. The original `scripts/windows/Start-LocalWebGPT.ps1` entry point remains available. Startup checks for Node.js `>=22.12.0`. If `node:util` reports a missing `styleText` export, check `node --version`; nvm users can run `nvm use 22.20.0` if that version is installed. If Node/npm cannot be found, install a supported Node.js version and open a new terminal. Correct `.env` issues using the validation error; the launcher never prints secret values.
 
-To stop the service, open another PowerShell window and run `.\scripts\windows\Stop-LocalWebGPT.ps1` from the source checkout (`.\Stop-LocalWebGPT.ps1` from a packaged runtime), then wait for the launcher window to return to its prompt. This sends a fixed local stop request rather than killing an arbitrary PID; the daemon waits for in-flight operations before closing.
+To stop the service, open another terminal and run `.\Stop-LocalWebGPT.cmd` from the project or packaged runtime root (or double-click the file), then wait for the launcher window to return to its prompt. This sends a fixed local stop request; the daemon waits for in-flight operations before closing. The PowerShell entry point remains `.\scripts\windows\Stop-LocalWebGPT.ps1` in a source checkout or `.\Stop-LocalWebGPT.ps1` in a packaged runtime.
 
 ## 4. Create the MCP App in ChatGPT
 

@@ -66,7 +66,7 @@ Set-Location 'D:\MyProjects\MyApps\LocalWebGPT'
 
 根目录 CMD 入口需要 PowerShell 7（`pwsh.exe`），会转发参数和退出码；原 `scripts/windows/Start-LocalWebGPT.ps1` 入口仍可使用。启动前会检查 Node.js 版本，要求 `>=22.12.0`。若遇到 `node:util` 缺少 `styleText`，检查 `node --version`；nvm 用户可先运行 `nvm use 22.20.0`（已安装该版本时）。若找不到 Node/npm，先安装符合要求的 Node.js 并重开终端。`.env` 检查失败时按错误提示修正字段名/格式；脚本不会回显密钥。
 
-停止服务时，另开一个 PowerShell 窗口运行源码目录的 `.\scripts\windows\Stop-LocalWebGPT.ps1`（打包 runtime 根目录为 `.\Stop-LocalWebGPT.ps1`），然后等待启动窗口返回提示符。该命令只发固定的本机停止请求，不按 PID 结束进程；它会等在途操作完成后再关闭 daemon。
+停止服务时，另开一个终端，在项目或打包 runtime 根目录运行 `.\Stop-LocalWebGPT.cmd`（也可双击该文件），然后等待启动窗口返回提示符。该命令只发固定的本机停止请求，不按 PID 结束进程；它会等在途操作完成后再关闭 daemon。PowerShell 入口仍为源码目录的 `.\scripts\windows\Stop-LocalWebGPT.ps1` 或打包 runtime 根目录的 `.\Stop-LocalWebGPT.ps1`。
 
 ## 4. 在 ChatGPT 网页创建 MCP App
 

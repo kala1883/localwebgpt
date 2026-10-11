@@ -51,14 +51,14 @@ snapshot_store_max_bytes=1073741824
 
 启动窗口保持打开。首次启动时按终端提示打开一次性本机控制台地址，在“ChatGPT 连接”页启用该连接。脚本完成本机连接检查后运行 tunnel-client；ChatGPT 创建/发现 MCP App 时需要这条本机 Tunnel 在线。不要再启动第二份 daemon 或 tunnel-client。
 
-本机 tunnel-client 的 loopback 健康与就绪端点（当前默认管理端口为 `8080`）：
+本机 tunnel-client 的 loopback 健康与就绪端点（LocalWebGPT 启动器显式使用管理端口 `18080`，避免与其他本地服务常用的 `8080` 冲突）：
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:8080/healthz
-Invoke-WebRequest http://127.0.0.1:8080/readyz
+Invoke-WebRequest http://127.0.0.1:18080/healthz
+Invoke-WebRequest http://127.0.0.1:18080/readyz
 ```
 
-两者都应返回 HTTP `200`。如安装的 tunnel-client 改了管理端口，以本机实际配置为准。管理 UI 是 `http://127.0.0.1:8080/ui`；不要把它转发到公网。
+两者都应返回 HTTP `200`。手工运行 tunnel-client 时需同样指定 `--health.listen-addr 127.0.0.1:18080`，否则它仍默认使用 `8080`。管理 UI 是 `http://127.0.0.1:18080/ui`；不要把它转发到公网。
 
 ### 核对当前运行的代码版本
 

@@ -304,6 +304,8 @@ describe('local Secure MCP Tunnel launch contract', () => {
       'tunnel_0123456789abcdef0123456789abcdef',
       '--mcp.command',
       'command=node --import tsx apps/daemon/src/lifecycle/run-mcp-adapter.ts,channel=main',
+      '--health.listen-addr',
+      '127.0.0.1:18080',
     ]);
   });
 
@@ -312,6 +314,10 @@ describe('local Secure MCP Tunnel launch contract', () => {
     assert.equal(args[0], 'doctor');
     assert.equal(args.at(-1), '--explain');
     assert.ok(args.includes('--mcp.command'));
+    assert.deepEqual(
+      args.slice(1, -1),
+      tunnelClientArguments('run', 'tunnel_0123456789abcdef0123456789abcdef').slice(1),
+    );
 
     const launcher = readFileSync(
       new URL('../../apps/daemon/src/lifecycle/chatgpt-local.ts', import.meta.url),

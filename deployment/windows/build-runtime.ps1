@@ -85,6 +85,7 @@ New-Item -ItemType Directory -Path (Join-Path $docsRoot 'release') -Force | Out-
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\release\V1-acceptance.md') -Destination (Join-Path $docsRoot 'release')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\windows\Start-LocalWebGPT.ps1') -Destination $outputRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\windows\Stop-LocalWebGPT.ps1') -Destination $outputRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot 'Stop-LocalWebGPT.cmd') -Destination $outputRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\windows\Uninstall-LocalWebGPT.ps1') -Destination $outputRoot
 
 $vendorVersionRoot = Join-Path $outputRoot ".lwb-local\tunnel-client\$tunnelVersion"
