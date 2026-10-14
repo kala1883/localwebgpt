@@ -1,3 +1,4 @@
+import { registerConversationManagementRoutes } from './conversation-management.ts';
 /**
  * 控制平面的装配（LWB-012 步骤 3）。
  *
@@ -27,6 +28,7 @@
  */
 
 import { BridgeError, CONTROL_TOKEN_PREFIX } from '@lwb/contracts';
+import { registerCommandRecoveryRoutes } from './command-recovery.ts';
 import type { OperationRegistry } from '@lwb/ipc';
 import { hasCapability } from '@lwb/ipc';
 import {
@@ -372,6 +374,8 @@ function buildRoutes(options: ControlPlaneOptions, sessions: ControlSessionStore
 
   registerOperationRoutes(table, options.operations, mutating, { mutating: true });
   registerOperationRoutes(table, options.operations, readOnly, { mutating: false });
+  registerCommandRecoveryRoutes(table, options.operations);
+  registerConversationManagementRoutes(table, options.operations);
 
   return table;
 }

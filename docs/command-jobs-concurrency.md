@@ -2,7 +2,42 @@
 
 日期：2026-10-09。工作区：本项目目录。
 
-## 当前结论
+## 2026-10-14：隔离恢复与工具发现修复（最新）
+
+新增本地控制台“命令任务恢复”面板、事务化恢复证据、RECOVERED_UNKNOWN 状态及迟到终止确认处理；统一19项工具清单并补上 MCP 清单变化通知。详细实现、回退边界、完整证据及激活步骤见 `docs/command-recovery-and-tool-discovery.md`。
+
+本轮定向核心回归43通过/2平台跳过，Windows回归20通过/1环境跳过，恢复面板4项通过，根/控制台类型检查及前端生产构建通过；上述目标测试无失败。既有主界面测试在修改前基线中也于相同位置失败，单独记录，未宣称全量检查通过。
+
+源码目标契约版本0.2.1；最后运行实例仍为0.2.0，需正常重启加载本次修复。生产两个旧隔离任务未释放，须在新本地面板实际核验后逐项恢复。ChatGPT 当前仍只发现16个基础工具；应用的已批准工具快照须由操作者在应用管理页刷新、审阅并启用新增动作，本地重启不能替代该步骤。以下为扩容及旧实现的历史记录。
+
+## 2026-10-14：命令任务名额扩容
+
+命令任务默认上限调整为每连接 8 个、全局 32 个，统一定义在 `packages/contracts/src/command-job.ts` 的 `COMMAND_JOB_LIMITS`。生产装配的 `commandPoolFor(files)` 直接使用命令专用限额，不再从文件池复制容量；文件读写池及其自定义限额保持不变（文件池原默认值仍为每连接 2、全局 4）。满额时不排队启动新进程；取消和诊断的独立入口保持原有设置。
+
+`TERMINATION_UNKNOWN` 继续占用名额，重启不会清空未知任务，也不会重跑旧命令。本次修改前诊断为当前连接占用 2/2，两个任务均已隔离；新版本生效且没有其它占用变化时，该连接仍保留 2 个隔离占位，并有 6 个新任务名额。
+
+上限在 daemon 启动时加载，修改源码不等于当前运行实例已生效。2026-10-14 本机重启后已通过 `bridge_status.concurrency.commands` 核对 `max_per_connection=8`、`max_concurrent=32`；详细验收见下方补记。
+
+已更新池容量测试，并补充默认 8 个任务、满额幂等重放、名额释放复用及“2 个恢复隔离任务 + 6 个新任务”的回归用例。扩容写入当时，2026-10-14 本机命令预检被 `CONCURRENCY_LIMIT_EXCEEDED` 拒绝，尚未运行测试；该阻塞已在本次重启后解除。验证入口如下，实际运行结果见补记，不能用下方 2026-10-09 的历史证据代替：
+
+```text
+npm run typecheck
+node --import tsx --test tests/unit/command-concurrency-pools.test.ts tests/unit/command-jobs.test.ts
+```
+
+### 2026-10-14：重启后本机验收补记
+
+运行环境为 Windows（win32）/ Node.js v24.9.0。当前工具发现返回 16 个基础工具，包含命令执行及文件创建、编辑和修改应用；工作区声明已授予的 `command_status`、`command_list`、`command_cancel` 三个新工具仍未出现在当前会话的可调用清单，不能将本轮视为完整工具面验收。
+
+在 `data_agent` 执行 PowerShell `Write-Output 'LWB_POWERSHELL_PROBE_OK'`，实际收到标记，回执为 EXITED / exit_code=0 / termination_confirmed=true / slot_held=false。CMD 探针虽然返回 exit_code=0，但未返回预期输出标记，未计入完整 CMD 通路已验证的证据。通过 `file_create` 创建本项目 `.lwb-local/restart-validation-20261014-0625.cjs`，回执 APPLIED / VERIFIED；未改动 data_agent 的业务文件。
+
+本机实际运行 `node node_modules/typescript/bin/tsc --noEmit`（与 package.json 的根目录 typecheck 脚本使用同一编译器和参数），exit_code=0。随后运行上面两份命令测试，添加 `--test-reporter=tap` 保存结果：31 项测试，29 通过、0 失败、0 取消、2 项按 Windows 平台条件跳过。通过项包含每连接 8 / 全局 32 的限额、文件池隔离、两个恢复占位加六个新任务、幂等重放，以及 100 条真实短命令、真实长进程取消和输出上限测试。
+
+报告和日志位于 `.lwb-local/restart-validation-20261014-0625/`，摘要为 `report.json`，详细 TAP 输出为 `command-tests.stdout.log`。验收原任务 `job_604afb51-bd4a-4117-b2ef-b62c2a0b9fb4` 通过相同幂等键查询，未重复执行，最终 EXITED / exit_code=0 / termination_confirmed=true / slot_held=false。结束后的 bridge_status 回执 req_19 显示命令占位回到 2/8，全局 2/32，仅保留两个原有 TERMINATION_UNKNOWN；没有新增隔离占位。
+
+本轮没有清除旧任务或幂等记录，没有修改运行源代码，没有执行目录迁移。尚未运行 npm run check、控制台类型检查及全部 Windows 集成测试；g0_platform_verified 和 native_guard_verified 仍为 false。未知任务恢复接口和三个任务管理工具的端到端暴露仍需另行修复与验收。
+
+## 2026-10-09 实施结论（以下为历史记录）
 
 三阶段的主要运行代码已经写入项目，但整体验收尚未完成，不能将本记录作为“全部完成”或“已上线”的证明。11 个运行代码文件和 3 个测试文件的写入回执均为 APPLIED / VERIFIED。本文是另一个新增文档文件。当前 daemon 未重启，最后一次 bridge_status 仍返回 contract_version=0.1.0；新代码的组合契约为 0.2.0。
 

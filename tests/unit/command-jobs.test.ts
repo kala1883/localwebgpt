@@ -83,7 +83,7 @@ test('100000 leases and exception paths return to zero; diagnostics are connecti
 
 test('two running jobs do not block files; replay works while full; third new job is rejected', async () => {
   const driver = controlled();
-  const jobs = new CommandJobManager({ store: new MemoryStore(), processes: driver.processes, sanitize });
+  const jobs = new CommandJobManager({ store: new MemoryStore(), processes: driver.processes, sanitize, max_per_connection: 2 });
   const a = await jobs.start(input('capacity-a'), access());
   const b = await jobs.start(input('capacity-b'), access());
   await assert.rejects(jobs.start(input('capacity-c'), access()), { code: 'CONCURRENCY_LIMIT_EXCEEDED' });
@@ -94,6 +94,56 @@ test('two running jobs do not block files; replay works while full; third new jo
   driver.calls.forEach((call) => call.finish());
   await until(() => jobs.diagnostics(owner.connection_id).in_flight === 0);
   assert.equal(jobs.view(owner, b.job_id).state, 'EXITED');
+});
+
+test('default command capacity allows eight jobs, preserves replay, and reuses released slots', async () => {
+  const driver = controlled();
+  const jobs = new CommandJobManager({ store: new MemoryStore(), processes: driver.processes, sanitize });
+  assert.equal(jobs.diagnostics(owner.connection_id).max_per_connection, 8);
+  assert.equal(jobs.diagnostics(owner.connection_id).max_concurrent, 32);
+  try {
+    const running = await Promise.all(Array.from({ length: 8 }, (_, index) => jobs.start(input(`default-${index}`), access())));
+    assert.equal(driver.calls.length, 8);
+    assert.equal(jobs.diagnostics(owner.connection_id).in_flight, 8);
+    await assert.rejects(jobs.start(input('default-overflow'), access()), { code: 'CONCURRENCY_LIMIT_EXCEEDED' });
+    assert.equal((await jobs.start(input('default-0'), access())).job_id, running[0]!.job_id);
+    assert.equal(driver.calls.length, 8);
+    driver.calls[0]!.finish();
+    await until(() => jobs.diagnostics(owner.connection_id).in_flight === 7);
+    assert.equal((await jobs.start(input('default-replacement'), access())).state, 'RUNNING');
+    assert.equal(jobs.diagnostics(owner.connection_id).in_flight, 8);
+    assert.equal(driver.calls.length, 9);
+  } finally {
+    driver.calls.forEach((call) => call.finish());
+    await until(() => jobs.diagnostics(owner.connection_id).in_flight === 0);
+  }
+});
+
+test('expanded defaults retain two recovered slots while admitting six new jobs', async () => {
+  const store = new MemoryStore();
+  const driver = controlled();
+  const original = new CommandJobManager({ store, processes: driver.processes, sanitize });
+  const previous = await Promise.all(Array.from({ length: 2 }, (_, index) => original.start(input(`expanded-old-${index}`), access())));
+  const recovered = new CommandJobManager({ store, processes: driver.processes, sanitize });
+  try {
+    assert.equal(recovered.diagnostics(owner.connection_id).quarantined, 2);
+    assert.equal(recovered.diagnostics(owner.connection_id).in_flight, 2);
+    for (let index = 0; index < 6; index++) {
+      await recovered.start(input(`expanded-new-${index}`), access());
+    }
+    assert.equal(recovered.diagnostics(owner.connection_id).in_flight, 8);
+    await assert.rejects(recovered.start(input('expanded-overflow'), access()), { code: 'CONCURRENCY_LIMIT_EXCEEDED' });
+    const replay = await recovered.start(input('expanded-old-0'), access());
+    assert.equal(replay.job_id, previous[0]!.job_id);
+    assert.equal(replay.state, 'TERMINATION_UNKNOWN');
+    assert.equal(replay.slot_held, true);
+    assert.equal(recovered.diagnostics(owner.connection_id).quarantined, 2);
+    assert.equal(driver.calls.length, 8);
+  } finally {
+    driver.calls.forEach((call) => call.finish());
+    await until(() => original.diagnostics(owner.connection_id).in_flight === 0 &&
+      recovered.diagnostics(owner.connection_id).in_flight === 2);
+  }
 });
 
 test('concurrent same-key calls launch once, including a single-slot pool', async () => {

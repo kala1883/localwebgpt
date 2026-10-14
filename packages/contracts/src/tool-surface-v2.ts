@@ -9,7 +9,7 @@ import { TOOL_OUTPUT_SCHEMAS as BASE_OUTPUTS, BRIDGE_STATUS_OUTPUT, WORKSPACE_LI
 import { COMMAND_JOB_CONTROL_NAMES, COMMAND_JOB_LIMITS, COMMAND_JOB_STATES } from './command-job.ts';
 import type { CommandJobView, CommandJobStartInput } from './command-job.ts';
 
-export const CONTRACT_VERSION = '0.2.0';
+export const CONTRACT_VERSION = '0.3.0';
 export const TOOL_NAMES = [...BASE_NAMES, ...COMMAND_JOB_CONTROL_NAMES] as const;
 export type ToolName = typeof TOOL_NAMES[number];
 export const IMPLEMENTED_TOOL_NAMES = TOOL_NAMES;
@@ -18,6 +18,13 @@ export function isToolName(value: string): value is ToolName { return (TOOL_NAME
 export function isImplementedToolName(value: ToolName): value is ImplementedToolName { return isToolName(value); }
 export interface ToolCatalogResult {
   readonly tools: readonly { readonly name: ToolName; readonly available: boolean; readonly reason: string | null }[];
+}
+/** Single catalog composition used by registration, diagnostics and local views. */
+export function withCommandJobCatalog(base: ToolCatalogResult['tools']): ToolCatalogResult {
+  const available = base.some((entry) => entry.name === 'command_exec' && entry.available);
+  const core = base.filter((entry) => !(COMMAND_JOB_CONTROL_NAMES as readonly string[]).includes(entry.name));
+  return { tools: [...core, ...COMMAND_JOB_CONTROL_NAMES.map((name) => ({ name, available,
+    reason: available ? null : 'WORKSPACE_TOOL_NOT_GRANTED' }))] };
 }
 const jobId = z.string().regex(/^job_[0-9a-f-]{36}$/).describe('command_exec 返回的原始 job_id；只可查询或取消本连接自己的任务。');
 const workspaceId = z.string().min(1).max(128);
@@ -45,6 +52,12 @@ export const COMMAND_JOB_VIEW_SCHEMA = z.strictObject({
   termination_confirmed: z.boolean(), recovered: z.boolean(),
   cancellation_reason: z.enum(['USER_CANCELLED', 'AUTHORIZATION_REVOKED', 'SHUTDOWN']).nullable(),
   durable: z.boolean(), failure_reason: z.string().nullable(),
+  resolution: z.strictObject({
+    resolution_id: z.string().regex(/^recovery_[0-9a-f-]{36}$/),
+    source: z.enum(['local_operator', 'process_observation']),
+    basis: z.enum(['process_tree_checked', 'os_reboot_verified', 'late_termination']),
+    resolved_at: z.string(),
+  }).optional(),
   in_progress: z.boolean(), completion_unknown: z.boolean(), slot_held: z.boolean(),
   side_effects_possible: z.boolean(), output_available: z.boolean(), output_withheld: z.boolean(),
   stdout: z.string(), stderr: z.string(),
@@ -65,7 +78,12 @@ const commandPool = z.strictObject({
   active: z.array(z.strictObject({ job_id: jobId, state: z.enum(COMMAND_JOB_STATES), age_ms: nonnegative })),
 });
 const bridgeOutput = okEnvelopeOf(BRIDGE_STATUS_OUTPUT.shape.data.extend({
+  conversation_archive: z.strictObject({feature_version:z.literal('1.0.0'),schema_version:z.literal(11),capture_policy:z.literal('redacted-v1'),chat_transcript_archived:z.literal(false)}).optional(),
   command_job_protocol: z.literal('1.0.0'),
+  tool_surface: z.strictObject({
+    catalog_version: z.string(), available_tools: z.array(z.enum(TOOL_NAMES)),
+    client_inventory: z.literal('not_observed'),
+  }).optional(),
   concurrency: z.strictObject({ files: filePool, commands: commandPool }),
 }));
 const workspaceOutput = okEnvelopeOf(WORKSPACE_LIST_OUTPUT.shape.data.extend({
@@ -113,7 +131,7 @@ const definitions: Definition[] = [
   },
   {
     name: 'command_cancel', title: '取消指定命令任务',
-    description: '只请求停止本连接拥有且仍获授权的指定任务；独立于文件、命令执行和查询额度。CANCELLING 仅表示已请求取消，须查 command_status 确认；TERMINATION_UNKNOWN 保留异常占位。不会按用户提供的 PID 杀进程，也不会回滚已发生的副作用。',
+    description: '只请求停止本连接拥有且仍获授权的指定任务；独立于文件、命令执行和查询额度。CANCELLING 仅表示已请求取消，须查 command_status 确认；TERMINATION_UNKNOWN 保留异常占位；恢复后的 RECOVERED_UNKNOWN 仍表示业务结果未知。旧隔离作业须在本地控制台的命令任务恢复面板核验，不可通过重复取消清零。不会按用户提供的 PID 杀进程，也不会回滚已发生的副作用。',
     inputSchema: COMMAND_JOB_INPUT_SCHEMAS.command_cancel,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },

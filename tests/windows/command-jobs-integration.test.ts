@@ -37,18 +37,19 @@ async function close(h: ToolHarness) {
 }
 
 describeWindows('command jobs: production registration, SQLite, grants and Windows processes', () => {
-  it('two long commands leave file reads, status, same-key replay and cancel available', async () => {
+  it('eight long commands leave file reads, status, same-key replay and cancel available', async () => {
     const h = await fixture();
     try {
-      const a = await command(h, 'windows-pool-a'); const b = await command(h, 'windows-pool-b');
-      const third = await callTool(h, 'command_exec', { workspace_id: h.workspace.id, idempotency_key: 'windows-pool-c', shell: 'powershell', command: 'echo should-not-run', wait_ms: 0 });
+      const running: CommandJobView[] = [];
+      for (let index = 0; index < 8; index++) running.push(await command(h, `windows-pool-${index}`));
+      const third = await callTool(h, 'command_exec', { workspace_id: h.workspace.id, idempotency_key: 'windows-pool-overflow', shell: 'powershell', command: 'echo should-not-run', wait_ms: 0 });
       assert.equal(errorOf(third).error.code, 'CONCURRENCY_LIMIT_EXCEEDED');
       const read = await callTool(h, 'file_read', { workspace_id: h.workspace.id, path: 'README.md' }); assert.equal(read.ok, true);
-      assert.equal((await command(h, 'windows-pool-a')).job_id, a.job_id);
+      assert.equal((await command(h, 'windows-pool-0')).job_id, running[0]!.job_id);
       const status = await callTool(h, 'bridge_status', {}); assert.ok(TOOL_OUTPUT_SCHEMAS.bridge_status.safeParse(status).success);
       const pool = dataOf(status) as { concurrency: { commands: { in_flight: number }; files: { in_flight: number } } };
-      assert.equal(pool.concurrency.commands.in_flight, 2); assert.equal(pool.concurrency.files.in_flight, 0);
-      for (const id of [a.job_id,b.job_id]) {
+      assert.equal(pool.concurrency.commands.in_flight, 8); assert.equal(pool.concurrency.files.in_flight, 0);
+      for (const id of running.map(job => job.job_id)) {
         dataOf(await callTool(h, 'command_cancel', { job_id: id }));
         const end = await terminal(h,id); assert.equal(end.state,'CANCELLED'); assert.equal(end.slot_held,false);
       }

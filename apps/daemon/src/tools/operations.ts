@@ -1,3 +1,6 @@
+import { bindConversationManagement } from '../control/conversation-management.ts';
+import { createConversationArchiving } from './conversation-archive.ts';
+import { ARCHIVED_CALL_OPERATION } from '../../../../packages/contracts/src/conversation-archive.ts';
 /**
  * 工具面的 IPC 注册（LWB-017 步骤 2）。
  *
@@ -5,8 +8,8 @@
  *
  * 一条 IPC 操作 `file_read` 与一个 MCP 工具 `file_read` 同名，这不是巧合，
  * 是刻意的：适配器收到 `tools/call name="file_read"` 之后要做的映射是
- * 恒等映射，没有一张「工具名 → 操作名」的对照表可以写错、可以漏项、
- * 可以在将来与工具清单脱节。
+ * 恒等映射。归档适配器另外通过固定的 tools.invoke_archived.v1 封套传递
+ * 关联信息；封套只接受公开契约的固定工具集合，并继续调用原注册处理器。
  *
  * 代价是命名空间重合：`tools.catalog` 也住在这里，而它与任何工具都不同名。
  * 这个例外必须存在 —— 适配器需要一个**不是工具**的入口来问「有哪些工具」。
@@ -41,6 +44,7 @@ import type { ToolCatalogResult } from '../../../../packages/contracts/src/tool-
 import { COMMAND_JOB_CONTROL_NAMES } from '../../../../packages/contracts/src/command-job.ts';
 import type { CommandJobControlName } from '../../../../packages/contracts/src/command-job.ts';
 import { createCommandJobSurface } from './command-job-tools.ts';
+import { bindCommandRecovery } from '../control/command-recovery.ts';
 import { hasCapability } from '@lwb/ipc';
 import type { OperationRegistry, RequestContext } from '@lwb/ipc';
 
@@ -106,7 +110,10 @@ export function registerToolOperations(
   }
   assertRegisterable(TOOL_CATALOG_OPERATION);
   for (const name of COMMAND_JOB_CONTROL_NAMES) assertRegisterable(name);
+  const archive = createConversationArchiving(operations, deps);
   const jobSurface = createCommandJobSurface(deps, guard);
+  bindCommandRecovery(operations, jobSurface.jobs, deps.repos);
+  bindConversationManagement(operations, deps.repos, jobSurface.jobs);
 
   for (const name of IMPLEMENTED_TOOL_NAMES) {
     const handler = jobSurface.decorate(name, TOOL_HANDLERS[name]);
@@ -122,15 +129,15 @@ export function registerToolOperations(
       // 包括这一行下面将来新增的那些。
       // Command jobs enforce request guards internally and hold the independent
       // execution lease until process termination is confirmed.
-      handler: name === 'command_exec' ? jobSurface.handle('command_exec')
+      handler: archive.wrap(name, name === 'command_exec' ? jobSurface.handle('command_exec')
         : withToolGuard(name, (input, context) => handler(input, context, deps), deps, {
           ...guard,
           concurrency: concurrencyForOperation(name, guard.concurrency),
-        }),
+        })),
     });
   }
   for (const name of COMMAND_JOB_CONTROL_NAMES) {
-    operations.register({ name, required: TOOL_CAPABILITY, handler: jobSurface.handle(name) });
+    operations.register({ name, required: TOOL_CAPABILITY, handler: archive.wrap(name, jobSurface.handle(name)) });
   }
 
   operations.register({
@@ -167,7 +174,8 @@ export function registerToolOperations(
     ),
   });
 
-  return { registered: [...IMPLEMENTED_TOOL_NAMES, ...COMMAND_JOB_CONTROL_NAMES, TOOL_CATALOG_OPERATION] };
+  archive.register();
+  return { registered: [...IMPLEMENTED_TOOL_NAMES, ...COMMAND_JOB_CONTROL_NAMES, TOOL_CATALOG_OPERATION, ARCHIVED_CALL_OPERATION] };
 }
 
 function assertRegisterable(name: string): void {
@@ -180,4 +188,4 @@ function assertRegisterable(name: string): void {
 }
 
 /** 本模块导出的处理器名，供测试与启动日志使用。 */
-export type ToolOperationName = ImplementedToolName | CommandJobControlName | typeof TOOL_CATALOG_OPERATION;
+export type ToolOperationName = ImplementedToolName | CommandJobControlName | typeof TOOL_CATALOG_OPERATION | typeof ARCHIVED_CALL_OPERATION;

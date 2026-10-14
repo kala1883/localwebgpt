@@ -1,6 +1,7 @@
 /**
- * Journal adapter over existing transactional idempotency storage. No schema
- * migration and no stdout/stderr, command, cwd or process identifiers at rest.
+ * Execution journal adapter over existing transactional idempotency storage.
+ * Original job rows still exclude command text, cwd, PID and output. The separate
+ * redacted conversation archive records calls, bounded outputs and state events.
  * Old command_exec records remain authoritative: an unknown old request is
  * never converted into a new process start.
  */
@@ -24,6 +25,8 @@ export interface CommandJobStore {
   claim(owner: CommandJobOwner, key: string, hash: string, record: CommandJobRecord): ExecutionReference | null;
   get(owner: CommandJobOwner, jobId: string): CommandJobRecord | null;
   save(record: CommandJobRecord): void;
+  recordOutput?(record: CommandJobRecord, output: { stdout: string; stderr: string; withheld: boolean; source_truncated: boolean }): void;
+  resolve?(record: CommandJobRecord, expectedUpdatedAt: string, actor: string): void;
   list(owner: CommandJobOwner): readonly CommandJobRecord[];
   all(): readonly CommandJobRecord[];
 }
@@ -50,6 +53,8 @@ export class RepositoryCommandJobStore implements CommandJobStore {
         id: `idem_${randomUUID()}`, principal_id: owner.principal_id,
         tool: JOB_TOOL, key: record.job_id, request_hash: createHash('sha256').update(record.job_id).digest('hex'),
       });
+      // Archive origin joins the pre-spawn transaction; failure rolls back without executing.
+      this.repos.conversation_archive?.observeJob(record);
       this.save(record);
       const records = [...this.list(owner), record];
       // Active and quarantined jobs are never evicted. Only the terminal index is bounded.
@@ -84,8 +89,40 @@ export class RepositoryCommandJobStore implements CommandJobStore {
       exit_code: record.exit_code, timed_out: record.timed_out, output_truncated: record.output_truncated,
       termination_confirmed: record.termination_confirmed, recovered: record.recovered,
       cancellation_reason: record.cancellation_reason, durable: record.durable, failure_reason: record.failure_reason,
+      ...(record.resolution === undefined ? {} : { resolution: {
+        resolution_id: record.resolution.resolution_id, source: record.resolution.source,
+        basis: record.resolution.basis, resolved_at: record.resolution.resolved_at,
+      } }),
     };
     this.repos.idempotency.complete(record.owner.principal_id, JOB_TOOL, record.job_id, JSON.stringify(metadata));
+    this.repos.conversation_archive?.observeJobBestEffort(metadata);
+  }
+  recordOutput(record: CommandJobRecord, output: { stdout: string; stderr: string; withheld: boolean; source_truncated: boolean }): void {
+    try { this.repos.conversation_archive?.output(record, output); }
+    catch { this.repos.conversation_archive?.noteFault('output'); }
+  }
+  /** CAS, durable recovery evidence and state update are one transaction. */
+  resolve(record: CommandJobRecord, expectedUpdatedAt: string, actor: string): void {
+    this.repos.transaction(() => {
+      const current = this.get(record.owner, record.job_id);
+      if (current === null || current.state !== 'TERMINATION_UNKNOWN' || current.updated_at !== expectedUpdatedAt) {
+        throw new CommandJobFailure('IDEMPOTENCY_CONFLICT', '任务状态已变化；请刷新后核验，未释放名额。');
+      }
+      if (record.state !== 'RECOVERED_UNKNOWN' || record.resolution === undefined) throw new Error('Invalid recovery record.');
+      const evidence = JSON.stringify({
+        job_id: record.job_id, actor, expected_updated_at: expectedUpdatedAt,
+        previous_failure_reason: current.failure_reason, resolution: record.resolution,
+        business_result: 'UNKNOWN',
+      });
+      const event = this.repos.idempotency.begin({
+        id: 'idem_' + randomUUID(), principal_id: record.owner.principal_id,
+        tool: 'lwb.command_job_recovery.v1', key: record.job_id,
+        request_hash: createHash('sha256').update(evidence).digest('hex'),
+      });
+      if (event.kind !== 'new') throw new CommandJobFailure('IDEMPOTENCY_CONFLICT', '该任务已有恢复证据；没有重复恢复。');
+      this.repos.idempotency.complete(record.owner.principal_id, 'lwb.command_job_recovery.v1', record.job_id, evidence);
+      this.save(record);
+    });
   }
   list(owner: CommandJobOwner): readonly CommandJobRecord[] {
     const ref = this.repos.idempotency.find(owner.principal_id, INDEX_TOOL, owner.connection_id)?.result_ref;
@@ -118,8 +155,16 @@ function readRecord(text: string): CommandJobRecord {
       typeof record.termination_confirmed !== 'boolean' || typeof record.durable !== 'boolean' ||
       typeof record.timed_out !== 'boolean' || typeof record.output_truncated !== 'boolean' || typeof record.recovered !== 'boolean' ||
       ![null, 'USER_CANCELLED', 'AUTHORIZATION_REVOKED', 'SHUTDOWN'].includes(record.cancellation_reason) ||
-      ![null, 'RECOVERED_AFTER_RESTART', 'TERMINATION_UNCONFIRMED', 'ORPHANED_OUTPUT', 'SPAWN_FAILED', 'NONZERO_EXIT', 'PROCESS_RESULT_UNKNOWN'].includes(record.failure_reason)) {
+      ![null, 'RECOVERED_AFTER_RESTART', 'TERMINATION_UNCONFIRMED', 'ORPHANED_OUTPUT', 'SPAWN_FAILED', 'NONZERO_EXIT', 'PROCESS_RESULT_UNKNOWN', 'RECOVERED_TERMINATION'].includes(record.failure_reason)) {
     throw new Error('Command job record is invalid.');
   }
+  if (record.resolution !== undefined) {
+    const r = record.resolution;
+    if (!r || !/^recovery_[a-f0-9-]{36}$/.test(r.resolution_id) ||
+        !['local_operator', 'process_observation'].includes(r.source) ||
+        !['process_tree_checked', 'os_reboot_verified', 'late_termination'].includes(r.basis) ||
+        !Number.isFinite(Date.parse(r.resolved_at))) throw new Error('Invalid recovery evidence.');
+  }
+  if ((record.state === 'RECOVERED_UNKNOWN') !== (record.resolution !== undefined)) throw new Error('Inconsistent recovery state.');
   return record;
 }

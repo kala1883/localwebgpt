@@ -1,3 +1,5 @@
+import { CONVERSATION_MANAGEMENT_MIGRATION } from './conversation-management-schema.ts';
+import { CONVERSATION_ARCHIVE_MIGRATION } from './conversation-archive-schema.ts';
 /**
  * 模式与迁移（方案 §7、§7.1、§7.2、LWB-006）。
  *
@@ -971,6 +973,8 @@ export const MIGRATIONS: readonly Migration[] = [
          END`,
     ],
   },
+  CONVERSATION_ARCHIVE_MIGRATION,
+  CONVERSATION_MANAGEMENT_MIGRATION,
 ];
 
 /** 本程序能理解的最高模式版本。高于它的数据库必须被拒绝打开。 */

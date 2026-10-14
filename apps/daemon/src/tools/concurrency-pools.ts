@@ -1,12 +1,18 @@
 /** One command pool per file pool, not one pool per tool or request. */
 import { ConcurrencyGate } from '@lwb/limits';
+import { COMMAND_JOB_LIMITS } from '../../../../packages/contracts/src/command-job.ts';
 
 const commandPools = new WeakMap<ConcurrencyGate, ConcurrencyGate>();
 
 export function commandPoolFor(files: ConcurrencyGate): ConcurrencyGate {
   let commands = commandPools.get(files);
   if (commands === undefined) {
-    commands = new ConcurrencyGate(files.limits);
+    // File limits govern file I/O, not the capacity of long-lived command jobs.
+    commands = new ConcurrencyGate({
+      max_concurrent: COMMAND_JOB_LIMITS.max_concurrent,
+      max_per_connection: COMMAND_JOB_LIMITS.max_per_connection,
+      wait_ms: 0,
+    });
     commandPools.set(files, commands);
   }
   return commands;

@@ -124,7 +124,8 @@ describe('workspace command process manager', () => {
     await timeoutManager.terminateAll();
 
     const outputManager = new CommandProcessManager({ timeout_ms: 5_000, output_limit_bytes: 256 });
-    const output = await outputManager.run({ shell, command: emitLarge, cwd: process.cwd() });
+    // Keep this fixture alive: this case proves successful owned-process termination, not an exit/taskkill race.
+    const output = await outputManager.run({ shell, command: `${emitLarge}; ${sleepLong}`, cwd: process.cwd() });
     assert.equal(output.started, true);
     assert.equal(output.output_truncated, true);
     assert.ok(Buffer.byteLength(output.stdout + output.stderr, 'utf8') <= 256);

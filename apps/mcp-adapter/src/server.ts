@@ -1,3 +1,4 @@
+import { ARCHIVED_CALL_OPERATION, conversationHint } from '../../../packages/contracts/src/conversation-archive.ts';
 /**
  * MCP 适配器服务（LWB-017 步骤 3、4）。
  *
@@ -44,6 +45,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import type { ToolCatalogResult } from '../../../packages/contracts/src/tool-surface-v2.ts';
 import { resolveSurface, SurfaceMismatchError } from './surface.ts';
+import { createCatalogWatch } from './catalog-watch.ts';
 
 /**
  * 适配器需要的、daemon 的全部能力。
@@ -169,7 +171,7 @@ function payloadForIpcFailure(outcome: Extract<IpcOutcome, { ok: false }>): Call
 export function createAdapterServer(options: AdapterServerOptions): Server {
   const server = new Server(
     { name: 'local-workspace-bridge', version: options.server_version },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: { listChanged: true } } },
   );
 
   const fetchCatalog = async (): Promise<ToolCatalogResult> => {
@@ -199,6 +201,13 @@ export function createAdapterServer(options: AdapterServerOptions): Server {
     // 比形状检查更严格 —— 多一道形状检查只会多一个失败点。
     return result.data;
   };
+
+  const catalogWatch = createCatalogWatch({
+    read: async () => resolveSurface(await fetchCatalog()).tools,
+    notify: () => server.sendToolListChanged(),
+  });
+  server.oninitialized = () => { catalogWatch.start(); };
+  server.onclose = () => { catalogWatch.stop(); };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
@@ -230,7 +239,9 @@ export function createAdapterServer(options: AdapterServerOptions): Server {
 
     const args = normalizeToolArguments(request.params.arguments);
 
-    const outcome = await options.caller.call(name, args);
+    const outcome = await options.caller.call(ARCHIVED_CALL_OPERATION, {
+      name, input: args, conversation: conversationHint(request.params._meta),
+    });
     if (!outcome.ok) {
       options.log(`工具 ${name} 的 IPC 调用失败：${outcome.code}`);
       return payloadForIpcFailure(outcome);

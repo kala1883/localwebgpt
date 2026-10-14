@@ -33,6 +33,7 @@
  */
 
 import { CONTROL_PLANE_ROUTES } from '@lwb/contracts';
+import { COMMAND_JOB_CONTROL_NAMES } from '../../../packages/contracts/src/command-job.ts';
 import { TOOLS_BY_NAME, isImplementedToolName, isToolName, outputSchemaOf } from '../../../packages/contracts/src/tool-surface-v2.ts';
 import type { ToolCatalogResult, ToolName } from '../../../packages/contracts/src/tool-surface-v2.ts';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
@@ -61,6 +62,12 @@ export interface ResolvedSurface {
 
 export function resolveSurface(catalog: ToolCatalogResult): ResolvedSurface {
   const available: ToolName[] = [];
+  if (catalog.tools.some((entry) => entry.name === 'command_exec' && entry.available)) {
+    const missing = COMMAND_JOB_CONTROL_NAMES.filter((name) => !catalog.tools.some((entry) => entry.name === name && entry.available));
+    if (missing.length > 0) throw new SurfaceMismatchError('命令执行已开放但任务管理工具缺失：' + missing.join(', ') + '。拒绝发布不完整工具清单。');
+  }
+  const names = catalog.tools.map((entry) => entry.name);
+  if (new Set(names).size !== names.length) throw new SurfaceMismatchError('工具清单含重复名称。');
 
   for (const entry of catalog.tools) {
     if (!entry.available) continue;

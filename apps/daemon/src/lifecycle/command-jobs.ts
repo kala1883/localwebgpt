@@ -35,6 +35,7 @@ interface LiveJob {
   releaseDone: () => void;
   settled: boolean;
   released: boolean;
+  lateTerminationConfirmed?: boolean;
   output: { stdout: string; stderr: string; withheld: boolean; expires: number } | null;
 }
 export class CommandJobManager {
@@ -118,7 +119,7 @@ export class CommandJobManager {
       ...metadata,
       duration_ms: live !== undefined && !live.settled ? Math.max(0, Math.round(performance.now() - live.startedAt)) : record.duration_ms,
       in_progress: record.state === 'STARTING' || record.state === 'RUNNING' || record.state === 'CANCELLING',
-      completion_unknown: record.state === 'TERMINATION_UNKNOWN',
+      completion_unknown: record.state === 'TERMINATION_UNKNOWN' || record.state === 'RECOVERED_UNKNOWN',
       slot_held: holdsCommandSlot(record.state),
       side_effects_possible: record.started !== false,
       output_available: available,
@@ -139,6 +140,52 @@ export class CommandJobManager {
       live.controller.abort();
     }
     return this.view(owner, jobId);
+  }
+  /** Local control-plane view; never exposed as an unscoped MCP operation. */
+  localRecords(): readonly CommandJobRecord[] {
+    return this.#options.store.all().map((record) => this.record(record.owner, record.job_id));
+  }
+  /** Only a trusted driver observation or an authenticated local operator may call this. */
+  resolveUnknown(owner: CommandJobOwner, jobId: string, expectedUpdatedAt: string,
+    evidence: { source: 'local_operator' | 'process_observation'; basis: 'process_tree_checked' | 'os_reboot_verified' | 'late_termination'; actor: string }): CommandJobView {
+    const current = this.record(owner, jobId);
+    if (current.state === 'RECOVERED_UNKNOWN') return this.view(owner, jobId);
+    const live = this.#live.get(jobId);
+    if (current.state !== 'TERMINATION_UNKNOWN' || current.updated_at !== expectedUpdatedAt ||
+        (live !== undefined && !live.settled)) {
+      throw new CommandJobFailure('IDEMPOTENCY_CONFLICT', '任务状态已变化或仍在运行；没有释放名额。');
+    }
+    const validSource = evidence.source === 'local_operator'
+      ? ['process_tree_checked', 'os_reboot_verified'].includes(evidence.basis) && evidence.actor.startsWith('console:')
+      : evidence.source === 'process_observation' && evidence.basis === 'late_termination' && evidence.actor === 'daemon';
+    if (!validSource) throw new CommandJobFailure('INVALID_ARGUMENT', '恢复证据来源不合法。');
+    if (this.#options.store.resolve === undefined) throw new CommandJobFailure('STORAGE_UNAVAILABLE', '任务仓储不支持原子恢复；没有释放名额。');
+    const next: CommandJobRecord = {
+      ...current, state: 'RECOVERED_UNKNOWN', recovered: true, updated_at: this.#isoNow(), durable: true,
+      // A local attestation is not misrepresented as an OS observation.
+      termination_confirmed: evidence.source === 'process_observation', failure_reason: 'RECOVERED_TERMINATION',
+      resolution: { resolution_id: 'recovery_' + randomUUID(), source: evidence.source, basis: evidence.basis, resolved_at: this.#isoNow() },
+    };
+    try { this.#options.store.resolve(next, expectedUpdatedAt, evidence.actor); }
+    catch (error) {
+      if (error instanceof CommandJobFailure) throw error;
+      this.#storageFault = true;
+      throw new CommandJobFailure('STORAGE_UNAVAILABLE', '恢复记录未能原子保存；没有释放名额。');
+    }
+    // Persist FIRST; a crash before releasing is repaired from the durable record on restart.
+    if (live !== undefined) {
+      live.record = next;
+      if (!live.released) { live.released = true; live.lease.release(); }
+    }
+    this.#recovered.delete(jobId);
+    return this.view(owner, jobId);
+  }
+  #tryLateRecovery(job: LiveJob): void {
+    if (!job.settled || !job.lateTerminationConfirmed || job.record.state !== 'TERMINATION_UNKNOWN') return;
+    try {
+      this.resolveUnknown(job.record.owner, job.record.job_id, job.record.updated_at,
+        { source: 'process_observation', basis: 'late_termination', actor: 'daemon' });
+    } catch { /* Keep the occupied slot on conflict or persistence failure. Diagnostics remain truthful. */ }
   }
   diagnostics(connectionId: string) {
     const pool = this.#gate.inspect(connectionId);
@@ -221,6 +268,7 @@ export class CommandJobManager {
       const result = await this.#options.processes.run({
         shell: input.shell, command: input.command, cwd: access.cwd, signal: job.controller.signal,
         on_started: () => { this.#update(job, { started: true, state: job.controller.signal.aborted ? 'CANCELLING' : 'RUNNING' }); },
+        on_termination_confirmed: () => { job.lateTerminationConfirmed = true; this.#tryLateRecovery(job); },
       });
       release = result.termination_unknown !== true;
       const state = !release ? 'TERMINATION_UNKNOWN' : result.cancelled ? 'CANCELLED'
@@ -231,6 +279,8 @@ export class CommandJobManager {
       try { safe = allowed ? this.#options.sanitize(result.stdout, result.stderr) : { stdout: '', stderr: '', withheld: true }; }
       catch { safe = { stdout: '', stderr: '', withheld: true }; }
       job.output = { ...safe, expires: this.#now() + this.#retentionMs };
+      try { this.#options.store.recordOutput?.(job.record, { ...safe, source_truncated: result.output_truncated }); }
+      catch { process.emitWarning('Conversation output archive incomplete; execution result unchanged.', { code: 'LWB_ARCHIVE_INCOMPLETE' }); }
       this.#update(job, {
         state, started: result.started, exit_code: result.exit_code, duration_ms: result.duration_ms,
         timed_out: result.timed_out, output_truncated: result.output_truncated,
@@ -244,6 +294,7 @@ export class CommandJobManager {
     } finally {
       clearInterval(watch);
       job.settled = true;
+      this.#tryLateRecovery(job);
       if (release && !job.released) { job.released = true; job.lease.release(); }
       job.releaseDone();
       this.#prune();

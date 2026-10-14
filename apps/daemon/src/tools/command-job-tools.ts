@@ -7,7 +7,7 @@ import { emitContent, mintClearance } from '@lwb/egress';
 import type { RequestContext } from '@lwb/ipc';
 import { COMMAND_JOB_CONTROL_NAMES, COMMAND_JOB_PROTOCOL_VERSION } from '../../../../packages/contracts/src/command-job.ts';
 import type { CommandJobOwner, CommandJobRecord, CommandJobToolName, CommandJobView } from '../../../../packages/contracts/src/command-job.ts';
-import { COMMAND_JOB_INPUT_SCHEMAS, CONTRACT_VERSION } from '../../../../packages/contracts/src/tool-surface-v2.ts';
+import { COMMAND_JOB_INPUT_SCHEMAS, CONTRACT_VERSION, withCommandJobCatalog } from '../../../../packages/contracts/src/tool-surface-v2.ts';
 import type { ToolCatalogResult } from '../../../../packages/contracts/src/tool-surface-v2.ts';
 import { CommandJobManager } from '../lifecycle/command-jobs.ts';
 import { RepositoryCommandJobStore, CommandJobFailure } from '../lifecycle/command-job-store.ts';
@@ -15,6 +15,7 @@ import { asEnvelope, requestIdOf } from './handlers.ts';
 import type { ToolHandler, ToolHandlerDeps } from './handlers.ts';
 import type { GuardDeps } from './guard.ts';
 import { commandPoolFor } from './concurrency-pools.ts';
+import { catalogFor } from './catalog.ts';
 import { resolveConnection, resolveWorkspaceAccess } from './access.ts';
 import { isSafeForModel, toModelPayload } from './errors.ts';
 
@@ -208,6 +209,10 @@ export function createCommandJobSurface(deps: ToolHandlerDeps, guard: GuardDeps)
         if (name === 'bridge_status') {
           return ok({ ...(result.data as BridgeStatusData), contract_version: CONTRACT_VERSION,
             command_job_protocol: COMMAND_JOB_PROTOCOL_VERSION,
+            conversation_archive: {feature_version:'1.0.0',schema_version:11,capture_policy:'redacted-v1',chat_transcript_archived:false},
+            tool_surface: { catalog_version: CONTRACT_VERSION,
+              available_tools: withCommandJobCatalog(catalogFor(context, deps)).tools.filter((entry) => entry.available).map((entry) => entry.name),
+              client_inventory: 'not_observed' },
             concurrency: { files: guard.concurrency.inspect(context.connection_id), commands: jobs.diagnostics(context.connection_id) } }, result.request_id);
         }
         const data = result.data as WorkspaceListData;
@@ -219,9 +224,7 @@ export function createCommandJobSurface(deps: ToolHandlerDeps, guard: GuardDeps)
     };
   };
   const extendCatalog = (base: ToolCatalogResult['tools']): ToolCatalogResult => {
-    const available = base.some((entry) => entry.name === 'command_exec' && entry.available);
-    return { tools: [...base, ...COMMAND_JOB_CONTROL_NAMES.map((name) => ({ name, available,
-      reason: available ? null : 'WORKSPACE_TOOL_NOT_GRANTED' }))] };
+    return withCommandJobCatalog(base);
   };
   return { handle, decorate, extendCatalog, jobs };
 }

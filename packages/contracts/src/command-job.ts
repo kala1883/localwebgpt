@@ -1,8 +1,8 @@
 /** Command job protocol v1. Pure data; no processes, filesystem, or credentials. */
 export const COMMAND_JOB_PROTOCOL_VERSION = '1.0.0';
 export const COMMAND_JOB_LIMITS = Object.freeze({
-  max_concurrent: 4,
-  max_per_connection: 2,
+  max_concurrent: 32,
+  max_per_connection: 8,
   wait_ms: 1_000,
   max_wait_ms: 5_000,
   output_retention_ms: 10 * 60_000,
@@ -12,7 +12,7 @@ export const COMMAND_JOB_LIMITS = Object.freeze({
 });
 export const COMMAND_JOB_STATES = [
   'STARTING', 'RUNNING', 'CANCELLING', 'EXITED', 'FAILED',
-  'CANCELLED', 'TIMED_OUT', 'OUTPUT_LIMIT', 'TERMINATION_UNKNOWN',
+  'CANCELLED', 'TIMED_OUT', 'OUTPUT_LIMIT', 'TERMINATION_UNKNOWN', 'RECOVERED_UNKNOWN',
 ] as const;
 export type CommandJobState = typeof COMMAND_JOB_STATES[number];
 export type JobShell = 'cmd' | 'powershell' | 'bash';
@@ -20,6 +20,12 @@ export type CancellationReason = 'USER_CANCELLED' | 'AUTHORIZATION_REVOKED' | 'S
 export interface CommandJobOwner {
   readonly principal_id: string;
   readonly connection_id: string;
+}
+export interface CommandJobResolution {
+  readonly resolution_id: string;
+  readonly source: 'local_operator' | 'process_observation';
+  readonly basis: 'process_tree_checked' | 'os_reboot_verified' | 'late_termination';
+  readonly resolved_at: string;
 }
 /** Persisted metadata. Deliberately excludes cwd, command text, PID and output. */
 export interface CommandJobRecord {
@@ -43,6 +49,7 @@ export interface CommandJobRecord {
   readonly cancellation_reason: CancellationReason;
   readonly durable: boolean;
   readonly failure_reason: string | null;
+  readonly resolution?: CommandJobResolution | undefined;
 }
 export interface CommandJobView extends Omit<CommandJobRecord, 'owner' | 'instance_id' | 'workspace_generation' | 'connection_generation'> {
   readonly in_progress: boolean;

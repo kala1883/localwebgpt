@@ -32,6 +32,8 @@ export interface CommandProcessOptions {
   readonly signal?: AbortSignal;
   readonly on_started?: () => void;
   readonly on_cleanup_failure?: () => void;
+  /** Late confirmation is separate from the already returned unknown result. */
+  readonly on_termination_confirmed?: () => void;
 }
 export interface CommandProcessManagerOptions {
   /** No default execution deadline. RPC waiting has a separate, bounded budget. */
@@ -88,6 +90,8 @@ export class CommandProcessManager {
     let bytes = 0;
     let started = false;
     let finished = false;
+    let finishedUnknown = false;
+    let lateReported = false;
     let closed = false;
     let exited = false;
     let exitCode: number | null = null;
@@ -106,6 +110,7 @@ export class CommandProcessManager {
       if (finished) return;
       finished = true;
       if (unknown) {
+        finishedUnknown = true;
         this.#unknownTerminations += 1;
         try { options.on_cleanup_failure?.(); } catch { /* Cleanup status remains unknown. */ }
       }
@@ -134,6 +139,12 @@ export class CommandProcessManager {
       });
     };
     const maybeFinish = (): void => {
+      // Pipe destruction alone is NOT proof. Require actual exit plus successful owned-tree termination.
+      if (finished && finishedUnknown && !lateReported && exited && closed && treeResult === true) {
+        lateReported = true;
+        this.#unknownTerminations = Math.max(0, this.#unknownTerminations - 1);
+        try { options.on_termination_confirmed?.(); } catch { /* The job manager retains its slot if persistence fails. */ }
+      }
       if (!closed || finished) return;
       if (stopReason === undefined) finish(false);
       else if (treeResult !== undefined) finish(!treeResult);
@@ -177,6 +188,7 @@ export class CommandProcessManager {
     child.once('exit', (code) => {
       exited = true;
       exitCode = code;
+      maybeFinish();
       if (!finished && stopReason === undefined) {
         drainTimer = setTimeout(() => { if (!closed) terminate('orphaned_output'); }, this.#drainWait);
       }

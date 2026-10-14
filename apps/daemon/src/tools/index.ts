@@ -24,6 +24,8 @@ import { concurrencyGateFor } from '@lwb/limits';
 import type { OperationRegistry } from '@lwb/ipc';
 
 import { catalogFor } from './catalog.ts';
+import { withCommandJobCatalog } from '../../../../packages/contracts/src/tool-surface-v2.ts';
+import type { ToolCatalogResult } from '../../../../packages/contracts/src/tool-surface-v2.ts';
 import type { CatalogEntry } from './catalog.ts';
 import { TOOL_HANDLERS } from './handlers.ts';
 import type { ToolHandlerDeps } from './handlers.ts';
@@ -82,8 +84,8 @@ export function createToolSurface(deps: ToolSurfaceDeps): ToolSurface {
 export function catalogView(
   context: Parameters<typeof catalogFor>[0],
   deps: ToolHandlerDeps,
-): readonly CatalogEntry[] {
-  return catalogFor(context, deps);
+): ToolCatalogResult['tools'] {
+  return withCommandJobCatalog(catalogFor(context, deps)).tools;
 }
 
 export { TOOL_HANDLERS, TOOL_POLICY_ACTIONS } from './handlers.ts';

@@ -5,6 +5,8 @@
   authenticated control API; the page never needs CORS or a second API origin.
 -->
 <script setup lang="ts">
+import CommandRecoveryPanel from './CommandRecoveryPanel.vue';
+import ConversationsView from './ConversationsView.vue';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { ControlApiFailure, ControlClient } from '../src/auth/client.ts';
 import { parseHistoryResponse, type HistoryData } from '../src/history/index.ts';
@@ -58,13 +60,16 @@ const props = defineProps<{
   readonly startupMessage: string | null;
 }>();
 
-const page = ref<'recovery' | 'history' | 'connection' | 'workspaces' | 'configuration'>('workspaces');
+const page = ref<'recovery' | 'history' | 'connection' | 'workspaces' | 'configuration' | 'conversations'>('workspaces');
+const conversationRefreshKey = ref(0);
 const pageMeta = computed(() => {
   switch (page.value) {
     case 'workspaces':
       return { title: '工作区', subtitle: '登记本地目录或文件，让 ChatGPT 在授权范围内读取与修改', icon: 'folder' };
     case 'recovery':
       return { title: '恢复与冲突', subtitle: '查看待处理的文件变更，并安全地恢复本地内容', icon: 'history' };
+    case 'conversations':
+      return { title: '会话档案', subtitle: '按会话管理工具请求、命令输出与状态证据', icon: 'clock' };
     case 'history':
       return { title: '历史记录', subtitle: '查看本地工作区的操作记录与审计信息', icon: 'clock' };
     case 'connection':
@@ -238,6 +243,7 @@ async function refresh(): Promise<void> {
     else if (page.value === 'history') await loadHistory();
     else if (page.value === 'workspaces') await loadWorkspaceData();
     else if (page.value === 'configuration') await loadConfiguration();
+    else if (page.value === 'conversations') conversationRefreshKey.value += 1;
   } catch (cause) {
     setFailure(cause);
   } finally {
@@ -400,7 +406,7 @@ function repairRecovery(payload: {
   );
 }
 
-async function selectPage(next: 'recovery' | 'history' | 'connection' | 'workspaces' | 'configuration'): Promise<void> {
+async function selectPage(next: 'recovery' | 'history' | 'connection' | 'workspaces' | 'configuration' | 'conversations'): Promise<void> {
   page.value = next;
   if (next !== 'connection') await refresh();
 }
@@ -501,6 +507,9 @@ onUnmounted(() => {
         <button type="button" class="sidebar__item sidebar__item--workspace" :class="{ 'is-active': page === 'workspaces' }" :aria-current="page === 'workspaces' ? 'page' : undefined" @click="selectPage('workspaces')">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m4 11 8-7 8 7v8.5A1.5 1.5 0 0 1 18.5 21h-13A1.5 1.5 0 0 1 4 19.5V11Z" fill="currentColor" /><path d="M9 21v-6h6v6" fill="white" /></svg><span class="sidebar__label sidebar__label--workspace">工作区与工具授权</span>
         </button>
+        <button type="button" class="sidebar__item" data-testid="nav-conversations" :class="{ 'is-active': page === 'conversations' }" :aria-current="page === 'conversations' ? 'page' : undefined" @click="selectPage('conversations')">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8 8h8M8 12h5" stroke="currentColor" stroke-width="2"/></svg><span class="sidebar__label">会话档案</span>
+        </button>
         <button type="button" class="sidebar__item" :class="{ 'is-active': page === 'recovery' }" :aria-current="page === 'recovery' ? 'page' : undefined" @click="selectPage('recovery')">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2.3 5.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" /><path d="M4 5v6h6M12 8v5l3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg><span class="sidebar__label">恢复与冲突</span>
         </button>
@@ -564,6 +573,7 @@ onUnmounted(() => {
         </section>
 
         <section v-if="page === 'recovery'" class="host__content">
+          <CommandRecoveryPanel :client="client" :session-active="authenticated" />
           <label v-if="recoveryRows.length > 1" class="host__selector">
             待处理恢复操作
             <select :value="selectedOperationId" @change="selectOperation">
@@ -573,6 +583,7 @@ onUnmounted(() => {
           <RecoveryView :record="recoveryRecord" :session="clientSession" :busy="busy" :export-client="clientSession ? client : null" @refresh="refresh" @keep-current="keepCurrent" @re-propose="rePropose" @authorize-recovery="authorizeRecovery" @repair-recovery="repairRecovery" />
         </section>
         <HistoryView v-else-if="page === 'history'" :data="historyData" :loading="busy" :error="error" @refresh="refresh" @open-recovery="({ operation_id }) => openRecovery(operation_id)" />
+        <ConversationsView v-else-if="page === 'conversations'" :client="client" :session-active="authenticated" :refresh-key="conversationRefreshKey" @session-expired="setFailure" @open-recovery="selectPage('recovery')" />
         <ConnectionView v-else-if="page === 'connection'" :client="client" :session-active="authenticated" />
         <ConfigurationView v-else-if="page === 'configuration'" :configuration="configuration" :loading="busy" :saving="savingConfiguration" @save="saveSessionConfiguration" @refresh="refresh" />
         <WorkspacesView v-else-if="page === 'workspaces'" :now="now" :session="workspaceSession" :workspaces="workspaces" :workspace-access="workspaceAccess" :connection-enabled="connectionEnabled" :flags="statusReading?.capability_flags ?? null" :machine-line="machineLine(statusReading?.machine ?? null)" :busy="busy" :feedback="notice === null ? null : { ok: true, message: notice }" :pick-path="pickWorkspacePath" @register="registerWorkspace" @pause="changeWorkspace('pause', $event)" @resume="changeWorkspace('resume', $event)" @remove="changeWorkspace('remove', $event)" @reverify="changeWorkspace('reverify', $event)" @relocate="relocateWorkspace" @set-access="setWorkspaceAccess" @navigate="selectPage" @refresh="refresh" />

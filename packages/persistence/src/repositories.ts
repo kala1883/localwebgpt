@@ -1,3 +1,5 @@
+import { ConversationManagementRepo } from './conversation-management.ts';
+import { ConversationArchiveRepo } from './conversation-archive.ts';
 /**
  * 仓储层（LWB-006）。所有 SQL 封在本文件内，调用方不写 SQL。
  *
@@ -2610,6 +2612,8 @@ export class AuditRepo {
  * 仓储不能跨连接混用，否则事务边界会静默失效。
  */
 export class Repositories {
+  readonly conversation_archive: ConversationArchiveRepo;
+  readonly conversation_management: ConversationManagementRepo;
   readonly connections: ConnectionsRepo;
   readonly workspaces: WorkspacesRepo;
   readonly grants: GrantsRepo;
@@ -2627,6 +2631,16 @@ export class Repositories {
 
   constructor(db: SqliteDatabase, clock: Clock = isoNow) {
     this.#db = db;
+    this.conversation_archive = new ConversationArchiveRepo({
+      get inTransaction() { return db.inTransaction; },
+      exec: (sql) => db.exec(sql),
+      prepare: (sql) => db.prepare<unknown[]>(sql),
+    }, clock);
+    this.conversation_management = new ConversationManagementRepo({
+      get inTransaction() { return db.inTransaction; },
+      exec: (sql) => db.exec(sql),
+      prepare: (sql) => db.prepare<unknown[]>(sql),
+    }, this.conversation_archive, clock);
     this.connections = new ConnectionsRepo(db, clock);
     this.workspaces = new WorkspacesRepo(db, clock);
     this.grants = new GrantsRepo(db, clock);

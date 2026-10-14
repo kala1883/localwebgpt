@@ -1,27 +1,26 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ConcurrencyGate } from '@lwb/limits';
+import { COMMAND_JOB_LIMITS } from '../../packages/contracts/src/command-job.ts';
 import { commandPoolFor, concurrencyForOperation, poolDiagnostics } from '../../apps/daemon/src/tools/concurrency-pools.ts';
 
 const makeGate = () => new ConcurrencyGate({ max_concurrent: 4, max_per_connection: 2, wait_ms: 0 });
 
 describe('independent command and workspace concurrency', () => {
-  it('keeps file operations available when two commands occupy the connection', async () => {
+  it('keeps file operations available when eight commands occupy the connection', async () => {
     const files = makeGate();
     const commands = commandPoolFor(files);
-    const first = await commands.acquire('a');
-    const second = await commands.acquire('a');
-    assert.ok(first.ok && second.ok);
+    const held = await Promise.all(Array.from({ length: 8 }, () => commands.acquire('a')));
     try {
+      assert.ok(held.every((item) => item.ok));
       assert.equal((await commands.acquire('a')).ok, false);
       const read = await concurrencyForOperation('file_read', files).acquire('a');
       assert.ok(read.ok);
       read.lease.release();
       assert.equal(files.snapshot().in_flight, 0);
-      assert.equal(commands.snapshot().in_flight, 2);
+      assert.equal(commands.snapshot().in_flight, 8);
     } finally {
-      first.lease.release();
-      second.lease.release();
+      for (const item of held) if (item.ok) item.lease.release();
     }
   });
 
@@ -35,12 +34,12 @@ describe('independent command and workspace concurrency', () => {
     assert.notEqual(commandPoolFor(files), commandPoolFor(makeGate()));
   });
 
-  it('retains the global limit in the command pool', async () => {
+  it('admits 32 commands across four connections and rejects the next connection', async () => {
     const pool = commandPoolFor(makeGate());
-    const held = await Promise.all(['a', 'a', 'b', 'b'].map((id) => pool.acquire(id)));
+    const held = await Promise.all(Array.from({ length: 32 }, (_, index) => pool.acquire(`connection-${Math.floor(index / 8)}`)));
     try {
       assert.ok(held.every((item) => item.ok));
-      const denied = await pool.acquire('c');
+      const denied = await pool.acquire('fifth-connection');
       assert.ok(!denied.ok);
       assert.equal(denied.reason, 'GLOBAL_LIMIT_EXCEEDED');
     } finally {
@@ -48,9 +47,20 @@ describe('independent command and workspace concurrency', () => {
     }
   });
 
-  it('inherits configured limits instead of silently reverting to defaults', () => {
+  it('uses command limits without widening or inheriting custom file limits', () => {
     const files = new ConcurrencyGate({ max_concurrent: 3, max_per_connection: 1, wait_ms: 17 });
-    assert.deepEqual(commandPoolFor(files).limits, files.limits);
+    assert.deepEqual(commandPoolFor(files).limits, {
+      max_concurrent: COMMAND_JOB_LIMITS.max_concurrent,
+      max_per_connection: COMMAND_JOB_LIMITS.max_per_connection,
+      wait_ms: 0,
+    });
+    assert.deepEqual(commandPoolFor(files).limits, { max_concurrent: 32, max_per_connection: 8, wait_ms: 0 });
+    assert.deepEqual(files.limits, { max_concurrent: 3, max_per_connection: 1, wait_ms: 17 });
+    const view = poolDiagnostics(files, 'current');
+    assert.equal(view.commands.max_per_connection, 8);
+    assert.equal(view.commands.max_concurrent, 32);
+    assert.equal(view.files.max_per_connection, 1);
+    assert.equal(view.files.max_concurrent, 3);
   });
 
   it('redacts other connection identifiers from diagnostics', async () => {
